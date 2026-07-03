@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { extractPdfText, isPdfPath } from "./ingest/pdf.js";
+import { buildGraphExport, type GraphExport } from "./graph/export.js";
 import type { GraphStore } from "./graph/store.js";
 import { SqliteStore } from "./graph/sqlite-store.js";
 import type { Embedder, EngineConfig, Extractor, ResolvedConfig } from "./ai/providers.js";
@@ -181,9 +182,39 @@ export class ContextGraphEngine {
     return { documentId, title, skipped: false, chunks: pieces.length, ...totals };
   }
 
+  /**
+   * Ingest every supported document in a directory (recursively). Supported
+   * extensions: .pdf, .md, .markdown, .txt. Returns one result per file.
+   *
+   * `onProgress` is invoked before each file starts (so callers can report
+   * progress on long, multi-file ingests — e.g. to keep an MCP client's request
+   * timeout from firing).
+   */
+  async ingestDir(
+    dir: string,
+    opts: {
+      extensions?: string[];
+      onProgress?: (info: { index: number; total: number; file: string }) => void;
+    } = {},
+  ): Promise<IngestResult[]> {
+    const exts = opts.extensions ?? [".pdf", ".md", ".markdown", ".txt"];
+    const files = walkDir(dir).filter((f) => exts.some((e) => f.toLowerCase().endsWith(e)));
+    const results: IngestResult[] = [];
+    for (let i = 0; i < files.length; i++) {
+      opts.onProgress?.({ index: i, total: files.length, file: files[i] });
+      results.push(await this.ingestFile(files[i]));
+    }
+    return results;
+  }
+
   /** Read the graph for a query, returning a structured context bundle. */
   async read(query: string, opts: RetrieveOptions = {}): Promise<ContextBundle> {
     return retrieve(this.store, this.embedder, query, opts);
+  }
+
+  /** A serializable snapshot of the whole graph, for export/visualization. */
+  exportGraph(): GraphExport {
+    return buildGraphExport(this.store);
   }
 
   /**
@@ -252,6 +283,18 @@ export class ContextGraphEngine {
   close(): void {
     this._store?.close();
   }
+}
+
+/** Recursively list all files under a directory (skips dot-directories). */
+function walkDir(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkDir(full));
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
 }
 
 /** Run `fn` over `items` with at most `limit` in flight at once, preserving order. */

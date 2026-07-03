@@ -86,7 +86,11 @@ npm run example
 ```bash
 # Ingest documents (Markdown, text, and PDFs — PDFs are parsed automatically)
 context-graph ingest ./docs/*.md ./handbook.pdf
+context-graph ingest-dir ./docs           # a whole folder, recursively
 echo "some notes" | context-graph ingest-text --title "Notes"
+
+# Visualize the graph (interactive HTML; also --format json|mermaid)
+context-graph export --out graph.html && open graph.html
 
 # Read the graph
 context-graph query "how does billing retry failed charges?"
@@ -133,6 +137,8 @@ Tools exposed:
 | `context_contribute` | Write a learning back into the shared graph |
 | `context_ingest` | Ingest a document (raw text) into the graph |
 | `context_ingest_file` | Ingest files from disk, including **PDFs** (parsed automatically) |
+| `context_ingest_dir` | Ingest a whole **directory** of docs (PDF/MD/TXT), recursively |
+| `context_export` | Write the graph to an interactive **HTML** visualization |
 | `context_stats` | Report how much the graph currently holds |
 
 A natural agent workflow: **read context → do the task → contribute what you learned.**
@@ -220,9 +226,11 @@ This is exactly how the test suite runs the whole pipeline offline with fake pro
 ```ts
 class ContextGraphEngine {
   ingest(text: string, opts?: { title?; source? }): Promise<IngestResult>;
-  ingestFile(path: string, opts?): Promise<IngestResult>;
+  ingestFile(path: string, opts?): Promise<IngestResult>;   // .pdf parsed automatically
+  ingestDir(dir: string, opts?): Promise<IngestResult[]>;   // recursive; PDF/MD/TXT
   read(query: string, opts?: { maxNodes?; maxChunks?; expand? }): Promise<ContextBundle>;
   contribute(learning: string, opts?: { agentId?; source? }): Promise<ContributeResult>;
+  exportGraph(): GraphExport;                               // -> toHtml / toMermaid
   stats(): GraphStats;
   close(): void;
 }

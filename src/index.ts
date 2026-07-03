@@ -38,6 +38,8 @@ export { retrieve, renderPrompt } from "./retrieval/retriever.js";
 export type { GraphStore } from "./graph/store.js";
 export { SqliteStore } from "./graph/sqlite-store.js";
 export { mergeExtraction } from "./graph/merge.js";
+export type { GraphExport } from "./graph/export.js";
+export { buildGraphExport, toHtml, toMermaid } from "./graph/export.js";
 
 export type {
   GraphNode,

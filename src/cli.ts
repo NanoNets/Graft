@@ -12,8 +12,9 @@
  */
 import "dotenv/config";
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { ContextGraphEngine } from "./engine.js";
+import { toHtml, toMermaid } from "./graph/export.js";
 
 const program = new Command();
 
@@ -102,6 +103,60 @@ program
       console.log(
         `✓ contributed — +${r.nodesCreated} nodes (${r.nodesUpdated} reinforced), +${r.edgesCreated} edges (${r.edgesUpdated} reinforced)`,
       );
+    } finally {
+      engine.close();
+    }
+  });
+
+program
+  .command("ingest-dir")
+  .description("Ingest every supported doc (.pdf .md .txt) in a directory, recursively")
+  .argument("<dir>", "directory to ingest")
+  .action(async (dir: string) => {
+    const engine = engineFrom();
+    try {
+      const results = await engine.ingestDir(dir);
+      if (results.length === 0) {
+        console.log(`No supported files found under ${dir}`);
+        return;
+      }
+      for (const r of results) {
+        console.log(
+          r.skipped
+            ? `• ${r.title} — already ingested, skipped`
+            : `✓ ${r.title} — ${r.chunks} chunks, +${r.nodesCreated} nodes, +${r.edgesCreated} edges`,
+        );
+      }
+    } finally {
+      engine.close();
+    }
+  });
+
+program
+  .command("export")
+  .description("Export the whole graph for viewing (interactive HTML, JSON, or Mermaid)")
+  .option("-f, --format <fmt>", "html | json | mermaid", "html")
+  .option("-o, --out <path>", "output file (default: context-graph.<ext>)")
+  .action((opts: { format: string; out?: string }) => {
+    const engine = engineFrom();
+    try {
+      const g = engine.exportGraph();
+      let content: string;
+      let ext: string;
+      if (opts.format === "json") {
+        content = JSON.stringify(g, null, 2);
+        ext = "json";
+      } else if (opts.format === "mermaid") {
+        content = toMermaid(g);
+        ext = "mmd";
+      } else {
+        content = toHtml(g);
+        ext = "html";
+      }
+      const out = opts.out ?? `context-graph.${ext}`;
+      writeFileSync(out, content);
+      console.log(`✓ wrote ${g.nodes.length} entities / ${g.edges.length} relationships to ${out}`);
+      if (ext === "html") console.log(`  open it:  open ${out}`);
     } finally {
       engine.close();
     }

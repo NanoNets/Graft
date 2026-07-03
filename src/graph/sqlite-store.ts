@@ -228,6 +228,11 @@ export class SqliteStore implements GraphStore {
     return rows.map((r) => this.rowToNode(r));
   }
 
+  allNodes(): GraphNode[] {
+    const rows = this.db.prepare(`SELECT * FROM nodes`).all() as NodeRow[];
+    return rows.map((r) => this.rowToNode(r));
+  }
+
   upsertNode(node: GraphNode): void {
     this.db
       .prepare(
@@ -331,6 +336,11 @@ export class SqliteStore implements GraphStore {
          WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
       )
       .all(...nodeIds, ...nodeIds) as EdgeRow[];
+    return rows.map((r) => this.rowToEdge(r));
+  }
+
+  allEdges(): GraphEdge[] {
+    const rows = this.db.prepare(`SELECT * FROM edges`).all() as EdgeRow[];
     return rows.map((r) => this.rowToEdge(r));
   }
 

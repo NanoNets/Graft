@@ -31,6 +31,8 @@ export interface GraphStore {
   findNodesByName(normalizedName: string): GraphNode[];
   /** All nodes that have an embedding, for in-memory vector search & dedup. */
   allEmbeddedNodes(): GraphNode[];
+  /** Every node in the graph (for export/visualization). */
+  allNodes(): GraphNode[];
   upsertNode(node: GraphNode): void;
 
   // --- edges ---
@@ -39,6 +41,8 @@ export interface GraphStore {
   upsertEdge(edge: GraphEdge): void;
   /** All edges incident to any of the given node ids. */
   edgesForNodes(nodeIds: string[]): GraphEdge[];
+  /** Every edge in the graph (for export/visualization). */
+  allEdges(): GraphEdge[];
 
   // --- misc ---
   documentTitle(documentId: string): string;

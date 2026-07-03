@@ -23,9 +23,10 @@ Think "durable, structured memory for a team of agents" — the same integration
 | **Storage** (`src/graph/sqlite-store.ts`) | Embedded SQLite (`better-sqlite3`), zero infra; swappable behind a `GraphStore` interface | ✅ Done |
 | **Local-first providers** (`src/ai/local.ts`) | In-process embeddings (transformers.js) + local extraction (Ollama) — **runs with no API keys** | ✅ Done |
 | **Cloud auto-upgrade** (`src/engine.ts`) | If `OPENROUTER_API_KEY` is set, uses OpenRouter for extraction automatically (any tool-calling model) for higher quality | ✅ Done |
-| **PDF ingestion** (`src/ingest/pdf.ts`) | `.pdf` files parsed to text automatically (pure-JS `unpdf`, no native deps) — via CLI, library, or the `context_ingest_file` MCP tool | ✅ Done |
-| **Three access modes** | Library, `context-graph` CLI, and `context-graph-mcp` MCP server (5 tools) for any agent | ✅ Done |
-| **Demo PDFs** (`examples/demo-docs/`) | 3 detail-rich fictional docs + a generator script | ✅ Done |
+| **PDF + directory ingestion** (`src/ingest/pdf.ts`) | `.pdf` parsed automatically (pure-JS `unpdf`, no native deps); `ingest-dir` walks a folder of mixed docs (PDF/MD/TXT) | ✅ Done |
+| **Graph visualization** (`src/graph/export.ts`) | Export the whole graph to a self-contained interactive HTML page (also JSON / Mermaid) | ✅ Done |
+| **Three access modes** | Library, `context-graph` CLI, and `context-graph-mcp` MCP server (7 tools) for any agent | ✅ Done |
+| **Demo docs** (`examples/demo-docs/`) | 3 detail-rich PDFs + 1 Markdown glossary + a PDF generator script | ✅ Done |
 | **One-line installer** (`install.sh`) | `curl … | sh` clones, builds, and puts both commands on PATH | ✅ Done |
 | Update modes (silent vs. flagged) | Deferred per your call — needs discussion | ⏸ Deferred |
 | Delete / decay of stale nodes | In the spec, not yet built | ⬜ Not started |
@@ -60,22 +61,30 @@ No accounts, nothing leaves the machine. Slightly coarser graph and a one-time m
 
 ## 4. The MCP demo (the main event)
 
-This is the flow to show: **install → point an MCP client at it → ingest PDFs → ask questions → the facts from the PDFs come back.** Verified end-to-end (OpenRouter extraction + local embeddings).
+This is the flow to show: **install → point Claude Code at a folder → "build a context graph" → Claude Code does it via MCP → open the visual graph → ask questions.** Verified end-to-end (OpenRouter extraction + local embeddings).
 
-There are 3 demo PDFs already generated in `examples/demo-docs/` (fictional "Northwind" company — architecture, billing runbook, onboarding). Regenerate them any time with `node scripts/make-demo-pdfs.mjs`.
+There are 4 demo docs already in `examples/demo-docs/` — a fictional "Northwind" company: 3 PDFs (architecture, billing runbook, onboarding) + 1 Markdown glossary. Regenerate the PDFs any time with `node scripts/make-demo-pdfs.mjs`.
+
+### The 7 MCP tools Claude Code gets
+| Tool | What Claude Code uses it for |
+|------|------------------------------|
+| `context_ingest_dir` | **Point at a folder → build the whole graph in one call** |
+| `context_ingest_file` | Ingest specific files (incl. PDFs) by path |
+| `context_ingest` | Ingest raw text |
+| `context_read` | Answer a question from the graph |
+| `context_contribute` | Write a new learning back into the graph |
+| `context_export` | Write the graph to an interactive HTML file to show |
+| `context_stats` | Report entity/relationship counts |
 
 ### Step 1 — Install
 ```bash
-# the one-liner your manager asked for (once the repo URL is filled in):
-curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | sh
-
-# …or, from this checkout, for today:
-npm install && npm run build && npm link
+git clone git@github.com:NanoNets/context-graph-engine.git
+cd context-graph-engine && ./install.sh
 ```
-`npm link` puts `context-graph` and `context-graph-mcp` on your PATH.
+That builds and puts `context-graph` + `context-graph-mcp` on your PATH. (One command — no manual npm steps.)
 
-### Step 2 — Point your MCP client at it
-Add this to your Claude Code / Cursor MCP config (`.mcp.json` or the client's settings). Set a DB path for the demo graph and your OpenRouter key:
+### Step 2 — Point Claude Code at it
+Add this to your Claude Code MCP config (`.mcp.json` in your project, or `claude mcp add`). Set a DB path for the demo graph and your OpenRouter key:
 
 ```json
 {
@@ -90,18 +99,25 @@ Add this to your Claude Code / Cursor MCP config (`.mcp.json` or the client's se
   }
 }
 ```
-Restart the client so it picks up the server. The agent now has 5 tools: `context_read`, `context_contribute`, `context_ingest`, `context_ingest_file`, `context_stats`.
+Restart Claude Code so it picks up the server and its 7 tools.
 
-### Step 3 — Ingest the PDFs (say this to the agent)
-> "Ingest these files into the context graph:
-> /abs/path/examples/demo-docs/northwind-architecture.pdf,
-> /abs/path/examples/demo-docs/northwind-billing-runbook.pdf,
-> /abs/path/examples/demo-docs/northwind-onboarding.pdf"
+### Step 3 — Ask Claude Code to build the graph (just say this)
+> "Use the context-graph tools to build a context graph from the folder
+> `/abs/path/context-graph-engine/examples/demo-docs`, then show me the stats."
 
-The agent calls `context_ingest_file`. The PDFs are parsed, chunked, embedded, and extracted into the graph. You'll see something like "✓ 3 chunks, +23 entities, +35 relationships" per file. Then ask it to run `context_stats` — ~58 entities, ~70 relationships across 3 documents.
+Claude Code calls **`context_ingest_dir`** on the folder. All 4 docs are parsed (PDFs included), chunked, embedded, and extracted into the graph — you'll watch the progress tick file-by-file. Result: **~62 entities and ~71 relationships** across 4 documents. (Progress notifications keep the call alive past the default 60s MCP timeout — a multi-file cloud ingest takes ~1–2 min.)
 
-### Step 4 — Ask questions (the payoff)
-Ask the agent things that only live inside the PDFs. It calls `context_read` and gets the answer back — as structured entities/relationships **and** the exact source passages:
+### Step 4 — Show the graph (the visual)
+> "Export the context graph to `/tmp/northwind-graph.html` and tell me the path."
+
+Claude Code calls **`context_export`**. Open the file:
+```bash
+open /tmp/northwind-graph.html
+```
+You get an **interactive, force-directed graph** — nodes colored by type (service, person, policy, metric…), sized by how often they were observed, draggable/zoomable, with hover tooltips showing each entity's summary and confidence. This is the "show the created context graph" moment.
+
+### Step 5 — Ask questions (the payoff)
+Ask Claude Code things that only live inside those docs. It calls `context_read` and answers — structured entities/relationships **and** the exact source passages:
 
 - *"How are failed charges retried, and when does an account get suspended?"*
   → 3 retries with exponential backoff (1h / 6h / 24h) → `past_due` → suspended after 7 days.
@@ -109,19 +125,17 @@ Ask the agent things that only live inside the PDFs. It calls `context_read` and
   → access tokens expire after 15 minutes; Auth Service is backed by Redis for token revocation.
 - *"Who do I escalate a Stripe outage to?"*
   → Dana Whitfield (Payments team lead), post in `#billing-incidents`, page PagerDuty service `northwind-billing`.
-- *"What do I do in my first week as a new hire?"*
-  → security training, ship one small prod change, on-call shadow; buddy assigned day one.
 
-**The point to land:** these facts came from three separate PDFs, and the agent gets a *structured, cross-referenced* answer with the source text as evidence — not a blind vector-snippet dump.
+**The point to land:** these facts came from separate PDFs + a Markdown file, and the agent gets a *structured, cross-referenced* answer with the source text as evidence — not a blind vector-snippet dump.
 
-### Step 5 (optional) — Show it getting smarter
-Tell the agent: *"Contribute this learning: the Dunning Worker also posts to #billing-alerts after the final retry."* It calls `context_contribute`. Ask the billing question again — the new fact is now merged into the graph, and re-stated facts reinforce (bump confidence) rather than duplicate.
+### Step 6 (optional) — Show it getting smarter
+Tell Claude Code: *"Contribute this learning to the graph: the Dunning Worker also posts to #billing-alerts after the final retry."* It calls `context_contribute`. Ask the billing question again — the new fact is merged in, and re-stated facts reinforce (bump confidence) rather than duplicate.
 
 ### Fallback (no MCP client handy) — same thing via CLI
 ```bash
-context-graph --db ./northwind-demo.db ingest examples/demo-docs/*.pdf
+context-graph --db ./northwind-demo.db ingest-dir examples/demo-docs
+context-graph --db ./northwind-demo.db export --out northwind-graph.html && open northwind-graph.html
 context-graph --db ./northwind-demo.db query "how are failed charges retried?"
-context-graph --db ./northwind-demo.db stats
 ```
 (Delete `northwind-demo.db*` to reset.)
 
@@ -167,12 +181,13 @@ src/
     types.ts           ← the data model (nodes, edges, chunks) — read this to grok the domain
     merge.ts           ← dedup + reinforcement (the "gets smarter" logic)
     sqlite-store.ts    ← the embedded storage backend
+    export.ts          ← graph → interactive HTML / JSON / Mermaid
   ingest/
     chunker.ts         ← paragraph-aware chunking with overlap
     pdf.ts             ← PDF → text extraction (unpdf)
   retrieval/retriever.ts ← semantic match + one-hop expansion + prompt rendering
-  cli.ts               ← the CLI
-  mcp.ts               ← the MCP server (context_read / _contribute / _ingest / _ingest_file / _stats)
+  cli.ts               ← the CLI (ingest / ingest-dir / query / contribute / export / stats)
+  mcp.ts               ← the MCP server (7 tools incl. _ingest_dir and _export)
 examples/
   quickstart.ts        ← library quickstart
   demo-docs/*.pdf      ← the 3 demo PDFs used in §4

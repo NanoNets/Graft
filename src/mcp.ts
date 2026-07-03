@@ -10,7 +10,9 @@ import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { writeFileSync } from "node:fs";
 import { ContextGraphEngine } from "./engine.js";
+import { toHtml } from "./graph/export.js";
 
 const engine = new ContextGraphEngine();
 
@@ -114,6 +116,72 @@ server.registerTool(
       }
     }
     return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "context_ingest_dir",
+  {
+    title: "Ingest a directory",
+    description:
+      "Ingest every supported document (.pdf, .md, .markdown, .txt) in a directory, recursively, into the shared context graph. Point this at a folder of docs and it builds the graph in one call.",
+    inputSchema: {
+      dir: z.string().describe("Absolute path to the directory of documents to ingest."),
+    },
+  },
+  async ({ dir }, extra) => {
+    // Report progress per file. If the client supplied a progressToken (and
+    // resets its request timeout on progress, as Claude Code does), this keeps
+    // long multi-file ingests from tripping the default 60s tool timeout.
+    const progressToken = extra?._meta?.progressToken;
+    const onProgress = progressToken
+      ? ({ index, total, file }: { index: number; total: number; file: string }) => {
+          void extra.sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: index,
+              total,
+              message: `Ingesting ${file.split("/").pop()} (${index + 1}/${total})`,
+            },
+          });
+        }
+      : undefined;
+    const results = await engine.ingestDir(dir, { onProgress });
+    if (results.length === 0) {
+      return { content: [{ type: "text", text: `No supported files found under ${dir}.` }] };
+    }
+    const created = results.reduce((a, r) => a + r.nodesCreated, 0);
+    const edges = results.reduce((a, r) => a + r.edgesCreated, 0);
+    const lines = results.map((r) =>
+      r.skipped ? `• ${r.title}: skipped (already ingested)` : `✓ ${r.title}: +${r.nodesCreated} entities, +${r.edgesCreated} relationships`,
+    );
+    lines.push(`\nTotal: ${results.length} files → +${created} entities, +${edges} relationships.`);
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "context_export",
+  {
+    title: "Export the graph as HTML",
+    description:
+      "Write the entire context graph to a self-contained, interactive HTML file that can be opened in a browser to visualize entities and relationships.",
+    inputSchema: {
+      path: z.string().describe("Absolute path to write the HTML file to (e.g. /tmp/context-graph.html)."),
+    },
+  },
+  async ({ path }) => {
+    const g = engine.exportGraph();
+    writeFileSync(path, toHtml(g));
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Wrote graph (${g.nodes.length} entities, ${g.edges.length} relationships) to ${path}. Open it in a browser to explore.`,
+        },
+      ],
+    };
   },
 );
 
