@@ -48,6 +48,13 @@ export function toMermaid(g: GraphExport): string {
  * the viz library. Nodes are colored by type and sized by observation count.
  */
 export function toHtml(g: GraphExport, title = "Context Graph"): string {
+  // Graph fields are LLM-extracted from arbitrary ingested documents, so treat
+  // them as untrusted: escape text interpolated into HTML, and neutralize "<"
+  // in the inline JSON so a "</script>" inside a summary can't break out.
+  const esc = (s: string): string =>
+    String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+  const jsonSafe = (v: unknown): string => JSON.stringify(v).replace(/</g, "\\u003c");
+
   const palette = [
     "#4f46e5", "#0891b2", "#059669", "#d97706", "#dc2626",
     "#7c3aed", "#db2777", "#65a30d", "#0284c7", "#ca8a04",
@@ -72,7 +79,7 @@ export function toHtml(g: GraphExport, title = "Context Graph"): string {
   }));
 
   const legend = types
-    .map((t) => `<span class="chip"><i style="background:${colorFor(t)}"></i>${t}</span>`)
+    .map((t) => `<span class="chip"><i style="background:${colorFor(t)}"></i>${esc(t)}</span>`)
     .join("");
 
   return `<!doctype html>
@@ -80,7 +87,7 @@ export function toHtml(g: GraphExport, title = "Context Graph"): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title}</title>
+<title>${esc(title)}</title>
 <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"
   integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ"
   crossorigin="anonymous"></script>
@@ -98,14 +105,14 @@ export function toHtml(g: GraphExport, title = "Context Graph"): string {
 </head>
 <body>
 <header>
-  <h1>${title}</h1>
+  <h1>${esc(title)}</h1>
   <div class="meta">${g.nodes.length} entities · ${g.edges.length} relationships</div>
   <div class="legend">${legend}</div>
 </header>
 <div id="graph"></div>
 <script>
-  const nodes = new vis.DataSet(${JSON.stringify(nodes)});
-  const edges = new vis.DataSet(${JSON.stringify(edges)});
+  const nodes = new vis.DataSet(${jsonSafe(nodes)});
+  const edges = new vis.DataSet(${jsonSafe(edges)});
   new vis.Network(document.getElementById("graph"), { nodes, edges }, {
     nodes: { shape: "dot", scaling: { min: 8, max: 32 }, font: { size: 14 } },
     edges: { arrows: "to", font: { size: 10, align: "middle" }, color: { opacity: 0.5 }, smooth: { type: "dynamic" } },
