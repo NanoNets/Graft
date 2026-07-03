@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+
+# Local graph databases
+*.db
+*.db-shm
+*.db-wal
+.context-graph/
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store

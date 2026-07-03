@@ -1,0 +1,61 @@
+{
+  "name": "context-graph-engine",
+  "version": "0.1.0",
+  "description": "An open-source engine that turns docs into a structured context graph that AI agents read from and contribute learnings back to.",
+  "keywords": [
+    "ai",
+    "agents",
+    "knowledge-graph",
+    "context",
+    "memory",
+    "rag",
+    "mcp",
+    "llm"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "context-graph": "./dist/cli.js",
+    "context-graph-mcp": "./dist/mcp.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "cli": "tsx src/cli.ts",
+    "mcp": "tsx src/mcp.ts",
+    "example": "tsx examples/quickstart.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.109.1",
+    "@huggingface/transformers": "^3.8.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.11.1",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "openai": "^6.45.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
