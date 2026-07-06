@@ -22,16 +22,10 @@ curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/
 
 This puts `context-graph`, `context-graph-mcp`, and `context-graph-web` on your PATH. Requires git and Node ≥ 20.
 
-Or straight from GitHub with npm:
+Or straight from GitHub with npm (also works as a library / dev dependency):
 
 ```bash
 npm install -g github:NanoNets/context-graph-engine
-```
-
-Or as a library / dev dependency:
-
-```bash
-npm install context-graph-engine
 ```
 
 ## Try it in 60 seconds — the web UI
