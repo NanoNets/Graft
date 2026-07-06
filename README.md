@@ -8,7 +8,7 @@ Dumping docs into a vector store gives you a bag of chunks. It doesn't give you 
 - **Read** the graph before a task → get a compact, structured context bundle (entities + relationships + supporting sources), ready to drop into a prompt.
 - **Contribute** learnings back → new facts are deduplicated and merged into existing knowledge; repeated observations **reinforce** confidence. The graph compounds over time.
 
-Access it three ways: as a **library**, a **CLI**, or an **MCP server** that any agent (Claude Code, Cursor, …) can plug into.
+Access it four ways: a **web UI** (your team's knowledge as a living, citable graph — see below), a **library**, a **CLI**, or an **MCP server** that any agent (Claude Code, Cursor, …) can plug into.
 
 ---
 
@@ -20,13 +20,30 @@ Access it three ways: as a **library**, a **CLI**, or an **MCP server** that any
 curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | sh
 ```
 
-This puts `context-graph` and `context-graph-mcp` on your PATH. Requires git and Node ≥ 20.
+This puts `context-graph`, `context-graph-mcp`, and `context-graph-web` on your PATH. Requires git and Node ≥ 20.
+
+Or straight from GitHub with npm:
+
+```bash
+npm install -g github:NanoNets/context-graph-engine
+```
 
 Or as a library / dev dependency:
 
 ```bash
 npm install context-graph-engine
 ```
+
+## Try it in 60 seconds — the web UI
+
+```bash
+context-graph-web
+# → http://localhost:4680
+```
+
+Open the page, point **“Ingest a folder of documents”** at any folder of `.pdf` / `.md` / `.txt` files, and watch it become a knowledge graph. Then ask questions: answers come back with numbered citations, and every fact wears a **provenance receipt** — how many times it's been observed, how confident the graph is, and which sources say so. Use **“Teach it something”** to add a fact the docs don't capture, and watch the graph reinforce in real time.
+
+Everything runs on your machine (the server binds to localhost only). Set `OPENROUTER_API_KEY` to upgrade to LLM-written answers and cloud extraction; without it, retrieval and the graph stay fully local.
 
 ### Runs locally by default — keys are optional
 

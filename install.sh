@@ -5,8 +5,9 @@
 #   1. From a checkout:  ./install.sh          (builds THIS directory — no re-clone)
 #   2. Over the network: curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | sh
 #
-# Either way it builds the project and puts the `context-graph` and
-# `context-graph-mcp` commands on your PATH. Requires git, Node >= 20, and npm.
+# Either way it builds the project and puts the `context-graph`,
+# `context-graph-mcp`, and `context-graph-web` commands on your PATH.
+# Requires git, Node >= 20, and npm.
 #
 # Environment overrides:
 #   CGE_REPO   git URL to clone from      (default: the NanoNets repo below)
@@ -66,12 +67,16 @@ info "Installing dependencies"
 info "Building"
 ( cd "$INSTALL_DIR" && npm run build --silent )
 
-info "Linking the 'context-graph' and 'context-graph-mcp' commands"
+info "Linking the 'context-graph', 'context-graph-mcp', and 'context-graph-web' commands"
 ( cd "$INSTALL_DIR" && npm link >/dev/null 2>&1 )
 
 echo
-info "Installed. Try:  context-graph --help"
+info "Installed. Try:  context-graph-web"
 cat <<'NEXT'
+
+  The web UI is the fastest way in:
+          context-graph-web
+          # → open http://localhost:4680, ingest a folder of docs, ask questions
 
   Runs locally out of the box:
     • Embeddings run in-process (no key, no server — model downloads on first use).
