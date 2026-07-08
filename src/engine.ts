@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { extractPdfText, isPdfPath } from "./ingest/pdf.js";
 import { buildGraphExport, type GraphExport } from "./graph/export.js";
 import type { GraphStore } from "./graph/store.js";
@@ -11,6 +11,7 @@ import { OpenAIEmbedder } from "./ai/openai.js";
 import { LocalEmbedder, OllamaExtractor } from "./ai/local.js";
 import { chunkText } from "./ingest/chunker.js";
 import { mergeExtraction } from "./graph/merge.js";
+import { serializeGraph, importGraph, type ImportResult } from "./graph/serialize.js";
 import { retrieve, type RetrieveOptions } from "./retrieval/retriever.js";
 import type { ContextBundle, Chunk, Extraction, GraphStats } from "./graph/types.js";
 import { contentHash, newId } from "./util/id.js";
@@ -66,7 +67,7 @@ export class ContextGraphEngine {
     this.cfg = resolveConfig(config);
   }
 
-  /** The underlying graph store (lazily opened). */
+  /** The underlying graph store (lazily opened): an explicit `store` override, or the local SQLite file. */
   get store(): GraphStore {
     if (!this._store) {
       this._store = this.cfg.store ?? new SqliteStore(this.cfg.dbPath);
@@ -126,7 +127,7 @@ export class ContextGraphEngine {
     const title = opts.title ?? source;
     const hash = contentHash(text);
 
-    const existing = this.store.getDocumentByHash(hash);
+    const existing = await this.store.getDocumentByHash(hash);
     if (existing) {
       return {
         documentId: existing.id,
@@ -141,35 +142,38 @@ export class ContextGraphEngine {
     }
 
     const documentId = newId("doc");
-    this.store.insertDocument({ id: documentId, title, source, hash, createdAt: now });
+    await this.store.insertDocument({ id: documentId, title, source, hash, createdAt: now });
 
     const pieces = chunkText(text, this.cfg.chunkSize, this.cfg.chunkOverlap);
     const embeddings = await this.embedder.embed(pieces);
-    pieces.forEach((piece, i) => {
+    for (let i = 0; i < pieces.length; i++) {
       const chunk: Chunk = {
         id: newId("chunk"),
         documentId,
         ordinal: i,
-        text: piece,
+        text: pieces[i],
         embedding: embeddings[i],
         createdAt: now,
       };
-      this.store.insertChunk(chunk);
-    });
+      await this.store.insertChunk(chunk);
+    }
 
     // Extract per chunk (parallel, bounded), then merge sequentially so each
-    // merge sees nodes created by earlier chunks.
+    // merge sees nodes created by earlier chunks. The document id is a unique
+    // observation key, so re-importing this document later never double-counts.
     const extractions = await mapWithConcurrency(pieces, 4, (piece) =>
       this.extractor.extract(piece, { hint: title }),
     );
 
+    const provenance = `doc:${documentId}`;
     const totals = { nodesCreated: 0, nodesUpdated: 0, edgesCreated: 0, edgesUpdated: 0 };
     for (const extraction of extractions) {
       const r = await mergeExtraction(
         this.store,
         this.embedder,
         extraction,
-        `doc:${documentId}`,
+        provenance,
+        provenance,
         this.cfg.mergeThreshold,
         now,
       );
@@ -213,8 +217,43 @@ export class ContextGraphEngine {
   }
 
   /** A serializable snapshot of the whole graph, for export/visualization. */
-  exportGraph(): GraphExport {
+  async exportGraph(): Promise<GraphExport> {
     return buildGraphExport(this.store);
+  }
+
+  /**
+   * Default path for the git-committed graph file (Mode A), alongside the db
+   * file — e.g. `.context-graph/graph.jsonl` next to `.context-graph/graph.db`.
+   * Undefined for an in-memory graph.
+   */
+  get graphFilePath(): string | undefined {
+    if (this.cfg.dbPath === ":memory:") return undefined;
+    return join(dirname(this.cfg.dbPath), "graph.jsonl");
+  }
+
+  /** Human label for the active embedding model, recorded in exported files. */
+  private embeddingModelLabel(): string {
+    if (!this.cfg.forceLocal && this.cfg.openaiApiKey) return this.cfg.embeddingModel;
+    return this.cfg.localEmbeddingModel;
+  }
+
+  /**
+   * Serialize the whole graph to a JSONL string for git-native team sync
+   * (Mode A). Commit the result; teammates {@link importJsonl} it after a pull.
+   */
+  async exportJsonl(): Promise<string> {
+    return serializeGraph(this.store, {
+      embeddingDimensions: this.embedder.dimensions,
+      embeddingModel: this.embeddingModelLabel(),
+    });
+  }
+
+  /**
+   * Import a serialized graph (from a teammate's commit) and CRDT-merge it into
+   * the local graph. Idempotent — re-importing the same content is a no-op.
+   */
+  async importJsonl(jsonl: string): Promise<ImportResult> {
+    return importGraph(this.store, jsonl, this.embedder.dimensions);
   }
 
   /**
@@ -230,12 +269,12 @@ export class ContextGraphEngine {
     const hash = contentHash(`${provenance}|${learning}`);
 
     let documentId: string;
-    const existing = this.store.getDocumentByHash(hash);
+    const existing = await this.store.getDocumentByHash(hash);
     if (existing) {
       documentId = existing.id;
     } else {
       documentId = newId("doc");
-      this.store.insertDocument({
+      await this.store.insertDocument({
         id: documentId,
         title,
         source: opts.source ?? provenance,
@@ -243,7 +282,7 @@ export class ContextGraphEngine {
         createdAt: now,
       });
       const [embedding] = await this.embedder.embed([learning]);
-      this.store.insertChunk({
+      await this.store.insertChunk({
         id: newId("chunk"),
         documentId,
         ordinal: 0,
@@ -256,11 +295,14 @@ export class ContextGraphEngine {
     const extraction: Extraction = await this.extractor.extract(learning, {
       hint: "An agent's learning to fold into the shared knowledge graph.",
     });
+    // `agent:<id>` is the human-facing origin; the (unique) contribution
+    // document id is the observation key, so replays stay idempotent.
     const r = await mergeExtraction(
       this.store,
       this.embedder,
       extraction,
       provenance,
+      `doc:${documentId}`,
       this.cfg.mergeThreshold,
       now,
     );
@@ -275,13 +317,13 @@ export class ContextGraphEngine {
   }
 
   /** Current graph statistics. */
-  stats(): GraphStats {
+  async stats(): Promise<GraphStats> {
     return this.store.stats();
   }
 
   /** Close the underlying store. */
-  close(): void {
-    this._store?.close();
+  async close(): Promise<void> {
+    await this._store?.close();
   }
 }
 

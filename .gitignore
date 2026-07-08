@@ -6,7 +6,10 @@ dist/
 *.db
 *.db-shm
 *.db-wal
-.context-graph/
+# Ignore the local graph dir's contents (the SQLite replica) but keep the
+# committable, git-native team-sync file (Mode A).
+.context-graph/*
+!.context-graph/graph.jsonl
 
 # Env
 .env

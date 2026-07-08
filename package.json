@@ -39,6 +39,7 @@
     "mcp": "tsx src/mcp.ts",
     "web": "tsx src/web.ts",
     "example": "tsx examples/quickstart.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },

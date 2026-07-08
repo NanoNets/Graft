@@ -37,7 +37,14 @@ export { retrieve, renderPrompt } from "./retrieval/retriever.js";
 
 export type { GraphStore } from "./graph/store.js";
 export { SqliteStore } from "./graph/sqlite-store.js";
-export { mergeExtraction } from "./graph/merge.js";
+export { mergeExtraction, mergeNodeRecords, mergeEdgeRecords } from "./graph/merge.js";
+export {
+  confidenceFromObservations,
+  mergeObservationCounters,
+  totalObservations,
+} from "./graph/crdt.js";
+export { serializeGraph, importGraph, GRAPH_FILE_FORMAT } from "./graph/serialize.js";
+export type { ImportResult, SerializeOptions } from "./graph/serialize.js";
 export type { GraphExport } from "./graph/export.js";
 export { buildGraphExport, toHtml, toMermaid } from "./graph/export.js";
 
@@ -46,6 +53,7 @@ export type {
   GraphEdge,
   GraphDocument,
   Chunk,
+  ObservationCounter,
   ContextBundle,
   RetrievedNode,
   RetrievedChunk,

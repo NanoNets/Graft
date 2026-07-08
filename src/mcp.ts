@@ -10,7 +10,7 @@ import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { ContextGraphEngine } from "./engine.js";
 import { toHtml } from "./graph/export.js";
 
@@ -172,7 +172,7 @@ server.registerTool(
     },
   },
   async ({ path }) => {
-    const g = engine.exportGraph();
+    const g = await engine.exportGraph();
     writeFileSync(path, toHtml(g));
     return {
       content: [
@@ -193,7 +193,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const s = engine.stats();
+    const s = await engine.stats();
     return {
       content: [
         {
@@ -202,6 +202,42 @@ server.registerTool(
         },
       ],
     };
+  },
+);
+
+server.registerTool(
+  "context_sync",
+  {
+    title: "Sync the graph (git mode)",
+    description:
+      "Team sync (Mode A): import + re-merge the committed graph file, then write the merged graph back so it can be committed. Idempotent — safe to run repeatedly. Uses graph.jsonl next to the db unless a path is given.",
+    inputSchema: {
+      file: z
+        .string()
+        .optional()
+        .describe("Path to the graph JSONL file (default: graph.jsonl next to the db)."),
+    },
+  },
+  async ({ file }) => {
+    const path = file ?? engine.graphFilePath;
+    if (!path) {
+      return {
+        content: [{ type: "text", text: "This graph is in-memory and can't be synced to a file." }],
+      };
+    }
+    const lines: string[] = [];
+    if (existsSync(path)) {
+      const r = await engine.importJsonl(readFileSync(path, "utf8"));
+      for (const w of r.warnings) lines.push(`⚠ ${w}`);
+      lines.push(
+        `Merged in: +${r.nodesCreated} entities (${r.nodesUpdated} reinforced), ` +
+          `+${r.edgesCreated} relationships (${r.edgesUpdated} reinforced).`,
+      );
+    }
+    writeFileSync(path, await engine.exportJsonl());
+    const s = await engine.stats();
+    lines.push(`Wrote merged graph (${s.nodes} entities, ${s.edges} relationships) to ${path}.`);
+    return { content: [{ type: "text", text: lines.join("\n") }] };
   },
 );
 

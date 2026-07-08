@@ -47,8 +47,8 @@ async function main() {
   const after = await engine.read("how is the team notified about failed charges?");
   console.log(after.prompt);
 
-  console.log("\nFinal graph:", engine.stats());
-  engine.close();
+  console.log("\nFinal graph:", await engine.stats());
+  await engine.close();
 }
 
 main().catch((err) => {

@@ -23,6 +23,16 @@ export interface GraphDocument {
   createdAt: string;
 }
 
+/**
+ * A conflict-free observation counter: maps a *unique observation key* (the id
+ * of the document/contribution that observed the fact) to how many times that
+ * single observation event reinforced it. Because keys are globally unique per
+ * event, merging two counters is an element-wise **max** — commutative,
+ * associative, and idempotent. That is what makes re-importing the same records
+ * safe: replaying an observation never double-counts. See {@link ../graph/crdt}.
+ */
+export type ObservationCounter = Record<string, number>;
+
 /** An entity or concept in the graph. */
 export interface GraphNode {
   id: string;
@@ -32,15 +42,30 @@ export interface GraphNode {
   type: string;
   /** A short natural-language description of the node, synthesized from evidence. */
   summary: string;
+  /**
+   * Wall-clock stamp of when `summary` was last set. Used as a last-writer-wins
+   * tiebreaker when reconciling two replicas that hold different summaries.
+   */
+  summaryUpdatedAt: string;
   /** Alternate names / surface forms that map to this node. */
   aliases: string[];
-  /** 0..1 confidence that this node is real and correctly described. */
+  /**
+   * 0..1 confidence that this node is real and correctly described. **Derived**
+   * (a pure function of the observation total), never mutated in place, so it
+   * converges deterministically no matter how records are merged.
+   */
   confidence: number;
-  /** How many times this entity has been observed across ingests/contributions. */
+  /**
+   * How many times this entity has been observed. **Derived** as the sum of
+   * {@link observationSources}; stored denormalized so existing readers keep
+   * working without recomputing.
+   */
   observations: number;
+  /** The CRDT observation counter that {@link observations} is derived from. */
+  observationSources: ObservationCounter;
   /** Vector embedding of `name + summary`, used for semantic matching & dedup. */
   embedding?: number[];
-  /** Where this knowledge came from (document ids, agent ids). */
+  /** Where this knowledge came from (document ids, agent ids) — a grow-only set. */
   provenance: string[];
   createdAt: string;
   updatedAt: string;
@@ -55,8 +80,14 @@ export interface GraphEdge {
   relation: string;
   /** Optional natural-language description of the relationship. */
   description: string;
+  /** Last-writer-wins stamp for `description` (see {@link GraphNode.summaryUpdatedAt}). */
+  descriptionUpdatedAt: string;
+  /** **Derived** from the observation total (see {@link GraphNode.confidence}). */
   confidence: number;
+  /** **Derived** as the sum of {@link observationSources}. */
   observations: number;
+  /** The CRDT observation counter that {@link observations} is derived from. */
+  observationSources: ObservationCounter;
   provenance: string[];
   createdAt: string;
   updatedAt: string;

@@ -186,9 +186,9 @@ context-graph-web &
 tailscale serve localhost:4680      # private HTTPS URL, visible only to your tailnet
 ```
 
-The two modes below sync **between separate graphs** instead — no shared server at all. Both rely on the graph's **conflict-free merge**: observations are a grow-only counter and free-text fields are last-writer-wins, so re-importing the same facts never double-counts and merge order never changes the result.
+### Git mode — sync separate graphs, no server at all
 
-### Mode A — Git-native (zero infra)
+Prefer no shared server? Each teammate keeps their own local graph and git moves the knowledge around. This relies on the graph's **conflict-free merge**: observations are a grow-only counter and free-text fields are last-writer-wins, so re-importing the same facts never double-counts and merge order never changes the result.
 
 Commit the graph to your repo as a human-diffable file and let git move it around.
 
@@ -203,20 +203,6 @@ context-graph sync
 ```
 
 `sync` imports the committed `.context-graph/graph.jsonl`, re-merges it into the local graph, and writes the merged result back. It's idempotent (safe to run repeatedly) and commutative (order-independent), so two teammates' additions always converge. The repo's `.gitignore` keeps the local SQLite replica private while tracking `graph.jsonl`. Best for teams already living in git who want no servers and offline-friendly sharing; the only friction is the occasional merge conflict on the file, resolved by re-running `sync`.
-
-### Mode B — Shared store (libSQL / Turso embedded replica)
-
-Point the engine at a shared libSQL primary. Each machine keeps a **local replica** (fast local reads); writes go to the primary, so everyone merges against authoritative shared state in near-real-time — no commit/pull step.
-
-```bash
-export CONTEXT_GRAPH_SYNC_URL="libsql://your-db.turso.io"   # or http://your-sqld:8080
-export CONTEXT_GRAPH_AUTH_TOKEN="…"                          # token for the primary
-export CONTEXT_GRAPH_DB="./.context-graph/graph.db"          # local replica file
-# optional: CONTEXT_GRAPH_SYNC_INTERVAL=30  (background pull, seconds)
-context-graph query "auth"        # reads local; writes sync to the primary
-```
-
-Works with **Turso Cloud** or a **self-hosted `sqld`**. Best for teams that want live shared memory and are OK running (or renting) one small database; the friction is provisioning that primary and a token once.
 
 > Both modes assume one embedding model per graph (see the note under *How it works*). Imports across mismatched embedding dimensions keep the facts but drop the incompatible vectors, and warn you to re-ingest sources to re-embed.
 
@@ -248,7 +234,7 @@ This is what makes contributions compound: the tenth agent to confirm a fact str
                                             └────────────────────────┘
 ```
 
-- **Storage** — SQLite (via `better-sqlite3`) by default; a libSQL/Turso embedded replica for shared team graphs (set `CONTEXT_GRAPH_SYNC_URL`); or swap in your own `GraphStore`.
+- **Storage** — SQLite (via `better-sqlite3`) by default, or swap in your own `GraphStore`.
 - **Extraction** — local **Ollama** (`llama3.2` by default) using structured JSON output; automatically upgrades to **OpenRouter** (`openai/gpt-4o-mini` by default, any tool-calling model) if `OPENROUTER_API_KEY` is set.
 - **Embeddings** — local **in-process** model (`Xenova/all-MiniLM-L6-v2`, 384-dim) by default; automatically upgrades to **OpenAI** (`text-embedding-3-small`) if `OPENAI_API_KEY` is set.
 - **Retrieval** — semantic match over entities + one-hop graph expansion + supporting source passages.
@@ -264,10 +250,6 @@ Everything is configurable via constructor options, environment variables, or de
 ```ts
 new ContextGraphEngine({
   dbPath: "./.context-graph/graph.db",          // CONTEXT_GRAPH_DB
-  // Team sharing — Mode B (libSQL/Turso embedded replica; opt-in):
-  syncUrl: process.env.CONTEXT_GRAPH_SYNC_URL,   // libsql://… or http://your-sqld
-  authToken: process.env.CONTEXT_GRAPH_AUTH_TOKEN,
-  syncIntervalSeconds: undefined,                // CONTEXT_GRAPH_SYNC_INTERVAL (background pull)
   // Cloud (used automatically when set):
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   openrouterModel: "openai/gpt-4o-mini",         // CONTEXT_GRAPH_OPENROUTER_MODEL

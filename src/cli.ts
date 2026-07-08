@@ -12,7 +12,7 @@
  */
 import "dotenv/config";
 import { Command } from "commander";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { ContextGraphEngine } from "./engine.js";
 import { toHtml, toMermaid } from "./graph/export.js";
 
@@ -47,7 +47,7 @@ program
         }
       }
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
@@ -67,7 +67,7 @@ program
           : `✓ ${r.chunks} chunks, +${r.nodesCreated} nodes, +${r.edgesCreated} edges`,
       );
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
@@ -87,7 +87,7 @@ program
       });
       console.log(opts.json ? JSON.stringify(bundle, null, 2) : bundle.prompt);
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
@@ -104,7 +104,7 @@ program
         `✓ contributed — +${r.nodesCreated} nodes (${r.nodesUpdated} reinforced), +${r.edgesCreated} edges (${r.edgesUpdated} reinforced)`,
       );
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
@@ -128,7 +128,7 @@ program
         );
       }
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
@@ -137,10 +137,10 @@ program
   .description("Export the whole graph for viewing (interactive HTML, JSON, or Mermaid)")
   .option("-f, --format <fmt>", "html | json | mermaid", "html")
   .option("-o, --out <path>", "output file (default: context-graph.<ext>)")
-  .action((opts: { format: string; out?: string }) => {
+  .action(async (opts: { format: string; out?: string }) => {
     const engine = engineFrom();
     try {
-      const g = engine.exportGraph();
+      const g = await engine.exportGraph();
       let content: string;
       let ext: string;
       if (opts.format === "json") {
@@ -158,20 +158,97 @@ program
       console.log(`✓ wrote ${g.nodes.length} entities / ${g.edges.length} relationships to ${out}`);
       if (ext === "html") console.log(`  open it:  open ${out}`);
     } finally {
-      engine.close();
+      await engine.close();
     }
   });
 
 program
   .command("stats")
   .description("Show graph statistics")
-  .action(() => {
+  .action(async () => {
     const engine = engineFrom();
     try {
-      const s = engine.stats();
+      const s = await engine.stats();
       console.log(`documents: ${s.documents}\nnodes:     ${s.nodes}\nedges:     ${s.edges}\nchunks:    ${s.chunks}`);
     } finally {
-      engine.close();
+      await engine.close();
+    }
+  });
+
+/** Resolve the graph-file path for team sync (flag overrides the default). */
+function syncFilePath(engine: ContextGraphEngine, flag?: string): string {
+  const file = flag ?? engine.graphFilePath;
+  if (!file) {
+    throw new Error(
+      "No graph file path — an in-memory graph can't be synced. Pass --file <path> or use a file-backed --db.",
+    );
+  }
+  return file;
+}
+
+program
+  .command("push")
+  .description("Team sync (git mode): write the graph to a committable JSONL file")
+  .option("--file <path>", "graph file (default: graph.jsonl next to the db)")
+  .action(async (opts: { file?: string }) => {
+    const engine = engineFrom();
+    try {
+      const file = syncFilePath(engine, opts.file);
+      writeFileSync(file, await engine.exportJsonl());
+      const s = await engine.stats();
+      console.log(`✓ wrote ${s.nodes} entities / ${s.edges} relationships to ${file}`);
+      console.log(`  commit it:  git add ${file} && git commit -m "update context graph"`);
+    } finally {
+      await engine.close();
+    }
+  });
+
+program
+  .command("pull")
+  .description("Team sync (git mode): import + re-merge a teammate's JSONL file")
+  .option("--file <path>", "graph file (default: graph.jsonl next to the db)")
+  .action(async (opts: { file?: string }) => {
+    const engine = engineFrom();
+    try {
+      const file = syncFilePath(engine, opts.file);
+      if (!existsSync(file)) {
+        console.log(`No graph file at ${file} yet — nothing to pull.`);
+        return;
+      }
+      const r = await engine.importJsonl(readFileSync(file, "utf8"));
+      for (const w of r.warnings) console.warn(`⚠ ${w}`);
+      console.log(
+        `✓ merged ${file} — +${r.nodesCreated} nodes (${r.nodesUpdated} reinforced), ` +
+          `+${r.edgesCreated} edges (${r.edgesUpdated} reinforced), ` +
+          `+${r.documentsAdded} docs, +${r.chunksAdded} sources`,
+      );
+    } finally {
+      await engine.close();
+    }
+  });
+
+program
+  .command("sync")
+  .description("Team sync (git mode): pull a teammate's JSONL, re-merge, then push the merged graph")
+  .option("--file <path>", "graph file (default: graph.jsonl next to the db)")
+  .action(async (opts: { file?: string }) => {
+    const engine = engineFrom();
+    try {
+      const file = syncFilePath(engine, opts.file);
+      if (existsSync(file)) {
+        const r = await engine.importJsonl(readFileSync(file, "utf8"));
+        for (const w of r.warnings) console.warn(`⚠ ${w}`);
+        console.log(
+          `↓ merged in — +${r.nodesCreated} nodes (${r.nodesUpdated} reinforced), ` +
+            `+${r.edgesCreated} edges (${r.edgesUpdated} reinforced)`,
+        );
+      }
+      writeFileSync(file, await engine.exportJsonl());
+      const s = await engine.stats();
+      console.log(`↑ wrote merged graph (${s.nodes} entities / ${s.edges} relationships) to ${file}`);
+      console.log(`  commit it:  git add ${file} && git commit -m "sync context graph"`);
+    } finally {
+      await engine.close();
     }
   });
 

@@ -8,8 +8,8 @@ export interface GraphExport {
 }
 
 /** Read the entire graph out of a store into a serializable snapshot. */
-export function buildGraphExport(store: GraphStore): GraphExport {
-  const nodes = store.allNodes().map((n) => ({
+export async function buildGraphExport(store: GraphStore): Promise<GraphExport> {
+  const nodes = (await store.allNodes()).map((n) => ({
     id: n.id,
     name: n.name,
     type: n.type,
@@ -17,7 +17,7 @@ export function buildGraphExport(store: GraphStore): GraphExport {
     confidence: n.confidence,
     observations: n.observations,
   }));
-  const edges = store.allEdges().map((e) => ({
+  const edges = (await store.allEdges()).map((e) => ({
     sourceId: e.sourceId,
     targetId: e.targetId,
     relation: e.relation,

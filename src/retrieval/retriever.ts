@@ -39,7 +39,7 @@ export async function retrieve(
   const [queryVec] = await embedder.embed([query]);
 
   // 1) Direct semantic matches over entities.
-  const nodeHits = topK(queryVec, store.allEmbeddedNodes(), (n) => n.embedding, maxNodes)
+  const nodeHits = topK(queryVec, await store.allEmbeddedNodes(), (n) => n.embedding, maxNodes)
     .filter((h) => h.score >= minNodeScore);
 
   const nodesById = new Map<string, RetrievedNode>();
@@ -51,14 +51,14 @@ export async function retrieve(
   let edges: GraphEdge[] = [];
   if (expand && nodesById.size > 0) {
     const seedIds = [...nodesById.keys()];
-    edges = store.edgesForNodes(seedIds);
+    edges = await store.edgesForNodes(seedIds);
 
     const neighborIds = new Set<string>();
     for (const e of edges) {
       if (!nodesById.has(e.sourceId)) neighborIds.add(e.sourceId);
       if (!nodesById.has(e.targetId)) neighborIds.add(e.targetId);
     }
-    const neighbors = store.getNodesByIds([...neighborIds]);
+    const neighbors = await store.getNodesByIds([...neighborIds]);
     const seedScore = new Map(nodeHits.map((h) => [h.item.id, h.score]));
     for (const n of neighbors) {
       // Score an expanded node by the best edge that reached it.
@@ -73,12 +73,14 @@ export async function retrieve(
   edges = edges.filter((e) => nodeIdSet.has(e.sourceId) && nodeIdSet.has(e.targetId));
 
   // 3) Supporting source passages.
-  const chunkHits = topK(queryVec, store.allEmbeddedChunks(), (c) => c.embedding, maxChunks);
-  const chunks: RetrievedChunk[] = chunkHits.map(({ item, score }) => ({
-    ...item,
-    score,
-    documentTitle: store.documentTitle(item.documentId),
-  }));
+  const chunkHits = topK(queryVec, await store.allEmbeddedChunks(), (c) => c.embedding, maxChunks);
+  const chunks: RetrievedChunk[] = await Promise.all(
+    chunkHits.map(async ({ item, score }) => ({
+      ...item,
+      score,
+      documentTitle: await store.documentTitle(item.documentId),
+    })),
+  );
 
   const bundle: ContextBundle = {
     query,

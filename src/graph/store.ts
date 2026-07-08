@@ -10,44 +10,52 @@ import type {
  * Storage backend for the context graph.
  *
  * The engine talks to the graph exclusively through this interface, so the
- * SQLite backend can be swapped for another store (Postgres/pgvector, an
- * in-memory store, a remote service) without touching engine logic.
+ * default local SQLite backend can be swapped for another store — a
+ * Postgres/pgvector service, a remote replica, or an in-memory store — without
+ * touching engine logic.
+ *
+ * All methods are **async**. The local `better-sqlite3` store is synchronous
+ * under the hood and simply resolves immediately; a networked store needs the
+ * async surface to talk to its remote.
  */
 export interface GraphStore {
   // --- documents ---
-  getDocumentByHash(hash: string): GraphDocument | undefined;
-  insertDocument(doc: GraphDocument): void;
+  getDocumentByHash(hash: string): Promise<GraphDocument | undefined>;
+  getDocumentById(id: string): Promise<GraphDocument | undefined>;
+  insertDocument(doc: GraphDocument): Promise<void>;
   /** Every ingested document, newest first (for UI listings). */
-  allDocuments(): GraphDocument[];
+  allDocuments(): Promise<GraphDocument[]>;
 
   // --- chunks ---
-  insertChunk(chunk: Chunk): void;
-  getChunksByIds(ids: string[]): Chunk[];
+  insertChunk(chunk: Chunk): Promise<void>;
+  getChunksByIds(ids: string[]): Promise<Chunk[]>;
   /** All chunks that have an embedding, for in-memory vector search. */
-  allEmbeddedChunks(): Chunk[];
+  allEmbeddedChunks(): Promise<Chunk[]>;
+  /** Every chunk in the graph (for serialization / export). */
+  allChunks(): Promise<Chunk[]>;
 
   // --- nodes ---
-  getNodeById(id: string): GraphNode | undefined;
-  getNodesByIds(ids: string[]): GraphNode[];
+  getNodeById(id: string): Promise<GraphNode | undefined>;
+  getNodesByIds(ids: string[]): Promise<GraphNode[]>;
   /** Nodes whose canonical name or an alias matches (normalized, exact). */
-  findNodesByName(normalizedName: string): GraphNode[];
+  findNodesByName(normalizedName: string): Promise<GraphNode[]>;
   /** All nodes that have an embedding, for in-memory vector search & dedup. */
-  allEmbeddedNodes(): GraphNode[];
+  allEmbeddedNodes(): Promise<GraphNode[]>;
   /** Every node in the graph (for export/visualization). */
-  allNodes(): GraphNode[];
-  upsertNode(node: GraphNode): void;
+  allNodes(): Promise<GraphNode[]>;
+  upsertNode(node: GraphNode): Promise<void>;
 
   // --- edges ---
   /** Existing edge with the same (source, target, relation), if any. */
-  findEdge(sourceId: string, targetId: string, relation: string): GraphEdge | undefined;
-  upsertEdge(edge: GraphEdge): void;
+  findEdge(sourceId: string, targetId: string, relation: string): Promise<GraphEdge | undefined>;
+  upsertEdge(edge: GraphEdge): Promise<void>;
   /** All edges incident to any of the given node ids. */
-  edgesForNodes(nodeIds: string[]): GraphEdge[];
+  edgesForNodes(nodeIds: string[]): Promise<GraphEdge[]>;
   /** Every edge in the graph (for export/visualization). */
-  allEdges(): GraphEdge[];
+  allEdges(): Promise<GraphEdge[]>;
 
   // --- misc ---
-  documentTitle(documentId: string): string;
-  stats(): GraphStats;
-  close(): void;
+  documentTitle(documentId: string): Promise<string>;
+  stats(): Promise<GraphStats>;
+  close(): Promise<void>;
 }
