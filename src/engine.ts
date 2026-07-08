@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { readFileSync, readdirSync, statSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { extractPdfText, isPdfPath } from "./ingest/pdf.js";
 import { buildGraphExport, type GraphExport } from "./graph/export.js";
 import type { GraphStore } from "./graph/store.js";
@@ -9,6 +9,7 @@ import { resolveConfig } from "./ai/providers.js";
 import { OpenRouterExtractor } from "./ai/openrouter.js";
 import { OpenAIEmbedder } from "./ai/openai.js";
 import { LocalEmbedder, OllamaExtractor } from "./ai/local.js";
+import { OllamaSummarizer, OpenRouterSummarizer, type Summarizer } from "./ai/summarize.js";
 import { chunkText } from "./ingest/chunker.js";
 import { mergeExtraction } from "./graph/merge.js";
 import { serializeGraph, importGraph, type ImportResult } from "./graph/serialize.js";
@@ -50,6 +51,42 @@ export interface ContributeResult {
   edgesUpdated: number;
 }
 
+/** Extensions treated as source code by {@link ContextGraphEngine.ingestRepo}. */
+export const CODE_EXTENSIONS = [
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".go", ".rs", ".java", ".kt", ".scala",
+  ".rb", ".php", ".c", ".h", ".cpp", ".hpp", ".cc",
+  ".cs", ".swift", ".sql", ".sh", ".proto",
+];
+
+export interface RepoIngestOptions {
+  /** File extensions to treat as code. Default: {@link CODE_EXTENSIONS}. */
+  extensions?: string[];
+  /** Called before each file summary and each module ingest, for progress UIs. */
+  onProgress?: (info: {
+    phase: "summarize" | "ingest";
+    index: number;
+    total: number;
+    file: string;
+  }) => void;
+}
+
+export interface RepoIngestResult {
+  /** Code files considered. */
+  files: number;
+  /** Files freshly summarized with an LLM call this run. */
+  summarized: number;
+  /** Files whose summary was reused from the content-hash cache. */
+  cached: number;
+  /** One ingest result per module (top-level directory) document. */
+  modules: IngestResult[];
+  /** Files that could not be read or summarized (path: reason). */
+  errors: string[];
+}
+
+/** file path → { content hash, cached summary } */
+type RepoSummaryCache = Record<string, { hash: string; summary: string }>;
+
 /**
  * The Context Graph Engine.
  *
@@ -62,6 +99,8 @@ export class ContextGraphEngine {
   private _store?: GraphStore;
   private _embedder?: Embedder;
   private _extractor?: Extractor;
+  private _summarizer?: Summarizer;
+  private _memRepoCache: RepoSummaryCache = {};
 
   constructor(config: EngineConfig = {}) {
     this.cfg = resolveConfig(config);
@@ -111,6 +150,23 @@ export class ContextGraphEngine {
     return this._extractor;
   }
 
+  private get summarizer(): Summarizer {
+    if (!this._summarizer) {
+      if (this.cfg.summarizer) {
+        this._summarizer = this.cfg.summarizer;
+      } else if (!this.cfg.forceLocal && this.cfg.openrouterApiKey) {
+        this._summarizer = new OpenRouterSummarizer(
+          this.cfg.openrouterApiKey,
+          this.cfg.openrouterModel,
+          this.cfg.openrouterBaseUrl,
+        );
+      } else {
+        this._summarizer = new OllamaSummarizer(this.cfg.ollamaModel, this.cfg.ollamaBaseUrl);
+      }
+    }
+    return this._summarizer;
+  }
+
   /**
    * Ingest a document from disk. PDFs (`.pdf`) are parsed to text automatically;
    * anything else is read as UTF-8. Title defaults to the file name.
@@ -139,6 +195,16 @@ export class ContextGraphEngine {
         edgesCreated: 0,
         edgesUpdated: 0,
       };
+    }
+
+    // Same source, new content: the file changed, so replace its stale
+    // document(s) instead of piling up superseded chunks. "inline" is the
+    // catch-all source for pasted text and is exempt — many unrelated
+    // documents legitimately share it.
+    if (source !== "inline") {
+      for (const prior of await this.store.documentsBySource(source)) {
+        await this.store.deleteDocument(prior.id);
+      }
     }
 
     const documentId = newId("doc");
@@ -209,6 +275,119 @@ export class ContextGraphEngine {
       results.push(await this.ingestFile(files[i]));
     }
     return results;
+  }
+
+  /**
+   * Ingest a code repository as **summaries, not raw code**.
+   *
+   * Raw source is deliberately kept out of the extraction pipeline (LLM entity
+   * extraction over code is noisy and expensive; agents already grep code
+   * live). Instead each code file gets one LLM-written prose summary; the
+   * summaries are grouped into one document per top-level directory and fed
+   * through the normal {@link ingest} pipeline.
+   *
+   * Incremental: summaries are cached by file content hash (in
+   * `repo-summaries.json` next to the db), so re-running after edits only
+   * re-summarizes changed files, and unchanged module documents are skipped by
+   * the ordinary document-hash dedup.
+   */
+  async ingestRepo(dir: string, opts: RepoIngestOptions = {}): Promise<RepoIngestResult> {
+    const root = resolve(dir);
+    const exts = opts.extensions ?? CODE_EXTENSIONS;
+    const files = walkDir(root).filter((f) => exts.some((e) => f.toLowerCase().endsWith(e)));
+
+    const cache = this.loadRepoCache();
+    const result: RepoIngestResult = {
+      files: files.length,
+      summarized: 0,
+      cached: 0,
+      modules: [],
+      errors: [],
+    };
+
+    // Phase 1: one summary per file, concurrent, content-hash cached.
+    const summaries = await mapWithConcurrency(files, 8, async (file, i) => {
+      const rel = relative(root, file);
+      opts.onProgress?.({ phase: "summarize", index: i, total: files.length, file: rel });
+      let code: string;
+      try {
+        code = readFileSync(file, "utf8");
+      } catch (err) {
+        result.errors.push(`${rel}: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }
+      const hash = contentHash(code);
+      const hit = cache[file];
+      if (hit && hit.hash === hash) {
+        result.cached++;
+        return { rel, summary: hit.summary };
+      }
+      try {
+        const summary = await this.summarizer.summarize(code, { path: rel });
+        if (!summary) return undefined;
+        cache[file] = { hash, summary };
+        result.summarized++;
+        return { rel, summary };
+      } catch (err) {
+        result.errors.push(`${rel}: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }
+    });
+    this.saveRepoCache(cache);
+
+    // Phase 2: group summaries into one document per top-level directory and
+    // run them through the normal ingest pipeline. The stable `repo:` source
+    // makes re-ingestion replace a module's stale document when it changed.
+    const repoName = basename(root);
+    const modules = new Map<string, Array<{ rel: string; summary: string }>>();
+    for (const s of summaries) {
+      if (!s) continue;
+      const module = s.rel.includes(sep) ? s.rel.split(sep)[0] : "(root)";
+      (modules.get(module) ?? modules.set(module, []).get(module)!).push(s);
+    }
+
+    let i = 0;
+    for (const [module, entries] of modules) {
+      opts.onProgress?.({ phase: "ingest", index: i++, total: modules.size, file: module });
+      const text = [
+        `# Code summary: ${repoName}/${module}`,
+        ...entries.map((e) => `## ${e.rel}\n\n${e.summary}`),
+      ].join("\n\n");
+      result.modules.push(
+        await this.ingest(text, {
+          title: `${repoName}/${module} (code summary)`,
+          source: `repo:${root}#${module}`,
+        }),
+      );
+    }
+    return result;
+  }
+
+  /** Path of the file-summary cache, or undefined for in-memory graphs. */
+  private get repoCachePath(): string | undefined {
+    if (this.cfg.dbPath === ":memory:") return undefined;
+    return join(dirname(this.cfg.dbPath), "repo-summaries.json");
+  }
+
+  private loadRepoCache(): RepoSummaryCache {
+    const path = this.repoCachePath;
+    if (!path) return this._memRepoCache;
+    if (!existsSync(path)) return {};
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as RepoSummaryCache;
+    } catch {
+      return {};
+    }
+  }
+
+  private saveRepoCache(cache: RepoSummaryCache): void {
+    const path = this.repoCachePath;
+    if (!path) {
+      this._memRepoCache = cache;
+      return;
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(cache, null, 2));
   }
 
   /** Read the graph for a query, returning a structured context bundle. */
@@ -327,14 +506,42 @@ export class ContextGraphEngine {
   }
 }
 
-/** Recursively list all files under a directory (skips dot-directories). */
+/** Directories that are dependency/build output, never knowledge. */
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "target",
+  "vendor",
+  "coverage",
+  "__pycache__",
+  "venv",
+]);
+
+/** Files above this size are generated/vendored in practice, not written docs or code. */
+const MAX_FILE_BYTES = 1_000_000;
+
+/**
+ * Recursively list all files under a directory. Skips dot-directories,
+ * dependency/build directories (node_modules, dist, …), and files over 1 MB.
+ */
 function walkDir(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkDir(full));
-    else if (entry.isFile()) out.push(full);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      out.push(...walkDir(full));
+    } else if (entry.isFile()) {
+      try {
+        if (statSync(full).size > MAX_FILE_BYTES) continue;
+      } catch {
+        continue;
+      }
+      out.push(full);
+    }
   }
   return out;
 }

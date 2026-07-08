@@ -127,9 +127,13 @@ server.registerTool(
       "Ingest every supported document (.pdf, .md, .markdown, .txt) in a directory, recursively, into the shared context graph. Point this at a folder of docs and it builds the graph in one call.",
     inputSchema: {
       dir: z.string().describe("Absolute path to the directory of documents to ingest."),
+      extensions: z
+        .array(z.string())
+        .optional()
+        .describe('File extensions to include (e.g. [".md", ".rst"]). Default: .pdf .md .markdown .txt'),
     },
   },
-  async ({ dir }, extra) => {
+  async ({ dir, extensions }, extra) => {
     // Report progress per file. If the client supplied a progressToken (and
     // resets its request timeout on progress, as Claude Code does), this keeps
     // long multi-file ingests from tripping the default 60s tool timeout.
@@ -147,7 +151,7 @@ server.registerTool(
           });
         }
       : undefined;
-    const results = await engine.ingestDir(dir, { onProgress });
+    const results = await engine.ingestDir(dir, { extensions, onProgress });
     if (results.length === 0) {
       return { content: [{ type: "text", text: `No supported files found under ${dir}.` }] };
     }
@@ -157,6 +161,52 @@ server.registerTool(
       r.skipped ? `• ${r.title}: skipped (already ingested)` : `✓ ${r.title}: +${r.nodesCreated} entities, +${r.edgesCreated} relationships`,
     );
     lines.push(`\nTotal: ${results.length} files → +${created} entities, +${edges} relationships.`);
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "context_ingest_repo",
+  {
+    title: "Ingest a code repository (as summaries)",
+    description:
+      "Ingest a code repository into the shared context graph. Each source file is summarized " +
+      "into prose (purpose, key exports, dependencies, design decisions) and the summaries are " +
+      "ingested — raw code is never fed to the extractor. Incremental: re-running only " +
+      "re-summarizes files whose content changed.",
+    inputSchema: {
+      dir: z.string().describe("Absolute path to the repository root."),
+      extensions: z
+        .array(z.string())
+        .optional()
+        .describe('File extensions to treat as code (default: common languages, e.g. ".ts", ".py", ".go").'),
+    },
+  },
+  async ({ dir, extensions }, extra) => {
+    const progressToken = extra?._meta?.progressToken;
+    const onProgress = progressToken
+      ? ({ phase, index, total, file }: { phase: string; index: number; total: number; file: string }) => {
+          void extra.sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: index,
+              total,
+              message: `${phase === "summarize" ? "Summarizing" : "Ingesting"} ${file} (${index + 1}/${total})`,
+            },
+          });
+        }
+      : undefined;
+    const r = await engine.ingestRepo(dir, { extensions, onProgress });
+    const lines = [
+      `Repo ingested: ${r.files} code files → ${r.summarized} summarized, ${r.cached} unchanged (cache hits).`,
+      ...r.modules.map((m) =>
+        m.skipped
+          ? `• ${m.title}: unchanged, skipped`
+          : `✓ ${m.title}: ${m.chunks} chunks, +${m.nodesCreated} entities, +${m.edgesCreated} relationships`,
+      ),
+      ...r.errors.map((e) => `✗ ${e}`),
+    ];
     return { content: [{ type: "text", text: lines.join("\n") }] };
   },
 );

@@ -35,7 +35,7 @@ context-graph-web
 # → http://localhost:4680
 ```
 
-Open the page, point **“Ingest a folder of documents”** at any folder of `.pdf` / `.md` / `.txt` files, and watch it become a knowledge graph. Then ask questions: answers come back with numbered citations, and every fact wears a **provenance receipt** — how many times it's been observed, how confident the graph is, and which sources say so. Use **“Teach it something”** to add a fact the docs don't capture, and watch the graph reinforce in real time.
+Open the page, drop a folder of `.pdf` / `.md` / `.txt` files on the **“Add documents”** dropzone, and watch it become a knowledge graph. Then ask questions: answers come back with numbered citations, and every fact wears a **provenance receipt** — how many times it's been observed, how confident the graph is, and which sources say so. Use **“Add a fact”** to record something the docs don't capture, and watch the graph reinforce in real time.
 
 Everything runs on your machine (the server binds to localhost only). Set `OPENROUTER_API_KEY` to upgrade to LLM-written answers and cloud extraction; without it, retrieval and the graph stay fully local.
 
@@ -102,6 +102,15 @@ context-graph ingest ./docs/*.md ./handbook.pdf
 context-graph ingest-dir ./docs           # a whole folder, recursively
 echo "some notes" | context-graph ingest-text --title "Notes"
 
+# Ingest a code repository — as summaries, not raw code (see "Code repositories")
+context-graph repo .
+
+# Ingest GitHub pull requests (title, description, review discussion) via the gh CLI
+context-graph ingest-prs --state merged --limit 50
+
+# Wire the graph into Claude Code (see "Claude Code hooks")
+context-graph install-hooks
+
 # Visualize the graph (interactive HTML; also --format json|mermaid)
 context-graph export --out graph.html && open graph.html
 
@@ -155,12 +164,51 @@ Tools exposed:
 | `context_contribute` | Write a learning back into the shared graph |
 | `context_ingest` | Ingest a document (raw text) into the graph |
 | `context_ingest_file` | Ingest files from disk, including **PDFs** (parsed automatically) |
-| `context_ingest_dir` | Ingest a whole **directory** of docs (PDF/MD/TXT), recursively |
+| `context_ingest_dir` | Ingest a whole **directory** of docs (PDF/MD/TXT by default; pass `extensions` to widen), recursively |
+| `context_ingest_repo` | Ingest a **code repository** as per-file prose summaries (never raw code); incremental across runs |
 | `context_export` | Write the graph to an interactive **HTML** visualization |
 | `context_sync` | Team sharing (git mode): import + re-merge the shared `graph.jsonl`, then write it back |
 | `context_stats` | Report how much the graph currently holds |
 
 A natural agent workflow: **read context → do the task → contribute what you learned.**
+
+---
+
+## Code repositories
+
+`context-graph repo <dir>` (or the `context_ingest_repo` MCP tool) ingests a codebase — but deliberately **never feeds raw source code to the entity extractor**. Running LLM extraction over thousands of code chunks is the most expensive way to compute what `grep` and tree-sitter give agents for free, and it fills the graph with noisy, duplicated symbol entities. (Every serious code-context system — aider, Cursor, Sourcegraph, Claude Code — derives code *structure* statically, and uses LLMs only for prose.)
+
+Instead, repo ingestion:
+
+1. Walks the repo for code files (`.ts`, `.py`, `.go`, … — `node_modules`/`dist`/etc. and files over 1 MB are skipped).
+2. Writes **one LLM prose summary per file**: purpose, key exports, dependencies, design decisions.
+3. Groups summaries into one document per top-level directory and ingests those through the normal pipeline — so the graph gains *module-level* entities ("the chunker is paragraph-aware", "the CLI requires the GitHub CLI for PR ingestion") with provenance, not ten thousand function names.
+
+It is **incremental**: summaries are cached by content hash in `repo-summaries.json` next to the db, so re-running after edits only re-summarizes changed files, and a changed file's module document *replaces* its predecessor rather than piling up stale duplicates. An unchanged repo re-ingests with **zero** LLM calls.
+
+The same replace-on-change behavior now applies to every file ingest: re-ingesting a modified doc replaces the old version instead of leaving both in the graph.
+
+For a ~30-file repo expect ~30 small summary calls on first run; the graph stays module-scale (a handful of documents) rather than chunk-soup-scale. Agents should still read raw code with their own tools — the graph holds what code can't say: intent, decisions, and gotchas.
+
+## Claude Code hooks
+
+`context-graph install-hooks` wires the graph into Claude Code via `.claude/settings.json` (merges with what's already there):
+
+- **SessionStart** — every new session begins with relevant graph context (conventions, decisions, gotchas) auto-injected, plus a reminder that `context_contribute` exists.
+- **Stop** — when the agent finishes, it's nudged once to record any durable learnings from the session before ending. Pass `--no-stop` to skip this hook if you find the nudge too chatty.
+
+Both hooks stay silent when there's no graph yet, so installing them in a fresh project is harmless. Combined with the MCP server this closes the loop: sessions **start** with team knowledge and **end** by adding to it.
+
+## GitHub pull requests
+
+PR descriptions and review threads are where decisions actually get written down. `context-graph ingest-prs` pulls them into the graph via the [GitHub CLI](https://cli.github.com) (no extra auth needed if `gh` is logged in):
+
+```bash
+context-graph ingest-prs                      # merged PRs of the current repo (default 50)
+context-graph ingest-prs -R owner/name -n 100 --state all
+```
+
+Each PR becomes one document (title, description, review discussion) with source `pr:owner/name#123`. Re-runs are cheap: unchanged PRs are skipped by hash, edited ones replace their old version.
 
 ---
 
@@ -177,7 +225,7 @@ docker compose up -d
 cat ./data/share-link.txt           # the share link, with access token
 ```
 
-The graph persists to `./data/graph.db`. Ingest documents two ways: click **Choose folder…** in the UI to upload a folder straight from your computer (works for remote teammates), or drop files into `./docs` on the server and ingest the mounted `/docs` path. When exposed beyond localhost the API requires an access token. It's generated once, saved to `./data/share-link.txt` (and printed to `docker compose logs`), and **stays stable across restarts** so shared links keep working. Pin your own with `CONTEXT_GRAPH_WEB_TOKEN`.
+The graph persists to `./data/graph.db`. Ingest documents two ways: click **Choose a folder…** in the UI to upload a folder straight from your computer (works for remote teammates), or drop files into `./docs` on the server and ingest the mounted `/docs` path. When exposed beyond localhost the API requires an access token. It's generated once, saved to `./data/share-link.txt` (and printed to `docker compose logs`), and **stays stable across restarts** so shared links keep working. Pin your own with `CONTEXT_GRAPH_WEB_TOKEN`.
 
 No server to put it on? Run it on any machine and share it over [Tailscale](https://tailscale.com) without opening a port to the internet:
 
@@ -271,12 +319,13 @@ new ContextGraphEngine({
 The engine depends only on small interfaces, so you can replace any piece:
 
 ```ts
-import { ContextGraphEngine, type Embedder, type Extractor, type GraphStore } from "context-graph-engine";
+import { ContextGraphEngine, type Embedder, type Extractor, type GraphStore, type Summarizer } from "context-graph-engine";
 
 new ContextGraphEngine({
-  store: myCustomStore,        // e.g. Postgres/pgvector
-  embedder: myCustomEmbedder,  // any embedding model
-  extractor: myCustomExtractor // any LLM, or a rules-based extractor
+  store: myCustomStore,          // e.g. Postgres/pgvector
+  embedder: myCustomEmbedder,    // any embedding model
+  extractor: myCustomExtractor,  // any LLM, or a rules-based extractor
+  summarizer: myCustomSummarizer // code-file summaries for ingestRepo
 });
 ```
 
@@ -291,6 +340,7 @@ class ContextGraphEngine {
   ingest(text: string, opts?: { title?; source? }): Promise<IngestResult>;
   ingestFile(path: string, opts?): Promise<IngestResult>;   // .pdf parsed automatically
   ingestDir(dir: string, opts?): Promise<IngestResult[]>;   // recursive; PDF/MD/TXT
+  ingestRepo(dir: string, opts?): Promise<RepoIngestResult>; // code → per-file summaries, incremental
   read(query: string, opts?: { maxNodes?; maxChunks?; expand? }): Promise<ContextBundle>;
   contribute(learning: string, opts?: { agentId?; source? }): Promise<ContributeResult>;
   exportGraph(): GraphExport;                               // -> toHtml / toMermaid

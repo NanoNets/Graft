@@ -22,7 +22,15 @@ export interface GraphStore {
   // --- documents ---
   getDocumentByHash(hash: string): Promise<GraphDocument | undefined>;
   getDocumentById(id: string): Promise<GraphDocument | undefined>;
+  /** All documents recorded with the given source (path/URL/label), newest first. */
+  documentsBySource(source: string): Promise<GraphDocument[]>;
   insertDocument(doc: GraphDocument): Promise<void>;
+  /**
+   * Delete a document and its chunks (e.g. when re-ingesting a changed file).
+   * Nodes/edges extracted from it keep their observations — the grow-only CRDT
+   * counters never shrink.
+   */
+  deleteDocument(id: string): Promise<void>;
   /** Every ingested document, newest first (for UI listings). */
   allDocuments(): Promise<GraphDocument[]>;
 

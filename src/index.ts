@@ -16,12 +16,14 @@
  * });
  * ```
  */
-export { ContextGraphEngine } from "./engine.js";
+export { ContextGraphEngine, CODE_EXTENSIONS } from "./engine.js";
 export type {
   IngestOptions,
   IngestResult,
   ContributeOptions,
   ContributeResult,
+  RepoIngestOptions,
+  RepoIngestResult,
 } from "./engine.js";
 
 export type {
@@ -67,3 +69,5 @@ export type {
 export { OpenRouterExtractor } from "./ai/openrouter.js";
 export { OpenAIEmbedder } from "./ai/openai.js";
 export { LocalEmbedder, OllamaExtractor } from "./ai/local.js";
+export { OpenRouterSummarizer, OllamaSummarizer } from "./ai/summarize.js";
+export type { Summarizer } from "./ai/summarize.js";

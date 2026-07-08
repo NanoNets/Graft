@@ -160,6 +160,18 @@ export class SqliteStore implements GraphStore {
     return row ? this.rowToDocument(row) : undefined;
   }
 
+  async documentsBySource(source: string): Promise<GraphDocument[]> {
+    const rows = this.db
+      .prepare(`SELECT * FROM documents WHERE source = ? ORDER BY created_at DESC`)
+      .all(source) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.rowToDocument(r));
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    // Chunks cascade via the document_id foreign key.
+    this.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id);
+  }
+
   async insertDocument(doc: GraphDocument): Promise<void> {
     this.db
       .prepare(

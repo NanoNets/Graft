@@ -1,5 +1,6 @@
 import type { Extraction } from "../graph/types.js";
 import type { GraphStore } from "../graph/store.js";
+import type { Summarizer } from "./summarize.js";
 
 /** Turns text into embedding vectors for semantic search and dedup. */
 export interface Embedder {
@@ -67,6 +68,8 @@ export interface EngineConfig {
   embedder?: Embedder;
   /** Override the extractor (defaults to OpenRouter, or local Ollama with no key). */
   extractor?: Extractor;
+  /** Override the code summarizer used by repo ingestion (same fallbacks as extractor). */
+  summarizer?: Summarizer;
 }
 
 /** Fully-resolved configuration with all defaults applied. */
@@ -87,6 +90,7 @@ export interface ResolvedConfig {
   store?: GraphStore;
   embedder?: Embedder;
   extractor?: Extractor;
+  summarizer?: Summarizer;
 }
 
 export const DEFAULTS = {
@@ -136,5 +140,6 @@ export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
     store: config.store,
     embedder: config.embedder,
     extractor: config.extractor,
+    summarizer: config.summarizer,
   };
 }

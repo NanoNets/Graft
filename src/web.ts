@@ -287,7 +287,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/ingest-dir") {
       // Accepts a directory or a single file on the server's disk.
-      const { dir } = JSON.parse(await readBody(req)) as { dir?: string };
+      const { dir, extensions } = JSON.parse(await readBody(req)) as {
+        dir?: string;
+        extensions?: string[];
+      };
       if (!dir?.trim()) return json(res, 400, { error: "dir is required" });
       const abs = resolve(dir);
       if (!existsSync(abs)) {
@@ -301,6 +304,7 @@ const server = createServer(async (req, res) => {
       try {
         const results = isDir
           ? await engine.ingestDir(abs, {
+              extensions,
               onProgress: (info) => emit({ type: "progress", ...info }),
             })
           : [await engine.ingestFile(abs)];
