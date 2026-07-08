@@ -39,6 +39,8 @@ Open the page, point **“Ingest a folder of documents”** at any folder of `.p
 
 Everything runs on your machine (the server binds to localhost only). Set `OPENROUTER_API_KEY` to upgrade to LLM-written answers and cloud extraction; without it, retrieval and the graph stay fully local.
 
+Running it for your whole team? One `docker compose up` gives everyone the same graph at one URL — see [Team sharing](#team-sharing).
+
 ### Runs locally by default — keys are optional
 
 Out of the box the engine needs **no accounts and no cloud calls**:
@@ -115,6 +117,11 @@ context-graph stats
 
 # Point at a specific graph file
 context-graph --db ./team-graph.db query "auth"
+
+# Team sharing — git mode (see "Team sharing" below)
+context-graph sync            # pull teammates' graph.jsonl, re-merge, write it back
+context-graph push            # write the graph to a committable graph.jsonl
+context-graph pull            # import + re-merge a teammate's graph.jsonl
 ```
 
 ---
@@ -150,9 +157,68 @@ Tools exposed:
 | `context_ingest_file` | Ingest files from disk, including **PDFs** (parsed automatically) |
 | `context_ingest_dir` | Ingest a whole **directory** of docs (PDF/MD/TXT), recursively |
 | `context_export` | Write the graph to an interactive **HTML** visualization |
+| `context_sync` | Team sharing (git mode): import + re-merge the shared `graph.jsonl`, then write it back |
 | `context_stats` | Report how much the graph currently holds |
 
 A natural agent workflow: **read context → do the task → contribute what you learned.**
+
+---
+
+## Team sharing
+
+A solo graph is one SQLite file. To share one across a team, pick a mode. All three keep the local-first default intact (team sync is **opt-in**).
+
+### The easy mode — one shared server (recommended)
+
+This is how nearly every self-hosted team tool works (Vaultwarden, Outline, BookStack): one instance, one URL, everyone's browser. No sync to configure, contributions land in the same graph instantly, and there is exactly one copy of the truth.
+
+```bash
+docker compose up -d
+docker compose logs | grep token    # the share link, with access token
+```
+
+The graph persists to `./data/graph.db`; drop documents into `./docs` and ingest them from the UI as `/docs`. When exposed beyond localhost the API requires the access token from the logs (pin it with `CONTEXT_GRAPH_WEB_TOKEN`).
+
+No server to put it on? Run it on any machine and share it over [Tailscale](https://tailscale.com) without opening a port to the internet:
+
+```bash
+context-graph-web &
+tailscale serve localhost:4680      # private HTTPS URL, visible only to your tailnet
+```
+
+The two modes below sync **between separate graphs** instead — no shared server at all. Both rely on the graph's **conflict-free merge**: observations are a grow-only counter and free-text fields are last-writer-wins, so re-importing the same facts never double-counts and merge order never changes the result.
+
+### Mode A — Git-native (zero infra)
+
+Commit the graph to your repo as a human-diffable file and let git move it around.
+
+```bash
+# You: capture the merged graph and commit it
+context-graph sync
+git add .context-graph/graph.jsonl && git commit -m "sync context graph" && git push
+
+# A teammate: get the latest and converge their local graph
+git pull
+context-graph sync
+```
+
+`sync` imports the committed `.context-graph/graph.jsonl`, re-merges it into the local graph, and writes the merged result back. It's idempotent (safe to run repeatedly) and commutative (order-independent), so two teammates' additions always converge. The repo's `.gitignore` keeps the local SQLite replica private while tracking `graph.jsonl`. Best for teams already living in git who want no servers and offline-friendly sharing; the only friction is the occasional merge conflict on the file, resolved by re-running `sync`.
+
+### Mode B — Shared store (libSQL / Turso embedded replica)
+
+Point the engine at a shared libSQL primary. Each machine keeps a **local replica** (fast local reads); writes go to the primary, so everyone merges against authoritative shared state in near-real-time — no commit/pull step.
+
+```bash
+export CONTEXT_GRAPH_SYNC_URL="libsql://your-db.turso.io"   # or http://your-sqld:8080
+export CONTEXT_GRAPH_AUTH_TOKEN="…"                          # token for the primary
+export CONTEXT_GRAPH_DB="./.context-graph/graph.db"          # local replica file
+# optional: CONTEXT_GRAPH_SYNC_INTERVAL=30  (background pull, seconds)
+context-graph query "auth"        # reads local; writes sync to the primary
+```
+
+Works with **Turso Cloud** or a **self-hosted `sqld`**. Best for teams that want live shared memory and are OK running (or renting) one small database; the friction is provisioning that primary and a token once.
+
+> Both modes assume one embedding model per graph (see the note under *How it works*). Imports across mismatched embedding dimensions keep the facts but drop the incompatible vectors, and warn you to re-ingest sources to re-embed.
 
 ---
 
@@ -161,7 +227,7 @@ A natural agent workflow: **read context → do the task → contribute what you
 Every entity and relationship carries a `confidence` score and an `observations` count.
 
 - **Dedup on write.** When new knowledge comes in, each entity is matched against existing nodes by exact name/alias **and** embedding similarity (cosine ≥ `mergeThreshold`). A match is *merged*, not duplicated.
-- **Reinforcement.** Each re-observation increments `observations` and nudges `confidence` toward 1.0. Facts seen across many docs/agents rise to the top; one-off mentions stay low-confidence.
+- **Reinforcement.** Each observation is recorded under the id of the document/contribution that made it, so `observations` is a grow-only counter and `confidence` is *derived* from it (seen-often facts rise toward 1.0; one-offs stay low). Because the counter merges by taking the max per source, re-importing the same records is a no-op — reinforcement survives team sync without double-counting.
 - **Provenance.** Every node/edge tracks which documents and agents contributed to it.
 - **Grounding.** Source passages are kept as retrievable evidence and returned alongside the structured graph.
 
@@ -182,7 +248,7 @@ This is what makes contributions compound: the tenth agent to confirm a fact str
                                             └────────────────────────┘
 ```
 
-- **Storage** — SQLite (via `better-sqlite3`) by default; swap in your own `GraphStore`.
+- **Storage** — SQLite (via `better-sqlite3`) by default; a libSQL/Turso embedded replica for shared team graphs (set `CONTEXT_GRAPH_SYNC_URL`); or swap in your own `GraphStore`.
 - **Extraction** — local **Ollama** (`llama3.2` by default) using structured JSON output; automatically upgrades to **OpenRouter** (`openai/gpt-4o-mini` by default, any tool-calling model) if `OPENROUTER_API_KEY` is set.
 - **Embeddings** — local **in-process** model (`Xenova/all-MiniLM-L6-v2`, 384-dim) by default; automatically upgrades to **OpenAI** (`text-embedding-3-small`) if `OPENAI_API_KEY` is set.
 - **Retrieval** — semantic match over entities + one-hop graph expansion + supporting source passages.
@@ -198,6 +264,10 @@ Everything is configurable via constructor options, environment variables, or de
 ```ts
 new ContextGraphEngine({
   dbPath: "./.context-graph/graph.db",          // CONTEXT_GRAPH_DB
+  // Team sharing — Mode B (libSQL/Turso embedded replica; opt-in):
+  syncUrl: process.env.CONTEXT_GRAPH_SYNC_URL,   // libsql://… or http://your-sqld
+  authToken: process.env.CONTEXT_GRAPH_AUTH_TOKEN,
+  syncIntervalSeconds: undefined,                // CONTEXT_GRAPH_SYNC_INTERVAL (background pull)
   // Cloud (used automatically when set):
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   openrouterModel: "openai/gpt-4o-mini",         // CONTEXT_GRAPH_OPENROUTER_MODEL
