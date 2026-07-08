@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Context Graph Engine — your team's answers, with receipts</title>
+<meta name="description" content="Open-source, self-hosted team brain. Point it at a folder of docs and get cited answers backed by a knowledge graph with confidence that grows with use." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f0f0f0;
+    --ink: #131315;
+    --card: #ffffff;
+    --primary: #546FFF;
+    --primary-dark: #3A4DB2;
+    --muted: #555555;
+    --muted-light: #6b6b6b;
+    --border: #c9c6c2;
+    --surface: #f5f3f0;
+    --mark: #a8a5a0;
+    --sans: "DM Sans", system-ui, -apple-system, sans-serif;
+    --mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  ::selection { background: var(--primary); color: #fff; }
+  a { color: inherit; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  /* page rails, like the source site's GridLines */
+  .rails {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+  .rails > div {
+    max-width: 1280px;
+    margin: 0 auto;
+    height: 100%;
+    position: relative;
+  }
+  .rails > div::before, .rails > div::after {
+    content: "";
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: rgba(19,19,21,0.07);
+  }
+  .rails > div::before { left: 0; }
+  .rails > div::after { right: 0; }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+  @media (min-width: 1024px) { .wrap { padding: 0 56px; } }
+
+  /* ── nav ─────────────────────────────── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(240,240,240,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(19,19,21,0.08);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+  .wordmark {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: -0.2px;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+  }
+  .wordmark .dot-cluster { display: inline-flex; gap: 3px; }
+  .wordmark .dot-cluster i {
+    width: 6px; height: 6px;
+    background: var(--ink);
+  }
+  .wordmark .dot-cluster i:nth-child(2) { background: var(--primary); }
+  .nav-links { display: none; gap: 28px; }
+  @media (min-width: 768px) { .nav-links { display: flex; } }
+  .nav-links a {
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-cta { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  @media (max-width: 479px) { .nav-cta .nav-github { display: none; } }
+  .btn {
+    font-family: var(--sans);
+    font-size: 15px;
+    text-decoration: none;
+    padding: 8px 18px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+    transition: background 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn:hover { background: rgba(19,19,21,0.04); }
+  .btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-sm { font-size: 14px; padding: 6px 14px; }
+
+  /* ── hero ─────────────────────────────── */
+  .hero { padding: 56px 0 64px; }
+  @media (min-width: 1024px) { .hero { padding: 80px 0 88px; } }
+  .hero-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+  }
+  @media (min-width: 1024px) {
+    .hero-grid { flex-direction: row; align-items: center; gap: 72px; }
+  }
+  .hero-copy { max-width: 560px; flex-shrink: 0; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-light);
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: 34px;
+    font-weight: 400;
+    letter-spacing: -1.5px;
+    line-height: 1.12;
+  }
+  @media (min-width: 640px) { h1 { font-size: 46px; letter-spacing: -2px; } }
+  @media (min-width: 1024px) { h1 { font-size: 52px; } }
+  h1 em {
+    font-style: normal;
+    color: var(--primary);
+  }
+  .hero-sub {
+    font-size: 17px;
+    color: var(--muted);
+    margin-top: 18px;
+    max-width: 480px;
+  }
+  @media (min-width: 640px) { .hero-sub { font-size: 19px; } }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 32px;
+  }
+  .cmd {
+    font-family: var(--mono);
+    font-size: 14px;
+    background: var(--ink);
+    color: #e8e8e6;
+    border: 1px solid var(--ink);
+    padding: 9px 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .cmd .prompt { color: #7a7a78; user-select: none; }
+  .cmd .copy-hint {
+    font-size: 11px;
+    color: #7a7a78;
+    border-left: 1px solid #3a3a3c;
+    padding-left: 12px;
+    user-select: none;
+  }
+  .hero-note {
+    font-size: 13px;
+    color: var(--muted-light);
+    margin-top: 14px;
+  }
+  .hero-note a { color: var(--muted); }
+
+  /* ── the ledger (signature) ─────────────── */
+  .ledger-frame { flex: 1; min-width: 0; max-width: 100%; position: relative; }
+  .ledger-body, .panel { min-width: 0; }
+  .panel {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .corner { position: absolute; width: 8px; height: 8px; background: var(--mark); z-index: 10; }
+  .corner.tl { top: -4px; left: -4px; }
+  .corner.tr { top: -4px; right: -4px; }
+  .corner.bl { bottom: -4px; left: -4px; }
+  .corner.br { bottom: -4px; right: -4px; }
+
+  .ledger-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(19,19,21,0.08);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-light);
+  }
+  .ledger-head .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ledger-head .live i {
+    width: 6px; height: 6px;
+    background: var(--primary);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .ledger-body { padding: 20px; min-height: 320px; }
+  .lq {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--ink);
+    min-height: 22px;
+  }
+  .lq .prompt { color: var(--primary); margin-right: 8px; }
+  .lq .caret {
+    display: inline-block;
+    width: 7px; height: 15px;
+    background: var(--ink);
+    vertical-align: -2px;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .la {
+    margin-top: 18px;
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--ink);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22,1,0.36,1);
+  }
+  .la.show { opacity: 1; transform: none; }
+  .la .cite {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--primary);
+    vertical-align: super;
+    margin-left: 1px;
+  }
+  .receipts { margin-top: 20px; display: grid; gap: 8px; }
+  .receipt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid rgba(19,19,21,0.08);
+    padding: 8px 12px;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.35s ease, transform 0.35s ease;
+  }
+  .receipt.show { opacity: 1; transform: none; }
+  .receipt { min-width: 0; }
+  .receipt .src { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .receipt .conf {
+    flex-shrink: 0;
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .receipt .bar {
+    width: 56px; height: 4px;
+    background: rgba(19,19,21,0.1);
+    position: relative;
+  }
+  .receipt .bar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0%;
+    background: var(--primary);
+    transition: width 0.9s cubic-bezier(0.22,1,0.36,1);
+  }
+  .ledger-foot {
+    border-top: 1px solid rgba(19,19,21,0.08);
+    padding: 10px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted-light);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 4px 12px;
+  }
+  .ledger-foot .tick { color: var(--primary); opacity: 0; transition: opacity 0.4s; }
+  .ledger-foot .tick.show { opacity: 1; }
+
+  /* ── section scaffolding ─────────────── */
+  section { border-top: 1px solid rgba(19,19,21,0.08); }
+  .section-pad { padding: 72px 0; }
+  @media (min-width: 1024px) { .section-pad { padding: 96px 0; } }
+  .kicker {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-light);
+    margin-bottom: 16px;
+  }
+  h2 {
+    font-size: 28px;
+    font-weight: 400;
+    letter-spacing: -1px;
+    line-height: 1.15;
+    max-width: 640px;
+  }
+  @media (min-width: 640px) { h2 { font-size: 36px; letter-spacing: -1.5px; } }
+  .section-sub {
+    font-size: 16px;
+    color: var(--muted);
+    margin-top: 14px;
+    max-width: 560px;
+  }
+
+  /* how it works */
+  .steps {
+    margin-top: 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    background: rgba(19,19,21,0.08);
+    border: 1px solid rgba(19,19,21,0.08);
+  }
+  @media (min-width: 768px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .step {
+    background: var(--bg);
+    padding: 28px 24px 32px;
+  }
+  .step .n {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--primary);
+    margin-bottom: 18px;
+  }
+  .step h3 {
+    font-size: 19px;
+    font-weight: 500;
+    letter-spacing: -0.3px;
+    margin-bottom: 8px;
+  }
+  .step p { font-size: 14.5px; color: var(--muted); }
+  .step .art {
+    margin-top: 22px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted-light);
+    background: var(--card);
+    border: 1px solid rgba(19,19,21,0.1);
+    padding: 12px 14px;
+    line-height: 1.7;
+    overflow-x: auto;
+  }
+  .step .art b { color: var(--ink); font-weight: 500; }
+  .step .art .hl { color: var(--primary); }
+
+  /* differentiator */
+  .diff-grid {
+    margin-top: 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  @media (min-width: 900px) { .diff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .diff {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 26px 24px 30px;
+  }
+  .diff h3 {
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.3px;
+    margin-bottom: 10px;
+  }
+  .diff p { font-size: 14.5px; color: var(--muted); }
+  .diff .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted-light);
+    display: block;
+    margin-top: 18px;
+  }
+  .diff .tag b { color: var(--ink); font-weight: 500; }
+
+  /* team lanes */
+  .lanes { margin-top: 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  @media (min-width: 900px) { .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .lane {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 28px 26px 30px;
+  }
+  .lane .lane-k {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--primary);
+    margin-bottom: 14px;
+  }
+  .lane h3 { font-size: 20px; font-weight: 500; letter-spacing: -0.3px; margin-bottom: 10px; }
+  .lane p { font-size: 14.5px; color: var(--muted); }
+  .lane pre {
+    margin-top: 18px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.8;
+    background: var(--ink);
+    color: #e8e8e6;
+    padding: 14px 16px;
+    overflow-x: auto;
+  }
+  .lane pre .c { color: #7a7a78; }
+
+  /* quickstart */
+  .quick {
+    margin-top: 44px;
+    position: relative;
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    color: #e8e8e6;
+    padding: 28px;
+  }
+  .quick pre {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 2;
+    overflow-x: auto;
+  }
+  .quick .c { color: #7a7a78; }
+  .quick .hl { color: #9daeff; }
+  .quick-note { font-size: 13px; color: var(--muted-light); margin-top: 14px; }
+  .quick-note a { color: var(--muted); }
+
+  /* footer */
+  footer { border-top: 1px solid rgba(19,19,21,0.08); }
+  .foot-inner {
+    padding: 36px 0 44px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    font-size: 13.5px;
+    color: var(--muted-light);
+  }
+  .foot-inner a { color: var(--muted); text-decoration: none; }
+  .foot-inner a:hover { color: var(--ink); }
+  .foot-links { display: flex; gap: 22px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="rails" aria-hidden="true"><div></div></div>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="wordmark" href="#">
+      <span class="dot-cluster" aria-hidden="true"><i></i><i></i><i></i></span>
+      Context Graph Engine
+    </a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#receipts">Why receipts</a>
+      <a href="#team">Teams</a>
+      <a href="#quickstart">Quickstart</a>
+    </div>
+    <div class="nav-cta">
+      <a class="btn btn-sm nav-github" href="https://github.com/NanoNets/context-graph-engine">GitHub</a>
+      <a class="btn btn-sm btn-primary" href="#quickstart">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">Open source · Self-hosted · MIT</p>
+      <h1>Your team's answers, <em>with receipts.</em></h1>
+      <p class="hero-sub">
+        Point it at a folder of docs. It builds a knowledge graph and answers
+        questions with citations — and a confidence score that grows every time
+        a fact is seen again.
+      </p>
+      <div class="hero-actions">
+        <button class="cmd" id="copy-cmd" type="button" aria-label="Copy install command">
+          <span class="prompt">$</span>
+          <span id="cmd-text">docker compose up -d</span>
+          <span class="copy-hint" id="copy-hint">copy</span>
+        </button>
+        <a class="btn" href="https://github.com/NanoNets/context-graph-engine">View source</a>
+      </div>
+      <p class="hero-note">
+        One container, one SQLite file you own. No accounts, no cloud storage —
+        <a href="#quickstart">runs on your machine in about a minute</a>.
+      </p>
+    </div>
+
+    <!-- signature: the provenance ledger -->
+    <div class="ledger-frame">
+      <div class="panel">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <div class="ledger-head">
+          <span>graph.db — 3 docs · 47 nodes</span>
+          <span class="live"><i></i>ledger</span>
+        </div>
+        <div class="ledger-body">
+          <p class="lq"><span class="prompt">?</span><span id="lq-text"></span><span class="caret" id="lq-caret"></span></p>
+          <p class="la" id="la">
+            Deploys go out <strong>Tuesdays and Thursdays at 10:00</strong><span class="cite">[1]</span>,
+            gated by the release checklist<span class="cite">[2]</span>. Priya owns the
+            final sign-off<span class="cite">[1]</span>.
+          </p>
+          <div class="receipts">
+            <div class="receipt" id="r1">
+              <span class="src">[1] runbook/deploys.md · ops-notes.md</span>
+              <span class="conf"><span class="bar"><i data-w="74%"></i></span><span data-count>74% ×3</span></span>
+            </div>
+            <div class="receipt" id="r2">
+              <span class="src">[2] release-checklist.pdf</span>
+              <span class="conf"><span class="bar"><i data-w="62%"></i></span><span data-count>62% ×1</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="ledger-foot">
+          <span>every claim traces to a source</span>
+          <span class="tick" id="tick">observation added · 68% → 74%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="how" class="section-pad">
+  <div class="wrap">
+    <p class="kicker">How it works</p>
+    <h2>A folder in, a brain out.</h2>
+    <p class="section-sub">
+      No pipelines to configure and nothing to label. The graph builds itself
+      from whatever your team already writes.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <p class="n">01</p>
+        <h3>Drop your docs</h3>
+        <p>Markdown, PDFs, Notion or Drive exports — ingest a whole directory in one command.</p>
+        <div class="art">$ context-graph ingest ./docs<br /><b>12 files</b> → 214 chunks → <span class="hl">embedded</span></div>
+      </div>
+      <div class="step">
+        <p class="n">02</p>
+        <h3>The graph builds itself</h3>
+        <p>An LLM extracts entities and relationships. Duplicates merge; every fact keeps its provenance.</p>
+        <div class="art"><b>Priya</b> ──owns──▸ <b>release sign-off</b><br /><span class="hl">confidence 0.74</span> · seen in 3 places</div>
+      </div>
+      <div class="step">
+        <p class="n">03</p>
+        <h3>Ask, get cited answers</h3>
+        <p>Ask in the web UI, the CLI, or from any agent over MCP. Answers cite their sources, always.</p>
+        <div class="art">? who owns deploys<br /><b>Priya</b> <span class="hl">[runbook/deploys.md]</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="receipts" class="section-pad">
+  <div class="wrap">
+    <p class="kicker">Why receipts</p>
+    <h2>A chatbot sounds sure. A ledger shows its work.</h2>
+    <p class="section-sub">
+      Most RAG tools give you a fluent paragraph and a shrug. This one keeps
+      an auditable record of where every claim came from and how often it held up.
+    </p>
+    <div class="diff-grid">
+      <div class="diff">
+        <span class="corner tl"></span><span class="corner br"></span>
+        <h3>Provenance on every claim</h3>
+        <p>Each statement in an answer links back to the exact document and passage it came from. If it can't cite, it doesn't say it.</p>
+        <span class="tag">runbook/deploys.md <b>· chunk 14</b></span>
+      </div>
+      <div class="diff">
+        <span class="corner tl"></span><span class="corner br"></span>
+        <h3>Confidence that compounds</h3>
+        <p>A fact seen once is treated differently from a fact confirmed across three docs and a teammate's correction. The graph strengthens with use.</p>
+        <span class="tag">0.62 → 0.68 → <b>0.74</b> · 3 observations</span>
+      </div>
+      <div class="diff">
+        <span class="corner tl"></span><span class="corner br"></span>
+        <h3>A file you own</h3>
+        <p>The whole graph is one local SQLite file. Back it up, diff it, move it, delete it. No vendor database, nothing leaves your network.</p>
+        <span class="tag">.context-graph/<b>graph.db</b></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="team" class="section-pad">
+  <div class="wrap">
+    <p class="kicker">Teams</p>
+    <h2>One brain for the whole team, two ways to share it.</h2>
+    <p class="section-sub">
+      Pick the lane that matches how your team already works. Both keep the
+      data on infrastructure you control.
+    </p>
+    <div class="lanes">
+      <div class="lane">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <p class="lane-k">Recommended</p>
+        <h3>One shared server</h3>
+        <p>Run a single container; teammates open a link with an access token. Put it on your tailnet and it's reachable from anywhere, exposed to no one.</p>
+        <pre>$ docker compose up -d
+$ docker compose logs | grep token
+<span class="c"># optional: private access from anywhere</span>
+$ tailscale serve localhost:4680</pre>
+      </div>
+      <div class="lane">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <p class="lane-k">No server at all</p>
+        <h3>Git mode</h3>
+        <p>Each person keeps a local graph; a conflict-free merge syncs them through a plain file in your repo. Knowledge travels with your code.</p>
+        <pre>$ context-graph sync
+<span class="c"># writes .context-graph/graph.jsonl</span>
+$ git pull &amp;&amp; context-graph sync
+<span class="c"># merges everyone's observations</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart" class="section-pad">
+  <div class="wrap">
+    <p class="kicker">Quickstart</p>
+    <h2>Running in about a minute.</h2>
+    <div class="quick">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <pre><span class="c"># with Docker (recommended)</span>
+git clone https://github.com/NanoNets/context-graph-engine
+cd context-graph-engine
+<span class="hl">docker compose up -d</span>        <span class="c"># web UI on :4680</span>
+
+<span class="c"># or straight onto your machine</span>
+curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | bash
+<span class="hl">context-graph-web</span>           <span class="c"># then drop docs in the UI</span></pre>
+    </div>
+    <p class="quick-note">
+      Best extraction quality uses an <a href="https://openrouter.ai">OpenRouter</a> key
+      (set <code style="font-family:var(--mono)">OPENROUTER_API_KEY</code>). Fully-offline mode
+      works with <a href="https://ollama.com">Ollama</a> — no key, nothing leaves your machine.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>MIT licensed. Built in the open by <a href="https://nanonets.com">NanoNets</a>.</span>
+    <span class="foot-links">
+      <a href="https://github.com/NanoNets/context-graph-engine">GitHub</a>
+      <a href="https://github.com/NanoNets/context-graph-engine#readme">Docs</a>
+      <a href="https://github.com/NanoNets/context-graph-engine/issues">Issues</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+  // copy install command
+  const copyBtn = document.getElementById("copy-cmd");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById("cmd-text").textContent);
+      const hint = document.getElementById("copy-hint");
+      hint.textContent = "copied";
+      setTimeout(() => (hint.textContent = "copy"), 1600);
+    } catch {}
+  });
+
+  // hero ledger sequence
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const q = "when do we deploy, and who signs off?";
+  const lqText = document.getElementById("lq-text");
+  const caret = document.getElementById("lq-caret");
+  const la = document.getElementById("la");
+  const r1 = document.getElementById("r1");
+  const r2 = document.getElementById("r2");
+  const tick = document.getElementById("tick");
+
+  function fillBars() {
+    document.querySelectorAll(".receipt .bar i").forEach((b) => (b.style.width = b.dataset.w));
+  }
+
+  if (reduced) {
+    lqText.textContent = q;
+    caret.style.display = "none";
+    la.classList.add("show");
+    r1.classList.add("show");
+    r2.classList.add("show");
+    tick.classList.add("show");
+    fillBars();
+  } else {
+    let i = 0;
+    (function type() {
+      if (i <= q.length) {
+        lqText.textContent = q.slice(0, i++);
+        setTimeout(type, 34);
+      } else {
+        caret.style.display = "none";
+        setTimeout(() => la.classList.add("show"), 350);
+        setTimeout(() => { r1.classList.add("show"); }, 850);
+        setTimeout(() => { r2.classList.add("show"); fillBars(); }, 1100);
+        setTimeout(() => tick.classList.add("show"), 2100);
+      }
+    })();
+  }
+</script>
+
+</body>
+</html>
