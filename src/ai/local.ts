@@ -47,6 +47,10 @@ export class LocalEmbedder implements Embedder {
       this.pipe = import("@huggingface/transformers").then(({ pipeline, env }) => {
         // Keep console noise down; models still download+cache on first use.
         env.allowRemoteModels = true;
+        // Default cache lives inside node_modules, which is read-only in
+        // containers / global installs — allow relocating it.
+        const cacheDir = process.env.CONTEXT_GRAPH_MODEL_CACHE;
+        if (cacheDir) env.cacheDir = cacheDir;
         return pipeline("feature-extraction", this.model) as unknown as Promise<FeaturePipeline>;
       });
     }
