@@ -268,8 +268,10 @@ server.listen(PORT, HOST, () => {
   if (EXPOSED && WEB_TOKEN) {
     const lan = lanAddress();
     console.log(`  access token: ${WEB_TOKEN}`);
-    if (lan) console.log(`  share with your team:  http://${lan}:${PORT}/?token=${WEB_TOKEN}`);
-    else console.log(`  share:  http://<this-machine>:${PORT}/?token=${WEB_TOKEN}`);
+    // Token travels in the URL *fragment*: browsers never send fragments over
+    // the network, so it can't leak into proxy or access logs.
+    if (lan) console.log(`  share with your team:  http://${lan}:${PORT}/#token=${WEB_TOKEN}`);
+    else console.log(`  share:  http://<this-machine>:${PORT}/#token=${WEB_TOKEN}`);
   }
   console.log(`  graph db:    ${p.db}`);
   console.log(`  extraction:  ${p.extraction} (${p.model})`);

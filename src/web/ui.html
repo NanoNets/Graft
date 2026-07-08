@@ -345,15 +345,15 @@
 const $ = (id) => document.getElementById(id);
 
 /* ---------- access token (shared/team deployments) ---------- */
-// A share link carries ?token=…; stash it and strip it from the address bar.
+// A share link carries #token=… in the URL fragment — fragments are never
+// sent to the server, so the token stays out of proxy/access logs. Stash it
+// and strip it from the address bar.
 (function pickUpToken() {
-  const params = new URLSearchParams(location.search);
-  const t = params.get("token");
+  const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const t = frag.get("token");
   if (t) {
     localStorage.setItem("cg-token", t.trim());
-    params.delete("token");
-    const qs = params.toString();
-    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+    history.replaceState(null, "", location.pathname + location.search);
   }
 })();
 
