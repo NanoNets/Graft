@@ -23,6 +23,7 @@ import { resolve, dirname, join } from "node:path";
 import OpenAI from "openai";
 import { ContextGraphEngine } from "./engine.js";
 import { resolveConfig } from "./ai/providers.js";
+import { extractPdfTextFromData, isPdfPath } from "./ingest/pdf.js";
 
 const PORT = Number(process.env.PORT ?? 4680);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -76,12 +77,12 @@ async function synthesizeAnswer(
   return response.choices[0]?.message?.content ?? "";
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, maxBytes = 10_000_000): Promise<string> {
   return new Promise((res, rej) => {
     let data = "";
     req.on("data", (c) => {
       data += c;
-      if (data.length > 10_000_000) rej(new Error("body too large"));
+      if (data.length > maxBytes) rej(new Error("body too large"));
     });
     req.on("end", () => res(data));
     req.on("error", rej);
@@ -304,6 +305,32 @@ const server = createServer(async (req, res) => {
         emit({ type: "error", error: e instanceof Error ? e.message : String(e) });
       }
       res.end();
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/ingest-upload") {
+      // One uploaded file at a time (the browser folder picker can't hand us a
+      // server path, so it ships file contents instead). Text files arrive as
+      // `text`; PDFs and other binaries arrive base64-encoded in `dataBase64`.
+      // 60 MB cap leaves room for a large PDF plus base64's ~33% overhead.
+      const { name, text, dataBase64 } = JSON.parse(await readBody(req, 60_000_000)) as {
+        name?: string;
+        text?: string;
+        dataBase64?: string;
+      };
+      if (!name?.trim()) return json(res, 400, { error: "name is required" });
+
+      let content: string;
+      if (isPdfPath(name)) {
+        if (!dataBase64) return json(res, 400, { error: "PDF upload needs dataBase64" });
+        content = await extractPdfTextFromData(new Uint8Array(Buffer.from(dataBase64, "base64")));
+      } else {
+        content = text ?? "";
+      }
+      if (!content.trim()) return json(res, 200, { skipped: true, name, empty: true });
+
+      const result = await engine.ingest(content, { title: name, source: name });
+      json(res, 200, { result, stats: await engine.stats() });
       return;
     }
 

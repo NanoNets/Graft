@@ -6,6 +6,10 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+
+# Docker runtime volume — holds the graph db and the generated access token
+# (.web-token / share-link.txt). Never commit; the token would leak.
+data/
 # Ignore the local graph dir's contents (the SQLite replica) but keep the
 # committable, git-native team-sync file (Mode A).
 .context-graph/*

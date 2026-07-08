@@ -177,7 +177,7 @@ docker compose up -d
 cat ./data/share-link.txt           # the share link, with access token
 ```
 
-The graph persists to `./data/graph.db`; drop documents into `./docs` and ingest them from the UI as `/docs`. When exposed beyond localhost the API requires an access token. It's generated once, saved to `./data/share-link.txt` (and printed to `docker compose logs`), and **stays stable across restarts** so shared links keep working. Pin your own with `CONTEXT_GRAPH_WEB_TOKEN`.
+The graph persists to `./data/graph.db`. Ingest documents two ways: click **Choose folder…** in the UI to upload a folder straight from your computer (works for remote teammates), or drop files into `./docs` on the server and ingest the mounted `/docs` path. When exposed beyond localhost the API requires an access token. It's generated once, saved to `./data/share-link.txt` (and printed to `docker compose logs`), and **stays stable across restarts** so shared links keep working. Pin your own with `CONTEXT_GRAPH_WEB_TOKEN`.
 
 No server to put it on? Run it on any machine and share it over [Tailscale](https://tailscale.com) without opening a port to the internet:
 
