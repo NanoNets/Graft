@@ -21,6 +21,24 @@
     --serif: "Charter", "Iowan Old Style", "Palatino", Georgia, serif;
     --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    /* spacing — 4px base */
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+    --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+    /* type roles */
+    --fs-label: 11px;
+    --fs-meta: 12px;
+    --fs-ui: 13.5px;
+    --fs-body: 15px;
+    --fs-read: 17px;
+    --fs-title: 20px;
+    --fs-display: 26px;
+    /* shape & elevation */
+    --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+    --shadow-1: 0 1px 3px rgba(28,36,34,.06);
+    --shadow-2: 0 6px 24px rgba(28,36,34,.10);
+    /* motion */
+    --dur-fast: 160ms; --dur-med: 320ms; --dur-slow: 600ms;
+    --ease-out: cubic-bezier(.22,.7,.3,1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -28,11 +46,25 @@
     font-family: var(--sans);
     background: var(--paper);
     color: var(--ink);
-    font-size: 15px;
+    font-size: var(--fs-body);
     line-height: 1.5;
   }
   button, input, textarea { font: inherit; color: inherit; }
   :focus-visible { outline: 2px solid var(--verdant); outline-offset: 2px; }
+
+  /* ---------- motion primitives ---------- */
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .rise { animation: rise var(--dur-med) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 45ms); }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- app state ---------- */
+  /* Until boot resolves the state, both halves stay unmounted — no flash. */
+  #onboarding { display: none; }
+  body.is-empty #onboarding { display: block; }
+  #ask-section, #library { display: none; }
+  body.is-ready #ask-section { display: block; }
+  body.is-ready #library { display: block; }
 
   /* ---------- header ---------- */
   .masthead {
@@ -44,15 +76,17 @@
   .wordmark { font-family: var(--sans); font-weight: 700; font-size: 15px; letter-spacing: .14em; text-transform: uppercase; }
   .wordmark .dot { color: var(--verdant); }
   .tagline { font-family: var(--serif); font-style: italic; color: var(--ink-soft); font-size: 14.5px; }
-  .masthead-right { margin-left: auto; display: flex; align-items: baseline; gap: 18px; }
-  .stat { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .masthead-right { margin-left: auto; display: flex; align-items: baseline; gap: var(--s2); }
+  .stat { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-soft); }
   .stat b { color: var(--ink); font-size: 14px; font-weight: 600; }
+  .stat-sep { color: var(--ink-faint); font-family: var(--mono); font-size: var(--fs-meta); }
   .provider-badge {
-    font-family: var(--mono); font-size: 11px; padding: 3px 9px;
+    font-family: var(--mono); font-size: var(--fs-label); padding: 3px 9px;
     border: 1px solid var(--line); border-radius: 999px; color: var(--ink-soft);
-    background: var(--paper);
+    background: var(--paper); margin-left: var(--s3);
   }
   .provider-badge.cloud { border-color: var(--verdant); color: var(--verdant-deep); background: var(--verdant-soft); }
+  .provider-badge:not(.cloud) { cursor: pointer; }
 
   /* ---------- layout ---------- */
   .frame {
@@ -62,71 +96,135 @@
   }
   .desk {
     overflow-y: auto;
-    padding: 22px 22px 60px;
+    padding: var(--s5) var(--s5) var(--s8);
     border-right: 1px solid var(--line);
   }
+  .desk > section { margin-bottom: var(--s6); }
   .atlas { position: relative; background: var(--panel); }
   #graph { position: absolute; inset: 0; }
 
+  /* ---------- onboarding hero ---------- */
+  .hero h1 { font-family: var(--serif); font-size: var(--fs-display); font-weight: 600; margin: var(--s4) 0 var(--s3); }
+  .hero-sub { color: var(--ink-soft); font-size: var(--fs-body); line-height: 1.55; margin-bottom: var(--s5); max-width: 46ch; }
+  .steps { list-style: none; margin-bottom: var(--s5); display: flex; flex-direction: column; gap: var(--s2); }
+  .steps li { display: flex; gap: var(--s3); align-items: center; font-size: var(--fs-ui); color: var(--ink-soft); }
+  .steps li b { color: var(--ink); }
+  .steps .num {
+    font-family: var(--mono); font-size: var(--fs-label); font-weight: 700;
+    color: var(--verdant-deep); background: var(--verdant-soft); border-radius: 50%;
+    width: 20px; height: 20px; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  .dropzone {
+    display: flex; flex-direction: column; gap: var(--s1); align-items: center; justify-content: center;
+    width: 100%; padding: var(--s6) var(--s4);
+    border: 1.5px dashed var(--ink-faint); border-radius: var(--r-lg);
+    background: var(--panel); cursor: pointer; text-align: center;
+    transition: border-color var(--dur-fast), background var(--dur-fast), transform var(--dur-fast);
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--verdant); background: var(--verdant-soft); }
+  .dropzone.drag { transform: scale(1.01); }
+  .dropzone:disabled { opacity: .55; cursor: default; }
+  .dz-main { font-family: var(--serif); font-size: var(--fs-title); color: var(--ink); }
+  .dz-sub { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-soft); }
+  /* compact variant inside the library drawer */
+  #ingest-panel .dropzone { padding: var(--s4); }
+  #ingest-panel .dz-main { font-size: var(--fs-body); }
+
+  #ingest-controls .picker-row { margin-top: var(--s3); }
+
+  /* ---------- ingest progress ---------- */
+  #ingest-progress { margin-top: var(--s3); }
+  .progress-track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .progress-track i { display: block; height: 100%; width: 0; background: var(--verdant); transition: width var(--dur-med) var(--ease-out); }
+  #progress-rows { margin-top: var(--s2); font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-soft); }
+  .progress-row { display: flex; gap: var(--s2); align-items: center; padding: 2px 0; min-width: 0; }
+  .progress-row > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-row .icon { width: 12px; flex: none; text-align: center; }
+  .progress-row.ok .icon { color: var(--verdant); }
+  .progress-row.err { color: #a03b2e; }
+  .spinner {
+    display: inline-block; width: 10px; height: 10px;
+    border: 1.5px solid var(--line); border-top-color: var(--verdant);
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+
   /* ---------- ask ---------- */
   .ask-label {
-    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
-    color: var(--ink-faint); font-weight: 600; margin-bottom: 8px;
+    font-size: var(--fs-label); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; margin-bottom: var(--s2);
   }
-  .ask-row { display: flex; gap: 8px; }
+  .ask-row { display: flex; gap: var(--s2); }
   .ask-input {
     flex: 1;
-    font-family: var(--serif); font-size: 17px;
+    font-family: var(--serif); font-size: var(--fs-read);
     padding: 11px 14px;
-    border: 1px solid var(--line); border-radius: 6px;
+    border: 1px solid var(--line); border-radius: var(--r-md);
     background: var(--panel);
+    min-width: 0;
   }
   .ask-input::placeholder { color: var(--ink-faint); font-style: italic; }
   .btn {
-    padding: 10px 18px; border-radius: 6px; border: 1px solid var(--verdant-deep);
+    padding: 10px 18px; border-radius: var(--r-md); border: 1px solid var(--verdant-deep);
     background: var(--verdant); color: #fff; font-weight: 600; font-size: 14px;
     cursor: pointer;
+    transition: background var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast), border-color var(--dur-fast);
   }
-  .btn:hover { background: var(--verdant-deep); }
-  .btn:disabled { opacity: .55; cursor: default; }
+  .btn:hover { background: var(--verdant-deep); transform: translateY(-1px); box-shadow: var(--shadow-1); }
+  .btn:active { transform: none; box-shadow: none; }
+  .btn:disabled { opacity: .55; cursor: default; transform: none; box-shadow: none; }
   .btn.quiet { background: var(--panel); color: var(--ink); border-color: var(--line); font-weight: 500; }
-  .btn.quiet:hover { border-color: var(--ink-faint); }
+  .btn.quiet:hover { background: var(--panel); border-color: var(--ink-faint); }
+  .linklike { background: none; border: none; color: var(--verdant-deep); cursor: pointer; font-size: var(--fs-ui); padding: var(--s1) 0; }
+  .linklike:hover { text-decoration: underline; }
 
   .local-note {
-    margin-top: 10px; padding: 9px 12px; border-radius: 6px;
+    display: flex; gap: var(--s3); align-items: flex-start;
+    margin-top: var(--s3); padding: 9px 12px; border-radius: var(--r-md);
     background: var(--amber-soft); border: 1px solid #e5d7ba;
     font-size: 13px; color: #6d5426;
   }
   .local-note code { font-family: var(--mono); font-size: 12px; }
+  .note-close { background: none; border: none; cursor: pointer; color: #6d5426; font-size: 15px; line-height: 1.3; padding: 0; flex: none; }
 
   /* ---------- answer ---------- */
   .answer-card {
-    margin-top: 18px; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 8px;
-    padding: 18px 20px;
+    margin-top: var(--s4); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: var(--s4) var(--s5);
+    box-shadow: var(--shadow-1);
   }
   .answer-q {
-    font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
-    margin-bottom: 10px; word-break: break-word;
+    font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-faint);
+    margin-bottom: var(--s3); word-break: break-word;
   }
-  .answer-body { font-family: var(--serif); font-size: 16.5px; line-height: 1.62; }
-  .answer-body p + p { margin-top: 10px; }
-  .answer-body ul { margin: 8px 0 8px 22px; }
+  .answer-body { font-family: var(--serif); font-size: var(--fs-read); line-height: 1.65; }
+  .answer-body p + p { margin-top: var(--s3); }
+  .answer-body ul { margin: var(--s2) 0 var(--s2) 22px; }
   .answer-body .cite {
     font-family: var(--mono); font-size: 10.5px; font-style: normal;
     background: var(--verdant-soft); color: var(--verdant-deep);
-    border-radius: 4px; padding: 1px 5px; margin: 0 1px;
+    border-radius: var(--r-sm); padding: 1px 5px; margin: 0 1px;
     cursor: pointer; vertical-align: super; line-height: 1;
     border: none;
+    transition: background var(--dur-fast), color var(--dur-fast);
   }
   .answer-body .cite:hover { background: var(--verdant); color: #fff; }
   .thinking { font-family: var(--serif); font-style: italic; color: var(--ink-soft); }
 
+  #answer-skeleton .skel-bar {
+    height: 13px; border-radius: var(--r-sm); margin: var(--s3) 0;
+    background: linear-gradient(90deg, #e8ede7 25%, #f4f7f3 45%, #e8ede7 65%);
+    background-size: 200% 100%;
+    animation: shimmer 1.1s linear infinite;
+  }
+
   /* ---------- the receipt (signature element) ---------- */
   .receipt {
     display: inline-flex; align-items: center; gap: 7px;
-    font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
-    border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-soft);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
     padding: 2px 8px 2px 6px; background: var(--panel);
     white-space: nowrap;
   }
@@ -138,23 +236,55 @@
   .receipt.low .meter i { background: var(--amber); }
   .receipt .pct { color: var(--ink); font-weight: 600; }
 
+  #receipt-legend {
+    display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap;
+    margin-top: var(--s3); padding: var(--s3) var(--s4);
+    background: var(--verdant-soft); border: 1px solid #cfe0d2; border-radius: var(--r-md);
+    font-size: var(--fs-ui); color: var(--ink-soft);
+  }
+  #receipt-legend .legend-text { flex: 1; min-width: 200px; }
+  #receipt-legend .linklike { font-family: var(--mono); font-size: var(--fs-meta); flex: none; }
+
+  /* ---------- evidence tabs ---------- */
+  #evidence-tabs {
+    display: flex; gap: var(--s4);
+    border-bottom: 1px solid var(--line);
+    margin: var(--s5) 0 var(--s3);
+  }
+  .tab {
+    background: none; border: none; cursor: pointer;
+    font-size: var(--fs-label); letter-spacing: .12em; text-transform: uppercase; font-weight: 600;
+    color: var(--ink-faint);
+    padding: var(--s2) 2px; position: relative;
+    transition: color var(--dur-fast);
+  }
+  .tab .count { font-family: var(--mono); letter-spacing: 0; margin-left: 4px; color: inherit; font-weight: 500; }
+  .tab::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    background: var(--verdant); transform: scaleX(0);
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .tab:hover { color: var(--ink); }
+  .tab.active { color: var(--ink); }
+  .tab.active::after { transform: scaleX(1); }
+
   /* ---------- ledger sections ---------- */
   .ledger-head {
     display: flex; align-items: baseline; justify-content: space-between;
-    margin: 26px 0 10px;
-    border-bottom: 1px solid var(--line); padding-bottom: 6px;
+    margin: 0 0 var(--s3);
+    border-bottom: 1px solid var(--line); padding-bottom: var(--s2);
   }
   .ledger-head h2 {
-    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    font-size: var(--fs-label); letter-spacing: .12em; text-transform: uppercase;
     color: var(--ink-faint); font-weight: 600;
   }
-  .ledger-head .count { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .ledger-head .count { font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-faint); }
 
   .fact {
     display: flex; flex-direction: column; gap: 5px;
     padding: 11px 2px; border-bottom: 1px solid var(--line);
   }
-  .fact-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .fact-top { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
   .fact-name { font-family: var(--serif); font-size: 15.5px; font-weight: 700; cursor: pointer; }
   .fact-name:hover { color: var(--verdant-deep); text-decoration: underline; }
   .fact-type { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); text-transform: lowercase; }
@@ -162,90 +292,98 @@
   .fact-via.expanded { color: var(--ink-soft); background: var(--paper); }
   .fact-summary { font-family: var(--serif); font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
 
-  .edge-line { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); padding: 6px 2px; border-bottom: 1px solid var(--line); }
+  .edge-line { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-soft); padding: 6px 2px; border-bottom: 1px solid var(--line); }
   .edge-line b { color: var(--ink); font-weight: 600; }
   .edge-line .rel { color: var(--verdant-deep); }
 
   .source {
-    padding: 12px 2px; border-bottom: 1px solid var(--line);
+    padding: var(--s3) 2px; border-bottom: 1px solid var(--line);
   }
   .source.flash { background: var(--verdant-soft); transition: background 1.2s; }
-  .source-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
-  .source-num { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--verdant-deep); }
+  .source-top { display: flex; align-items: baseline; gap: var(--s2); margin-bottom: 5px; }
+  .source-num { font-family: var(--mono); font-size: var(--fs-label); font-weight: 700; color: var(--verdant-deep); }
   .source-title { font-size: 13px; font-weight: 600; }
   .source-text {
     font-family: var(--serif); font-size: 13.5px; color: var(--ink-soft); line-height: 1.55;
     max-height: 88px; overflow: hidden; position: relative;
   }
   .source.open .source-text { max-height: none; }
-  .source-more { font-size: 12px; color: var(--verdant-deep); background: none; border: none; cursor: pointer; padding: 2px 0; }
+  .source-more { font-size: var(--fs-meta); color: var(--verdant-deep); background: none; border: none; cursor: pointer; padding: 2px 0; }
 
-  /* ---------- grow the graph ---------- */
-  details.grow { margin-top: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  /* ---------- library drawers ---------- */
+  details.grow { margin-bottom: var(--s3); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
   details.grow summary {
-    cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 13.5px;
-    list-style: none; display: flex; align-items: center; gap: 8px;
+    cursor: pointer; padding: var(--s3) var(--s4); font-weight: 600; font-size: var(--fs-ui);
+    list-style: none; display: flex; align-items: center; gap: var(--s2);
   }
+  details.grow summary::-webkit-details-marker { display: none; }
   details.grow summary::before { content: "+"; font-family: var(--mono); color: var(--verdant); font-weight: 700; }
   details.grow[open] summary::before { content: "–"; }
-  details.grow .grow-body { padding: 2px 16px 16px; }
-  .grow-hint { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 10px; }
+  details.grow .grow-body { padding: 2px var(--s4) var(--s4); }
+  .grow-hint { font-size: 12.5px; color: var(--ink-soft); margin-bottom: var(--s3); }
   textarea.teach {
     width: 100%; min-height: 74px; resize: vertical;
     font-family: var(--serif); font-size: 15px; padding: 10px 12px;
-    border: 1px solid var(--line); border-radius: 6px; background: var(--paper);
-    margin-bottom: 8px;
+    border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper);
+    margin-bottom: var(--s2);
   }
   input.dir {
     width: 100%; font-family: var(--mono); font-size: 13px; padding: 9px 12px;
-    border: 1px solid var(--line); border-radius: 6px; background: var(--paper);
-    margin-bottom: 8px;
+    border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper);
+    margin-bottom: var(--s2);
   }
-  .grow-status { font-family: var(--mono); font-size: 12px; margin-top: 10px; color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; }
+  .grow-status { font-family: var(--mono); font-size: var(--fs-meta); margin-top: var(--s3); color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; }
+  .grow-status:empty { margin-top: 0; }
   .grow-status.ok { color: var(--verdant-deep); }
   .grow-status.err { color: #a03b2e; }
-  .picker-row { display: flex; flex-wrap: wrap; gap: 8px; }
-  details.server-path { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .picker-row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+  details.server-path { margin-top: var(--s3); border-top: 1px solid var(--line); padding-top: 10px; }
   details.server-path summary { cursor: pointer; font-size: 12.5px; color: var(--ink-faint); list-style: none; }
   details.server-path summary::-webkit-details-marker { display: none; }
   details.server-path summary::before { content: "›"; margin-right: 6px; color: var(--verdant); }
   details.server-path[open] summary::before { content: "⌄"; }
   details.server-path .grow-hint code { font-family: var(--mono); font-size: 11.5px; }
-  details.server-path[open] { padding-bottom: 4px; }
-  details.server-path > *:not(summary) { margin-top: 8px; }
+  details.server-path[open] { padding-bottom: var(--s1); }
+  details.server-path > *:not(summary) { margin-top: var(--s2); }
 
-  .doc-row { display: flex; gap: 8px; align-items: baseline; padding: 7px 2px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .doc-row {
+    display: flex; gap: var(--s2); align-items: baseline; padding: 7px 4px;
+    border-bottom: 1px solid var(--line); font-size: 13px; border-radius: var(--r-sm);
+    transition: background var(--dur-fast);
+  }
+  .doc-row:hover { background: var(--verdant-soft); }
   .doc-row .t { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .doc-row .d { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex: none; }
+  .doc-row .d { font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-faint); flex: none; }
 
   /* ---------- graph panel chrome ---------- */
   .atlas-legend {
     position: absolute; top: 14px; left: 16px; z-index: 5;
-    font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+    font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-soft);
     background: color-mix(in srgb, var(--panel) 88%, transparent);
-    border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s2) var(--s3);
     display: flex; gap: 14px; align-items: center;
   }
   .atlas-legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
   #node-card {
     position: absolute; bottom: 16px; left: 16px; right: 16px; z-index: 5;
     max-width: 440px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-    padding: 14px 16px; box-shadow: 0 4px 18px rgba(28,36,34,.08);
-    display: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 14px 16px; box-shadow: var(--shadow-2);
+    visibility: hidden; opacity: 0; transform: translateY(6px) scale(.98);
+    transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), visibility var(--dur-fast);
   }
-  #node-card.show { display: block; }
+  #node-card.show { visibility: visible; opacity: 1; transform: none; }
   #node-card .close { position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: var(--ink-faint); font-size: 15px; }
   #node-card h3 { font-family: var(--serif); font-size: 17px; margin-bottom: 2px; }
-  #node-card .nc-type { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-bottom: 7px; }
+  #node-card .nc-type { font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-faint); margin-bottom: 7px; }
   #node-card .nc-summary { font-family: var(--serif); font-size: 14px; color: var(--ink-soft); line-height: 1.5; margin-bottom: 9px; }
-  #node-card .nc-prov { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 8px; }
+  #node-card .nc-prov { font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-faint); margin-top: var(--s2); }
   .atlas-empty {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     z-index: 4; text-align: center; padding: 40px;
   }
   .atlas-empty .inner { max-width: 360px; }
-  .atlas-empty h3 { font-family: var(--serif); font-size: 20px; margin-bottom: 8px; }
+  .atlas-empty h3 { font-family: var(--serif); font-size: var(--fs-title); margin-bottom: var(--s2); }
   .atlas-empty p { color: var(--ink-soft); font-size: 14px; }
 
   .hidden { display: none !important; }
@@ -257,6 +395,10 @@
   }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
+    .rise { opacity: 1 !important; transform: none !important; }
+    #answer-skeleton .skel-bar { background: #e8ede7; }
+    #node-card { visibility: hidden; opacity: 1; transform: none; }
+    #node-card.show { visibility: visible; }
   }
 
   /* ---------- access-token gate ---------- */
@@ -268,21 +410,21 @@
   .token-overlay.open { display: flex; }
   .token-card {
     width: 100%; max-width: 440px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
     padding: 24px 24px 20px; box-shadow: 0 12px 40px rgba(28, 36, 34, .25);
   }
   .token-card h2 {
-    font-family: var(--serif); font-size: 20px; font-weight: 600; margin-bottom: 8px;
+    font-family: var(--serif); font-size: var(--fs-title); font-weight: 600; margin-bottom: var(--s2);
   }
   .token-card p { font-size: 14px; color: var(--ink-soft); margin-bottom: 14px; }
   .token-card p code {
-    font-family: var(--mono); font-size: 12px;
+    font-family: var(--mono); font-size: var(--fs-meta);
     background: var(--paper); border: 1px solid var(--line);
-    border-radius: 4px; padding: 1px 5px; color: var(--ink);
+    border-radius: var(--r-sm); padding: 1px 5px; color: var(--ink);
   }
   .token-input {
     width: 100%; padding: 11px 13px; font-family: var(--mono); font-size: 13px;
-    border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel);
   }
   .token-input:focus { border-color: var(--verdant); }
   .token-hint { font-size: 12.5px; color: var(--ink-faint); margin: 10px 0 0; }
@@ -296,7 +438,7 @@
 <div class="token-overlay" id="token-overlay" role="dialog" aria-modal="true" aria-labelledby="token-title">
   <div class="token-card">
     <h2 id="token-title">This graph is protected</h2>
-    <p>Paste the <b>access token</b> or the full <b>share link</b> your team was given.</p>
+    <p>Paste the <b>access token</b> or the <b>share link</b> you were given.</p>
     <input class="token-input" id="token-input" type="text"
            placeholder="token, or http://…/#token=…" autocomplete="off" spellcheck="false" />
     <div class="token-err" id="token-err"></div>
@@ -316,84 +458,137 @@
   <span class="tagline">a living ledger of what your team knows</span>
   <div class="masthead-right">
     <span class="stat"><b id="stat-nodes">–</b> facts</span>
+    <span class="stat-sep">·</span>
     <span class="stat"><b id="stat-edges">–</b> connections</span>
-    <span class="stat"><b id="stat-docs">–</b> sources</span>
+    <span class="stat-sep">·</span>
+    <span class="stat"><b id="stat-docs">–</b> documents</span>
     <span class="provider-badge" id="provider-badge">…</span>
   </div>
 </header>
 
 <div class="frame">
   <main class="desk">
-    <div class="ask-label">Ask the graph</div>
-    <form class="ask-row" id="ask-form">
-      <input class="ask-input" id="ask-input" placeholder="How do we deploy to staging?" autocomplete="off" />
-      <button class="btn" id="ask-btn" type="submit">Ask</button>
-    </form>
-    <div class="local-note hidden" id="local-note">
-      Running fully local — retrieval and the graph work offline. Set
-      <code>OPENROUTER_API_KEY</code> to get written answers and ingest new documents with a cloud model.
-    </div>
 
-    <div id="answer-wrap" class="hidden">
+    <!-- Onboarding hero — shown while the graph is empty -->
+    <section id="onboarding" class="hero rise" style="--i:1">
+      <h1>Start your ledger</h1>
+      <p class="hero-sub">Add documents and Context Graph turns them into a map of facts —
+        every answer cited, every fact carrying a receipt that shows how well-attested it is.</p>
+      <ol class="steps">
+        <li><span class="num">1</span><span><b>Add documents</b> — PDFs, markdown, or plain text.</span></li>
+        <li><span class="num">2</span><span><b>Ask a question</b> — get a written answer with numbered citations.</span></li>
+        <li><span class="num">3</span><span><b>Check the receipts</b> — every fact shows its confidence and sources.</span></li>
+      </ol>
+      <div id="onboarding-controls-slot">
+        <div id="ingest-controls">
+          <button class="dropzone" id="dropzone" type="button">
+            <span class="dz-main">Drop files here, or click to choose</span>
+            <span class="dz-sub">.pdf · .md · .txt — files stay on your machine</span>
+          </button>
+          <input type="file" id="files-input" multiple accept=".pdf,.md,.markdown,.txt" hidden />
+          <input type="file" id="folder-input" webkitdirectory multiple hidden />
+          <div class="picker-row">
+            <button class="btn quiet" id="choose-folder-btn" type="button">Choose a folder…</button>
+          </div>
+          <details class="server-path">
+            <summary>Ingest a path on the server</summary>
+            <p class="grow-hint">Reads a file or folder from the server's own disk — in Docker, that's the mounted <code>/docs</code>.</p>
+            <input class="dir" id="ingest-input" placeholder="/path/to/docs or /path/to/file.md" />
+            <button class="btn quiet" id="ingest-btn" type="button">Ingest server path</button>
+          </details>
+          <div id="ingest-progress" class="hidden">
+            <div class="progress-track"><i id="progress-fill"></i></div>
+            <div id="progress-rows"></div>
+          </div>
+          <div class="grow-status" id="ingest-status"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ask — the hero once documents exist -->
+    <section id="ask-section" class="rise" style="--i:1">
+      <div class="ask-label">Ask your documents</div>
+      <form class="ask-row" id="ask-form">
+        <input class="ask-input" id="ask-input" placeholder="How do we deploy to staging?" autocomplete="off" />
+        <button class="btn" id="ask-btn" type="submit">Ask</button>
+      </form>
+      <div class="local-note hidden" id="local-note">
+        <span>Local mode — search and the map work now. For written answers and adding new
+          documents, run a free local model (<code>ollama pull llama3.2</code>) or set
+          <code>OPENROUTER_API_KEY</code>.</span>
+        <button class="note-close" id="local-note-close" type="button" aria-label="Dismiss">×</button>
+      </div>
+    </section>
+
+    <section id="answer-wrap" class="hidden">
       <div class="answer-card">
         <div class="answer-q" id="answer-q"></div>
+        <div id="answer-skeleton" class="hidden">
+          <span class="thinking">Consulting the graph…</span>
+          <div class="skel-bar" style="width:92%"></div>
+          <div class="skel-bar" style="width:78%"></div>
+          <div class="skel-bar" style="width:60%"></div>
+        </div>
         <div class="answer-body" id="answer-body"></div>
       </div>
 
-      <div class="ledger-head"><h2>Facts consulted</h2><span class="count" id="facts-count"></span></div>
-      <div id="facts"></div>
-
-      <div class="ledger-head" id="edges-head"><h2>How they connect</h2><span class="count" id="edges-count"></span></div>
-      <div id="edges"></div>
-
-      <div class="ledger-head"><h2>Sources</h2><span class="count" id="sources-count"></span></div>
-      <div id="sources"></div>
-    </div>
-
-    <details class="grow" id="teach-panel">
-      <summary>Teach it something</summary>
-      <div class="grow-body">
-        <p class="grow-hint">Write a fact the docs don't capture — “Postgres failovers page the on-call via #incidents, not email.” The graph extracts it, reinforces what it already knows, and remembers who said so.</p>
-        <textarea class="teach" id="teach-input" placeholder="What did you learn?"></textarea>
-        <button class="btn quiet" id="teach-btn" type="button">Add to the ledger</button>
-        <div class="grow-status" id="teach-status"></div>
+      <div id="receipt-legend" class="hidden">
+        <span id="legend-sample"></span>
+        <span class="legend-text">The receipt: how confident the graph is (87%), how many
+          times the fact was observed (×4), and in how many sources (2). Seen often = trusted more.</span>
+        <button class="linklike" id="legend-dismiss" type="button">got it ×</button>
       </div>
-    </details>
 
-    <details class="grow" id="ingest-panel">
-      <summary>Ingest documents</summary>
-      <div class="grow-body">
-        <p class="grow-hint">Pick files or a whole folder from your computer (.pdf, .md, .txt) — every file becomes chunks, entities, and relationships, watch the graph grow on the right.</p>
-        <input type="file" id="files-input" multiple accept=".pdf,.md,.markdown,.txt" hidden />
-        <input type="file" id="folder-input" webkitdirectory multiple hidden />
-        <div class="picker-row">
-          <button class="btn" id="choose-files-btn" type="button">Choose files…</button>
-          <button class="btn" id="choose-folder-btn" type="button">Choose folder…</button>
+      <div id="evidence" class="hidden">
+        <nav id="evidence-tabs">
+          <button type="button" class="tab active" data-tab="sources">Sources <span class="count" id="sources-count"></span></button>
+          <button type="button" class="tab" data-tab="facts">Facts <span class="count" id="facts-count"></span></button>
+          <button type="button" class="tab" data-tab="edges" id="tab-btn-edges">Connections <span class="count" id="edges-count"></span></button>
+        </nav>
+        <div class="tab-panel" id="tab-sources"><div id="sources"></div></div>
+        <div class="tab-panel hidden" id="tab-facts"><div id="facts"></div></div>
+        <div class="tab-panel hidden" id="tab-edges"><div id="edges"></div></div>
+      </div>
+    </section>
+
+    <!-- Library — documents + ways to add knowledge -->
+    <section id="library" class="rise" style="--i:2">
+      <div class="ledger-head"><h2>Library</h2><span class="count" id="docs-count"></span></div>
+
+      <details class="grow" id="ingest-panel">
+        <summary>Add documents</summary>
+        <div class="grow-body" id="ingest-panel-body">
+          <p class="grow-hint">Every file becomes facts and connections — watch the map grow on the right.</p>
         </div>
-        <details class="server-path">
-          <summary>or ingest a path on the server</summary>
-          <p class="grow-hint">Reads a file or folder from the server's own disk — in Docker, that's the mounted <code>/docs</code>.</p>
-          <input class="dir" id="ingest-input" placeholder="/path/to/docs or /path/to/file.md" />
-          <button class="btn quiet" id="ingest-btn" type="button">Ingest server path</button>
-        </details>
-        <div class="grow-status" id="ingest-status"></div>
-      </div>
-    </details>
+      </details>
 
-    <div class="ledger-head"><h2>In the ledger</h2><span class="count" id="docs-count"></span></div>
-    <div id="docs"></div>
+      <details class="grow" id="teach-panel">
+        <summary>Add a fact</summary>
+        <div class="grow-body">
+          <p class="grow-hint">Know something the documents don't say? Write it in one sentence —
+            “Postgres failovers page the on-call via #incidents, not email.” The graph will
+            remember it, and who said so.</p>
+          <textarea class="teach" id="teach-input" placeholder="What did you learn?"></textarea>
+          <button class="btn quiet" id="teach-btn" type="button">Save fact</button>
+          <div class="grow-status" id="teach-status"></div>
+        </div>
+      </details>
+
+      <div id="docs"></div>
+      <button class="linklike hidden" id="docs-toggle" type="button">Show all</button>
+    </section>
   </main>
 
   <section class="atlas">
     <div class="atlas-legend">
-      <span><span class="swatch" style="background:#2e6b4e"></span>consulted for your question</span>
-      <span><span class="swatch" style="background:#b8c2ba"></span>everything else it knows</span>
+      <span><span class="swatch" style="background:#2e6b4e"></span>used in this answer</span>
+      <span><span class="swatch" style="background:#b8c2ba"></span>everything else</span>
     </div>
     <div id="graph"></div>
     <div class="atlas-empty hidden" id="atlas-empty">
       <div class="inner">
-        <h3>The ledger is empty.</h3>
-        <p>Ingest documents on the left — a single file or a whole folder — and this space becomes a map of everything your team knows.</p>
+        <h3>Your knowledge map draws itself here.</h3>
+        <p>As documents are added, each fact becomes a node; each relationship, a line.</p>
       </div>
     </div>
     <div id="node-card">
@@ -411,6 +606,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)");
 
 /* ---------- access token (shared/team deployments) ---------- */
 // A share link carries #token=… in the URL fragment — fragments are never
@@ -487,6 +683,8 @@ async function api(path, opts = {}) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const MODEL_HINT = "Adding facts needs a model: run Ollama locally (ollama pull llama3.2) or set OPENROUTER_API_KEY.";
+
 const COLOR_BASE = { background: "#b8c2ba", border: "#93a098" };
 const COLOR_HIT = { background: "#2e6b4e", border: "#1f4f38" };
 const COLOR_EXPANDED = { background: "#7fa98f", border: "#2e6b4e" };
@@ -497,16 +695,64 @@ let nodesDs = null;
 let edgesDs = null;
 let prevObs = new Map(); // node id -> observations, for "what just got smarter" diffing
 let highlighted = new Set();
+let ingestBusy = false;
+
+/* ---------- app state: empty (onboarding) vs ready (ask) ---------- */
+let appState = "";
+function setAppState(stats) {
+  const forcedReady = new URLSearchParams(location.search).get("q");
+  const ready = (stats && stats.documents > 0) || Boolean(forcedReady);
+  const next = ready ? "is-ready" : "is-empty";
+  if (next === appState) return;
+  appState = next;
+  document.body.classList.remove("is-ready", "is-empty");
+  document.body.classList.add(next);
+  // The ingest controls exist once; they live in the hero while the graph is
+  // empty and move into the Library drawer once it isn't.
+  const controls = $("ingest-controls");
+  if (ready) {
+    $("ingest-panel-body").appendChild(controls);
+    if (ingestBusy) {
+      // Mid-ingest flip: keep the progress visible in its new home.
+      $("ingest-panel").open = true;
+    } else {
+      $("ask-input").focus();
+    }
+  } else {
+    $("onboarding-controls-slot").appendChild(controls);
+  }
+}
+
+/* ---------- motion helpers ---------- */
+// Stagger-reveal freshly rendered children (they're new DOM nodes each render,
+// so the animation replays). Skipped entirely under reduced motion.
+function stagger(el, cap = 10) {
+  if (REDUCED.matches) return;
+  Array.from(el.children).forEach((c, i) => {
+    c.style.setProperty("--i", String(Math.min(i, cap)));
+    c.classList.add("rise");
+  });
+}
 
 /* ---------- receipts ---------- */
 function receiptHtml(confidence, observations, sourceCount) {
   const pct = Math.round(confidence * 100);
   const low = pct < 55;
   const src = sourceCount != null ? ` · ${sourceCount} source${sourceCount === 1 ? "" : "s"}` : "";
-  return `<span class="receipt${low ? " low" : ""}" title="confidence ${pct}%, observed ${observations}×">` +
+  const across = sourceCount != null ? ` across ${sourceCount} source${sourceCount === 1 ? "" : "s"}` : "";
+  return `<span class="receipt${low ? " low" : ""}" title="confidence ${pct}% — observed ${observations} time${observations === 1 ? "" : "s"}${esc(across)}; repeated observations raise confidence">` +
     `<span class="meter"><i style="width:${pct}%"></i></span>` +
     `<span class="pct">${pct}%</span><span>×${observations}${esc(src)}</span></span>`;
 }
+
+function maybeShowReceiptLegend() {
+  if (localStorage.getItem("cg-receipt-legend")) return;
+  $("receipt-legend").classList.remove("hidden");
+}
+$("legend-dismiss").addEventListener("click", () => {
+  localStorage.setItem("cg-receipt-legend", "1");
+  $("receipt-legend").classList.add("hidden");
+});
 
 /* ---------- stats + provider ---------- */
 async function refreshStats() {
@@ -520,10 +766,21 @@ async function refreshStats() {
     badge.classList.add("cloud");
   } else {
     badge.textContent = "local mode";
-    $("local-note").classList.remove("hidden");
+    if (!localStorage.getItem("cg-local-note-off")) $("local-note").classList.remove("hidden");
   }
+  setAppState(s);
   return s;
 }
+$("local-note-close").addEventListener("click", () => {
+  localStorage.setItem("cg-local-note-off", "1");
+  $("local-note").classList.add("hidden");
+});
+$("provider-badge").addEventListener("click", () => {
+  // In local mode the badge re-opens the dismissed explainer.
+  if ($("provider-badge").classList.contains("cloud")) return;
+  localStorage.removeItem("cg-local-note-off");
+  $("local-note").classList.remove("hidden");
+});
 
 /* ---------- graph ---------- */
 function nodeVisual(n) {
@@ -598,7 +855,7 @@ async function refreshGraph({ diff = false } = {}) {
 
 function pulseFresh(ids) {
   nodesDs.update(ids.map((id) => ({ id, color: COLOR_FRESH, borderWidth: 3 })));
-  if (network) network.fit({ nodes: ids, animation: { duration: 600 }, maxZoomLevel: 1.2 });
+  if (network) network.fit({ nodes: ids, animation: REDUCED.matches ? false : { duration: 600 }, maxZoomLevel: 1.2 });
   setTimeout(() => {
     nodesDs.update(ids.map((id) => ({
       id,
@@ -617,13 +874,13 @@ function highlightRetrieval(bundle) {
     opacity: highlighted.has(id) ? 1 : 0.35,
   })));
   if (highlighted.size && network) {
-    network.fit({ nodes: [...highlighted], animation: { duration: 700 }, maxZoomLevel: 1.1 });
+    network.fit({ nodes: [...highlighted], animation: REDUCED.matches ? false : { duration: 700 }, maxZoomLevel: 1.1 });
   }
 }
 
 function focusNode(id) {
   if (!network) return;
-  network.focus(id, { scale: 1.3, animation: { duration: 500 } });
+  network.focus(id, { scale: 1.3, animation: REDUCED.matches ? false : { duration: 500 } });
   network.selectNodes([id]);
   showNodeCard(id);
 }
@@ -641,6 +898,16 @@ function showNodeCard(id) {
 }
 function hideNodeCard() { $("node-card").classList.remove("show"); }
 $("node-card-close").addEventListener("click", hideNodeCard);
+
+/* ---------- evidence tabs ---------- */
+function activateTab(name) {
+  document.querySelectorAll("#evidence-tabs .tab").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  ["sources", "facts", "edges"].forEach((t) =>
+    $("tab-" + t).classList.toggle("hidden", t !== name));
+}
+document.querySelectorAll("#evidence-tabs .tab").forEach((b) =>
+  b.addEventListener("click", () => activateTab(b.dataset.tab)));
 
 /* ---------- ask ---------- */
 function renderAnswerText(text, sourceCount) {
@@ -696,7 +963,7 @@ function renderBundle(bundle) {
     .map((e) => `<div class="edge-line"><b>${esc(byId.get(e.sourceId))}</b> <span class="rel">—${esc(e.relation)}→</span> <b>${esc(byId.get(e.targetId))}</b></div>`);
   $("edges").innerHTML = edgeRows.join("");
   $("edges-count").textContent = edgeRows.length;
-  $("edges-head").classList.toggle("hidden", !edgeRows.length);
+  $("tab-btn-edges").classList.toggle("hidden", !edgeRows.length);
 
   $("sources").innerHTML = bundle.chunks.map((c, i) => `
     <div class="source" id="source-${i + 1}">
@@ -714,6 +981,12 @@ function renderBundle(bundle) {
       card.classList.toggle("open");
       btn.textContent = card.classList.contains("open") ? "show less" : "show more";
     }));
+
+  activateTab("sources");
+  // Cascade the evidence in after the prose (see stagger()).
+  stagger($("sources"));
+  stagger($("facts"));
+  stagger($("edges"));
 }
 
 $("ask-form").addEventListener("submit", async (ev) => {
@@ -724,7 +997,9 @@ $("ask-form").addEventListener("submit", async (ev) => {
   btn.disabled = true;
   $("answer-wrap").classList.remove("hidden");
   $("answer-q").textContent = "Q · " + q;
-  $("answer-body").innerHTML = '<span class="thinking">Consulting the graph…</span>';
+  $("answer-body").innerHTML = "";
+  $("answer-skeleton").classList.remove("hidden");
+  $("evidence").classList.add("hidden");
   $("facts").innerHTML = ""; $("edges").innerHTML = ""; $("sources").innerHTML = "";
   try {
     const r = await api("/api/ask", {
@@ -735,24 +1010,36 @@ $("ask-form").addEventListener("submit", async (ev) => {
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     const { answer, bundle } = data;
-    if (!bundle.nodes.length && !bundle.chunks.length) {
-      $("answer-body").innerHTML = '<p class="thinking">The graph holds nothing relevant to that yet. Ingest the documents that would answer it, and ask again.</p>';
+    $("answer-skeleton").classList.add("hidden");
+    const hasEvidence = bundle.nodes.length > 0 || bundle.chunks.length > 0;
+    if (!hasEvidence) {
+      $("answer-body").innerHTML = '<p class="thinking">Nothing in your documents answers this yet. <button class="linklike" id="no-results-add" type="button">Add the documents</button> that would — then ask again.</p>';
+      const add = $("no-results-add");
+      if (add) add.addEventListener("click", () => {
+        $("ingest-panel").open = true;
+        $("ingest-panel").scrollIntoView({ behavior: REDUCED.matches ? "auto" : "smooth", block: "center" });
+      });
     } else if (answer) {
       $("answer-body").innerHTML = renderAnswerText(answer, bundle.chunks.length);
       $("answer-body").querySelectorAll(".cite").forEach((el) =>
         el.addEventListener("click", () => {
+          activateTab("sources");
           const card = $("source-" + el.dataset.src);
           if (!card) return;
-          card.scrollIntoView({ behavior: "smooth", block: "center" });
+          card.scrollIntoView({ behavior: REDUCED.matches ? "auto" : "smooth", block: "center" });
           card.classList.add("flash");
           setTimeout(() => card.classList.remove("flash"), 1400);
         }));
     } else {
-      $("answer-body").innerHTML = '<p class="thinking">Local mode — here is everything the graph knows about this, with receipts. Set OPENROUTER_API_KEY for a written answer.</p>';
+      $("answer-body").innerHTML = '<p class="thinking">Local mode — here is everything your documents hold on this, with receipts. For a written answer, run Ollama or set OPENROUTER_API_KEY.</p>';
     }
+    stagger($("answer-body"), 4);
+    $("evidence").classList.toggle("hidden", !hasEvidence);
     renderBundle(bundle);
     highlightRetrieval(bundle);
+    if (hasEvidence) maybeShowReceiptLegend();
   } catch (e) {
+    $("answer-skeleton").classList.add("hidden");
     $("answer-body").innerHTML = '<p class="thinking">Something went wrong: ' + esc(e.message) + "</p>";
   } finally {
     btn.disabled = false;
@@ -777,7 +1064,7 @@ $("teach-btn").addEventListener("click", async () => {
     if (data.error) throw new Error(data.error);
     status.className = "grow-status ok";
     status.textContent =
-      `✓ ledger updated — ${data.nodesCreated} new fact${data.nodesCreated === 1 ? "" : "s"}, ` +
+      `✓ saved — ${data.nodesCreated} new fact${data.nodesCreated === 1 ? "" : "s"}, ` +
       `${data.nodesUpdated} reinforced, ${data.edgesCreated + data.edgesUpdated} connections touched`;
     $("teach-input").value = "";
     await refreshStats();
@@ -785,21 +1072,57 @@ $("teach-btn").addEventListener("click", async () => {
     await refreshDocs();
   } catch (e) {
     status.className = "grow-status err";
-    status.textContent = "Could not extract: " + e.message +
-      "\nExtraction needs OPENROUTER_API_KEY or a running Ollama.";
+    status.textContent = "Could not save: " + e.message + "\n" + MODEL_HINT;
   } finally {
     $("teach-btn").disabled = false;
   }
 });
 
-/* ---------- ingest ---------- */
+/* ---------- ingest progress (shared by server-path and upload) ---------- */
+let progressItems = [];
+function progressShow() {
+  progressItems = [];
+  $("progress-fill").style.width = "0%";
+  $("progress-rows").innerHTML = "";
+  $("ingest-progress").classList.remove("hidden");
+}
+function renderProgress(frac) {
+  if (frac != null) $("progress-fill").style.width = Math.round(frac * 100) + "%";
+  $("progress-rows").innerHTML = progressItems.slice(-4).map((it) => `
+    <div class="progress-row ${it.state}">
+      <span class="icon">${it.state === "busy" ? '<span class="spinner"></span>' : it.state === "ok" ? "✓" : "✗"}</span>
+      <span>${esc(it.name)}${it.msg ? " — " + esc(it.msg) : ""}</span>
+    </div>`).join("");
+}
+function progressFile(index, total, name) {
+  for (const it of progressItems) if (it.state === "busy") it.state = "ok";
+  progressItems.push({ name, state: "busy" });
+  renderProgress(total ? index / total : 0);
+}
+function progressFail(msg) {
+  const last = progressItems[progressItems.length - 1];
+  if (last) { last.state = "err"; last.msg = msg; }
+  renderProgress(null);
+}
+function progressDone() {
+  for (const it of progressItems) if (it.state === "busy") it.state = "ok";
+  renderProgress(1);
+}
+
+function setIngestControlsDisabled(disabled) {
+  ingestBusy = disabled;
+  [$("dropzone"), $("choose-folder-btn"), $("ingest-btn")].forEach((b) => { b.disabled = disabled; });
+}
+
+/* ---------- ingest a path on the server ---------- */
 $("ingest-btn").addEventListener("click", async () => {
   const dir = $("ingest-input").value.trim();
   const status = $("ingest-status");
   if (!dir) return;
-  $("ingest-btn").disabled = true;
+  setIngestControlsDisabled(true);
   status.className = "grow-status";
   status.textContent = "Scanning " + dir + " …";
+  progressShow();
   try {
     const r = await api("/api/ingest-dir", {
       method: "POST",
@@ -813,7 +1136,6 @@ $("ingest-btn").addEventListener("click", async () => {
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    const lines = [];
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -824,19 +1146,19 @@ $("ingest-btn").addEventListener("click", async () => {
         if (!line.trim()) continue;
         const ev = JSON.parse(line);
         if (ev.type === "progress") {
-          const name = ev.file.split("/").pop();
-          lines.push(`[${ev.index + 1}/${ev.total}] reading ${name}…`);
-          status.textContent = lines.slice(-6).join("\n");
+          status.textContent = "";
+          progressFile(ev.index, ev.total, ev.file.split("/").pop());
           // Grow the graph live between files.
           refreshGraph({ diff: true }).catch(() => {});
           refreshStats().catch(() => {});
         } else if (ev.type === "done") {
+          progressDone();
           const fresh = ev.results.filter((x) => !x.skipped);
           const skipped = ev.results.length - fresh.length;
           const nodes = fresh.reduce((a, x) => a + x.nodesCreated + x.nodesUpdated, 0);
           status.className = "grow-status ok";
           status.textContent =
-            `✓ ${fresh.length} document${fresh.length === 1 ? "" : "s"} ingested` +
+            `✓ ${fresh.length} document${fresh.length === 1 ? "" : "s"} added` +
             (skipped ? ` (${skipped} already known, skipped)` : "") +
             `, ${nodes} facts written or reinforced`;
         } else if (ev.type === "error") {
@@ -848,15 +1170,15 @@ $("ingest-btn").addEventListener("click", async () => {
     await refreshGraph({ diff: true });
     await refreshDocs();
   } catch (e) {
+    progressFail(e.message);
     status.className = "grow-status err";
-    status.textContent = "Ingest failed: " + e.message +
-      "\nExtraction needs OPENROUTER_API_KEY or a running Ollama.";
+    status.textContent = "Could not add documents: " + e.message + "\n" + MODEL_HINT;
   } finally {
-    $("ingest-btn").disabled = false;
+    setIngestControlsDisabled(false);
   }
 });
 
-/* ---------- folder upload (browser picker → server ingest) ---------- */
+/* ---------- browser upload (dropzone / pickers → server ingest) ---------- */
 const UPLOAD_ACCEPT = /\.(pdf|md|markdown|txt)$/i;
 
 // Base64-encode file bytes in chunks (fromCharCode.apply chokes on huge arrays).
@@ -872,16 +1194,31 @@ async function fileToPayload(file) {
   return { name: file.name, text: await file.text() };
 }
 
-$("choose-files-btn").addEventListener("click", () => $("files-input").click());
+$("dropzone").addEventListener("click", () => $("files-input").click());
+$("dropzone").addEventListener("dragover", (e) => {
+  e.preventDefault();
+  if (!ingestBusy) $("dropzone").classList.add("drag");
+});
+$("dropzone").addEventListener("dragleave", () => $("dropzone").classList.remove("drag"));
+$("dropzone").addEventListener("drop", (e) => {
+  e.preventDefault();
+  $("dropzone").classList.remove("drag");
+  if (ingestBusy) return;
+  uploadFiles(Array.from(e.dataTransfer.files || []), "files");
+});
 $("choose-folder-btn").addEventListener("click", () => $("folder-input").click());
 $("files-input").addEventListener("change", (e) => uploadPicked(e, "files"));
 $("folder-input").addEventListener("change", (e) => uploadPicked(e, "folder"));
 
-async function uploadPicked(e, kind) {
+function uploadPicked(e, kind) {
   const all = Array.from(e.target.files || []);
+  e.target.value = ""; // let the user re-pick the same selection later
+  uploadFiles(all, kind);
+}
+
+async function uploadFiles(all, kind) {
   const files = all.filter((f) => UPLOAD_ACCEPT.test(f.name));
   const status = $("ingest-status");
-  e.target.value = ""; // let the user re-pick the same selection later
   if (!files.length) {
     status.className = "grow-status err";
     status.textContent = all.length
@@ -889,16 +1226,15 @@ async function uploadPicked(e, kind) {
       : `No ${kind === "folder" ? "folder" : "files"} selected.`;
     return;
   }
-  const buttons = [$("choose-files-btn"), $("choose-folder-btn")];
-  buttons.forEach((b) => { b.disabled = true; });
+  setIngestControlsDisabled(true);
   status.className = "grow-status";
-  const lines = [];
+  status.textContent = "";
+  progressShow();
   let ok = 0, skipped = 0, failed = 0, nodes = 0;
   try {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      lines.push(`[${i + 1}/${files.length}] ${f.name}…`);
-      status.textContent = lines.slice(-6).join("\n");
+      progressFile(i, files.length, f.name);
       try {
         const r = await api("/api/ingest-upload", {
           method: "POST",
@@ -921,38 +1257,57 @@ async function uploadPicked(e, kind) {
         refreshStats().catch(() => {});
       } catch (err) {
         failed++;
-        lines.push(`  ✗ ${f.name}: ${err.message}`);
-        status.textContent = lines.slice(-6).join("\n");
+        progressFail(err.message);
       }
     }
+    progressDone();
     status.className = failed ? "grow-status err" : "grow-status ok";
     status.textContent =
-      `✓ ${ok} document${ok === 1 ? "" : "s"} ingested` +
+      `✓ ${ok} document${ok === 1 ? "" : "s"} added` +
       (skipped ? ` (${skipped} already known, skipped)` : "") +
       (failed ? `, ${failed} failed` : "") +
       `, ${nodes} facts written or reinforced` +
-      (failed ? "\nExtraction needs OPENROUTER_API_KEY or a running Ollama." : "");
+      (failed ? "\n" + MODEL_HINT : "");
     await refreshStats();
     await refreshGraph({ diff: true });
     await refreshDocs();
   } finally {
-    buttons.forEach((b) => { b.disabled = false; });
+    setIngestControlsDisabled(false);
   }
 }
 
 /* ---------- documents ---------- */
-async function refreshDocs() {
-  const docs = await (await api("/api/documents")).json();
-  $("docs-count").textContent = docs.length;
-  $("docs").innerHTML = docs.slice(0, 30).map((d) => `
+const DOCS_PREVIEW = 10;
+let docsExpanded = false;
+let docsCache = [];
+function renderDocs() {
+  const shown = docsExpanded ? docsCache : docsCache.slice(0, DOCS_PREVIEW);
+  $("docs").innerHTML = shown.map((d) => `
     <div class="doc-row">
       <span class="t" title="${esc(d.source)}">${esc(d.title)}</span>
       <span class="d">${esc((d.createdAt || "").slice(0, 10))}</span>
     </div>`).join("");
+  const toggle = $("docs-toggle");
+  toggle.classList.toggle("hidden", docsCache.length <= DOCS_PREVIEW);
+  toggle.textContent = docsExpanded ? "Show fewer" : `Show all ${docsCache.length}`;
+}
+$("docs-toggle").addEventListener("click", () => {
+  docsExpanded = !docsExpanded;
+  renderDocs();
+});
+async function refreshDocs() {
+  docsCache = await (await api("/api/documents")).json();
+  $("docs-count").textContent = docsCache.length;
+  renderDocs();
+  if (docsCache.length && !$("ask-input").value) {
+    const t = docsCache[0].title.length > 42 ? docsCache[0].title.slice(0, 42) + "…" : docsCache[0].title;
+    $("ask-input").placeholder = `What does “${t}” cover?`;
+  }
 }
 
 /* ---------- boot ---------- */
 (async function boot() {
+  $("legend-sample").innerHTML = receiptHtml(0.87, 4, 2);
   try {
     await refreshStats();
     if (typeof vis === "undefined") {
@@ -963,8 +1318,10 @@ async function refreshDocs() {
     await refreshDocs();
   } catch (e) {
     console.error(e);
+    // Stats unavailable (e.g. token prompt cancelled) — default to the ask
+    // layout so the page still works once access is sorted out.
+    if (!appState) setAppState({ documents: 1 });
   }
-  $("ask-input").focus();
   // Shareable question links: /?q=how+do+we+deploy auto-asks on load.
   const q = new URLSearchParams(location.search).get("q");
   if (q) {
