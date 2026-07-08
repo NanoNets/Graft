@@ -102,6 +102,12 @@ context-graph ingest ./docs/*.md ./handbook.pdf
 context-graph ingest-dir ./docs           # a whole folder, recursively
 echo "some notes" | context-graph ingest-text --title "Notes"
 
+# Keep the graph evolving as a folder changes (see "Auto-watch")
+context-graph watch ./docs        # register + watch; re-run with no args to resume
+context-graph ingest-dir ./docs --watch   # ingest now, register for watching
+context-graph watch-status        # list registered folders
+context-graph unwatch ./docs
+
 # Ingest a code repository — as summaries, not raw code (see "Code repositories")
 context-graph repo .
 
@@ -166,6 +172,9 @@ Tools exposed:
 | `context_ingest_file` | Ingest files from disk, including **PDFs** (parsed automatically) |
 | `context_ingest_dir` | Ingest a whole **directory** of docs (PDF/MD/TXT by default; pass `extensions` to widen), recursively |
 | `context_ingest_repo` | Ingest a **code repository** as per-file prose summaries (never raw code); incremental across runs |
+| `context_watch_dir` | Connect a folder for **auto-watching**: ingest it now and re-ingest files as they change (see "Auto-watch") |
+| `context_unwatch_dir` | Disconnect a watched folder (its knowledge stays in the graph) |
+| `context_watch_status` | List connected folders and the ingest queue |
 | `context_export` | Write the graph to an interactive **HTML** visualization |
 | `context_sync` | Team sharing (git mode): import + re-merge the shared `graph.jsonl`, then write it back |
 | `context_stats` | Report how much the graph currently holds |
@@ -189,6 +198,26 @@ It is **incremental**: summaries are cached by content hash in `repo-summaries.j
 The same replace-on-change behavior now applies to every file ingest: re-ingesting a modified doc replaces the old version instead of leaving both in the graph.
 
 For a ~30-file repo expect ~30 small summary calls on first run; the graph stays module-scale (a handful of documents) rather than chunk-soup-scale. Agents should still read raw code with their own tools — the graph holds what code can't say: intent, decisions, and gotchas.
+
+## Auto-watch — an evolving graph
+
+Connect a folder once and the graph tracks it: files you add or edit are re-ingested automatically, so the graph evolves with your notes instead of freezing at ingest time.
+
+```bash
+context-graph watch ~/notes        # catch up on the folder, then watch it live
+# … later, in a fresh shell — no args needed, registered folders resume:
+context-graph watch
+```
+
+How it behaves:
+
+- **Debounced and cheap.** Saves are coalesced (~1.5 s quiet time per file) and unchanged files are skipped by content hash, so a daemon restart over a big unchanged folder costs zero LLM calls. Edited files *replace* their old document rather than piling up copies.
+- **Append-only.** Deleting a file never removes knowledge already learned from it — the graph is a memory, not a mirror. The deletion is logged and nothing else happens.
+- **Same rules as `ingest-dir`.** Default extensions `.pdf .md .markdown .txt` (override with `--ext`), dot-dirs / `node_modules` / files over 1 MB are ignored.
+- **Registered folders** live in `watched-dirs.json` next to the db (machine-local — it never rides the git-synced graph). `ingest-dir --watch` registers while ingesting; `watch-status` / `unwatch` manage the list.
+- **One watcher per db.** Run a single `watch` daemon per graph; MCP sessions and the web UI can read concurrently while it runs.
+
+Elsewhere: the `context_watch_dir` MCP tool connects a folder for the life of the agent session (set `CONTEXT_GRAPH_AUTOWATCH=1` on the MCP server to auto-resume registered folders), and `CONTEXT_GRAPH_WATCH=1` does the same for `context-graph-web` — the UI picks up growth live.
 
 ## Claude Code hooks
 

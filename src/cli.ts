@@ -17,6 +17,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
 import { ContextGraphEngine } from "./engine.js";
+import { GraphWatcher, type WatchEvent } from "./watch.js";
 import { resolveConfig } from "./ai/providers.js";
 import { toHtml, toMermaid } from "./graph/export.js";
 
@@ -116,13 +117,13 @@ program
   .command("ingest-dir")
   .description("Ingest every supported doc (.pdf .md .txt) in a directory, recursively")
   .argument("<dir>", "directory to ingest")
-  .action(async (dir: string) => {
+  .option("-w, --watch", "also register the directory for auto-watching")
+  .action(async (dir: string, opts: { watch?: boolean }) => {
     const engine = engineFrom();
     try {
       const results = await engine.ingestDir(dir);
       if (results.length === 0) {
         console.log(`No supported files found under ${dir}`);
-        return;
       }
       for (const r of results) {
         console.log(
@@ -131,6 +132,126 @@ program
             : `✓ ${r.title} — ${r.chunks} chunks, +${r.nodesCreated} nodes, +${r.edgesCreated} edges`,
         );
       }
+      if (opts.watch) {
+        const w = engine.addWatchedDir(dir);
+        console.log(`✓ registered ${w.dir} for auto-watch — run \`context-graph watch\` to start the daemon`);
+      }
+    } finally {
+      await engine.close();
+    }
+  });
+
+/** One log line per watcher event, mirroring the ingest commands' ✓/•/✗ style. */
+function logWatchEvent(event: WatchEvent): void {
+  switch (event.type) {
+    case "watching":
+      console.log(`watching ${event.dir} (${event.files} files to catch up on)`);
+      break;
+    case "queued":
+      if (event.reason !== "initial") console.log(`  queued ${event.file} (${event.reason})`);
+      break;
+    case "ingested":
+      console.log(
+        event.result.skipped
+          ? `• ${event.result.title} — unchanged, skipped`
+          : `✓ ${event.result.title} — ${event.result.chunks} chunks, +${event.result.nodesCreated} nodes, +${event.result.edgesCreated} edges`,
+      );
+      break;
+    case "deleted":
+      console.log(`• ${event.file} — deleted (knowledge kept, graph is append-only)`);
+      break;
+    case "error":
+      console.error(`✗ ${event.file}: ${event.error}`);
+      break;
+  }
+}
+
+program
+  .command("watch")
+  .description(
+    "Watch folders and keep the graph evolving: new and edited docs are re-ingested automatically. " +
+      "With no arguments, resumes previously registered folders. Ctrl-C to stop.",
+  )
+  .argument("[dirs...]", "directories to watch (registered for future runs unless --no-register)")
+  .option("-e, --ext <exts...>", 'extensions to ingest (default: ".pdf" ".md" ".markdown" ".txt")')
+  .option("--debounce <ms>", "quiet time after a save before re-ingesting", (v) => parseInt(v, 10), 1500)
+  .option("--no-register", "don't persist the given directories to the watch registry")
+  .option("--no-initial-scan", "skip the catch-up scan of existing files at startup")
+  .action(
+    async (
+      dirs: string[],
+      opts: { ext?: string[]; debounce: number; register: boolean; initialScan: boolean },
+    ) => {
+      const engine = engineFrom();
+      if (opts.register) {
+        for (const dir of dirs) engine.addWatchedDir(dir, opts.ext);
+      }
+      const targets = new Set(dirs.map((d) => resolve(d)));
+      for (const w of engine.listWatchedDirs()) targets.add(w.dir);
+      if (targets.size === 0) {
+        console.error("No watched folders. Run: context-graph watch <dir>");
+        await engine.close();
+        process.exit(1);
+      }
+
+      const watcher = new GraphWatcher(engine, {
+        extensions: opts.ext,
+        debounceMs: opts.debounce,
+        initialScan: opts.initialScan,
+        onEvent: logWatchEvent,
+      });
+      // The daemon owns the engine for its lifetime — closed on signal, not
+      // in a finally like the one-shot commands.
+      let stopping = false;
+      const stop = async () => {
+        if (stopping) return;
+        stopping = true;
+        console.log("\nstopping…");
+        await watcher.close();
+        await engine.close();
+        process.exit(0);
+      };
+      process.on("SIGINT", () => void stop());
+      process.on("SIGTERM", () => void stop());
+
+      for (const dir of targets) await watcher.add(dir);
+      await watcher.idle();
+      console.log("caught up — watching for changes (Ctrl-C to stop)");
+    },
+  );
+
+program
+  .command("watch-status")
+  .description("List folders registered for auto-watching")
+  .action(async () => {
+    const engine = engineFrom();
+    try {
+      const dirs = engine.listWatchedDirs();
+      if (dirs.length === 0) {
+        console.log("No watched folders. Register one with: context-graph watch <dir>");
+        return;
+      }
+      for (const w of dirs) {
+        const exts = w.extensions?.join(" ") ?? "default extensions";
+        console.log(`${w.dir}  (${exts}, since ${w.addedAt.slice(0, 10)})`);
+      }
+    } finally {
+      await engine.close();
+    }
+  });
+
+program
+  .command("unwatch")
+  .description("Remove a folder from the auto-watch registry")
+  .argument("<dir>", "directory to stop watching")
+  .action(async (dir: string) => {
+    const engine = engineFrom();
+    try {
+      console.log(
+        engine.removeWatchedDir(dir)
+          ? `✓ removed ${resolve(dir)} from the watch registry`
+          : `• ${resolve(dir)} was not registered`,
+      );
     } finally {
       await engine.close();
     }

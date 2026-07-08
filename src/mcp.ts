@@ -12,9 +12,31 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { ContextGraphEngine } from "./engine.js";
+import { GraphWatcher, type WatchEvent } from "./watch.js";
 import { toHtml } from "./graph/export.js";
 
 const engine = new ContextGraphEngine();
+
+// One lazily-created watcher for the life of this MCP process. Folders added
+// via context_watch_dir keep updating the graph in the background for as long
+// as the client session (and thus this process) lives. context_watch_dir
+// temporarily points `progressSink` at its own progress notifications while
+// the catch-up scan runs.
+let watcher: GraphWatcher | undefined;
+let progressSink: ((event: WatchEvent) => void) | undefined;
+
+function getWatcher(): GraphWatcher {
+  return (watcher ??= new GraphWatcher(engine, {
+    onEvent: (event) => {
+      // stderr only — stdout is the JSON-RPC channel.
+      if (event.type === "error") console.error(`watch: ✗ ${event.file}: ${event.error}`);
+      else if (event.type === "ingested" && !event.result.skipped) {
+        console.error(`watch: ✓ ${event.result.title} (+${event.result.nodesCreated} entities)`);
+      }
+      progressSink?.(event);
+    },
+  }));
+}
 
 const server = new McpServer({
   name: "context-graph-engine",
@@ -212,6 +234,126 @@ server.registerTool(
 );
 
 server.registerTool(
+  "context_watch_dir",
+  {
+    title: "Watch a folder (evolving graph)",
+    description:
+      "Connect a folder to the graph and keep it evolving: existing documents are ingested now, " +
+      "and any file added or edited later is re-ingested automatically for as long as this session " +
+      "lives. The folder is registered, so `context-graph watch` (or CONTEXT_GRAPH_AUTOWATCH=1) " +
+      "resumes it in future sessions. Append-only: deleting a file never removes learned knowledge.",
+    inputSchema: {
+      dir: z.string().describe("Absolute path to the folder to watch."),
+      extensions: z
+        .array(z.string())
+        .optional()
+        .describe('File extensions to include (e.g. [".md", ".rst"]). Default: .pdf .md .markdown .txt'),
+    },
+  },
+  async ({ dir, extensions }, extra) => {
+    const w = getWatcher();
+    // Extensions are fixed per watcher process; a custom set is recorded in
+    // the registry and takes effect when a daemon starts from it.
+    engine.addWatchedDir(dir, extensions);
+
+    const progressToken = extra?._meta?.progressToken;
+    const lines: string[] = [];
+    let ingested = 0;
+    let queued = 0;
+    progressSink = (event) => {
+      if (event.type === "queued") queued++;
+      if (event.type === "ingested") {
+        ingested++;
+        lines.push(
+          event.result.skipped
+            ? `• ${event.result.title}: unchanged, skipped`
+            : `✓ ${event.result.title}: +${event.result.nodesCreated} entities, +${event.result.edgesCreated} relationships`,
+        );
+        if (progressToken) {
+          void extra.sendNotification({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: ingested,
+              total: queued,
+              message: `Ingesting ${event.file.split("/").pop()} (${ingested}/${queued})`,
+            },
+          });
+        }
+      }
+      if (event.type === "error") lines.push(`✗ ${event.file}: ${event.error}`);
+    };
+    try {
+      await w.add(dir);
+      await w.idle();
+    } finally {
+      progressSink = undefined;
+    }
+    lines.push(
+      `\nWatching ${dir} — new and edited files will be ingested automatically while this session lives.`,
+    );
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
+  "context_unwatch_dir",
+  {
+    title: "Stop watching a folder",
+    description:
+      "Stop auto-ingesting a folder and remove it from the watch registry. Knowledge already " +
+      "learned from it stays in the graph.",
+    inputSchema: {
+      dir: z.string().describe("Absolute path of the watched folder to disconnect."),
+    },
+  },
+  async ({ dir }) => {
+    await watcher?.remove(dir);
+    const removed = engine.removeWatchedDir(dir);
+    return {
+      content: [
+        {
+          type: "text",
+          text: removed
+            ? `Stopped watching ${dir}. Its knowledge remains in the graph.`
+            : `${dir} was not being watched.`,
+        },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  "context_watch_status",
+  {
+    title: "Watched folders",
+    description:
+      "List folders connected for auto-watching: registered folders, which are live in this session, and the ingest queue size.",
+    inputSchema: {},
+  },
+  async () => {
+    const registered = engine.listWatchedDirs();
+    const live = new Set(watcher?.dirs() ?? []);
+    if (registered.length === 0 && live.size === 0) {
+      return {
+        content: [
+          { type: "text", text: "No watched folders. Connect one with context_watch_dir." },
+        ],
+      };
+    }
+    const lines = registered.map(
+      (wd) => `${live.has(wd.dir) ? "● live" : "○ registered"}  ${wd.dir}`,
+    );
+    for (const dir of live) {
+      if (!registered.some((wd) => wd.dir === dir)) lines.push(`● live (unregistered)  ${dir}`);
+    }
+    const pending = watcher?.pendingCount() ?? 0;
+    if (pending > 0) lines.push(`\n${pending} file(s) queued for ingestion.`);
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  },
+);
+
+server.registerTool(
   "context_export",
   {
     title: "Export the graph as HTML",
@@ -296,6 +438,22 @@ async function main(): Promise<void> {
   await server.connect(transport);
   // Log to stderr so we don't corrupt the stdio JSON-RPC channel.
   console.error("context-graph-engine MCP server running on stdio");
+
+  // Opt-in: resume registered folders in the background. Off by default —
+  // every client session spawns its own MCP process, and silent LLM spend on
+  // file saves should be something the user chose.
+  if (process.env.CONTEXT_GRAPH_AUTOWATCH === "1") {
+    const dirs = engine.listWatchedDirs();
+    if (dirs.length > 0) {
+      const w = getWatcher();
+      for (const wd of dirs) {
+        w.add(wd.dir).catch((err) =>
+          console.error(`watch: ✗ ${wd.dir}: ${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
+      console.error(`auto-watching ${dirs.length} registered folder(s)`);
+    }
+  }
 }
 
 main().catch((err) => {

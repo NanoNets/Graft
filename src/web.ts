@@ -22,6 +22,7 @@ import { networkInterfaces } from "node:os";
 import { resolve, dirname, join } from "node:path";
 import OpenAI from "openai";
 import { ContextGraphEngine } from "./engine.js";
+import { GraphWatcher } from "./watch.js";
 import { resolveConfig } from "./ai/providers.js";
 import { extractPdfTextFromData, isPdfPath } from "./ingest/pdf.js";
 
@@ -262,6 +263,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/watched") {
+      json(res, 200, {
+        registered: engine.listWatchedDirs(),
+        live: webWatcher?.dirs() ?? [],
+        pending: webWatcher?.pendingCount() ?? 0,
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/ask") {
       const { question } = JSON.parse(await readBody(req)) as { question?: string };
       if (!question?.trim()) return json(res, 400, { error: "question is required" });
@@ -286,10 +296,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/ingest-dir") {
-      // Accepts a directory or a single file on the server's disk.
-      const { dir, extensions } = JSON.parse(await readBody(req)) as {
+      // Accepts a directory or a single file on the server's disk. With
+      // watch:true the directory is also registered and watched in-process,
+      // so future edits keep flowing into the graph while the server runs.
+      const { dir, extensions, watch } = JSON.parse(await readBody(req)) as {
         dir?: string;
         extensions?: string[];
+        watch?: boolean;
       };
       if (!dir?.trim()) return json(res, 400, { error: "dir is required" });
       const abs = resolve(dir);
@@ -308,7 +321,17 @@ const server = createServer(async (req, res) => {
               onProgress: (info) => emit({ type: "progress", ...info }),
             })
           : [await engine.ingestFile(abs)];
-        emit({ type: "done", results, stats: await engine.stats() });
+        let watching = false;
+        if (watch && isDir) {
+          engine.addWatchedDir(abs, extensions);
+          // The just-finished ingest makes the watcher's catch-up scan a
+          // pure hash-dedup pass — no LLM calls. Don't hold the response.
+          void ensureWebWatcher()
+            .add(abs)
+            .catch((e) => console.error(`watch: ✗ ${abs}: ${e instanceof Error ? e.message : String(e)}`));
+          watching = true;
+        }
+        emit({ type: "done", results, watching, stats: await engine.stats() });
       } catch (e) {
         emit({ type: "error", error: e instanceof Error ? e.message : String(e) });
       }
@@ -320,9 +343,13 @@ const server = createServer(async (req, res) => {
       // One uploaded file at a time (the browser folder picker can't hand us a
       // server path, so it ships file contents instead). Text files arrive as
       // `text`; PDFs and other binaries arrive base64-encoded in `dataBase64`.
+      // `relPath` (folder/sub/file.md) keys the document when present, so two
+      // same-named files in different folders don't replace each other and a
+      // synced folder's re-uploads update the right document.
       // 60 MB cap leaves room for a large PDF plus base64's ~33% overhead.
-      const { name, text, dataBase64 } = JSON.parse(await readBody(req, 60_000_000)) as {
+      const { name, relPath, text, dataBase64 } = JSON.parse(await readBody(req, 60_000_000)) as {
         name?: string;
+        relPath?: string;
         text?: string;
         dataBase64?: string;
       };
@@ -337,7 +364,10 @@ const server = createServer(async (req, res) => {
       }
       if (!content.trim()) return json(res, 200, { skipped: true, name, empty: true });
 
-      const result = await engine.ingest(content, { title: name, source: name });
+      const result = await engine.ingest(content, {
+        title: name,
+        source: relPath?.trim() || name,
+      });
       json(res, 200, { result, stats: await engine.stats() });
       return;
     }
@@ -358,6 +388,40 @@ const server = createServer(async (req, res) => {
     json(res, 500, { error: e instanceof Error ? e.message : String(e) });
   }
 });
+
+// In-process auto-watch. Created lazily: by CONTEXT_GRAPH_WATCH=1 at startup
+// (resumes registered folders), or the first time the UI ingests a server
+// path with "keep watching" enabled.
+let webWatcher: GraphWatcher | undefined;
+
+function ensureWebWatcher(): GraphWatcher {
+  return (webWatcher ??= new GraphWatcher(engine, {
+    onEvent: (event) => {
+      if (event.type === "ingested" && !event.result.skipped) {
+        console.log(`watch: ✓ ${event.result.title} (+${event.result.nodesCreated} entities)`);
+      } else if (event.type === "deleted") {
+        console.log(`watch: • ${event.file} deleted (knowledge kept)`);
+      } else if (event.type === "error") {
+        console.error(`watch: ✗ ${event.file}: ${event.error}`);
+      }
+    },
+  }));
+}
+
+if (process.env.CONTEXT_GRAPH_WATCH === "1") {
+  const dirs = engine.listWatchedDirs();
+  if (dirs.length > 0) {
+    for (const wd of dirs) {
+      ensureWebWatcher()
+        .add(wd.dir)
+        .catch((err) =>
+          console.error(`watch: ✗ ${wd.dir}: ${err instanceof Error ? err.message : String(err)}`),
+        );
+    }
+  } else {
+    console.log("CONTEXT_GRAPH_WATCH=1 but no folders are registered — run: context-graph watch <dir>");
+  }
+}
 
 server.listen(PORT, HOST, () => {
   const p = providerStatus();

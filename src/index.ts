@@ -24,7 +24,12 @@ export type {
   ContributeResult,
   RepoIngestOptions,
   RepoIngestResult,
+  WatchedDir,
 } from "./engine.js";
+
+export { DOC_EXTENSIONS } from "./ingest/fs.js";
+export { GraphWatcher } from "./watch.js";
+export type { WatchOptions, WatchEvent } from "./watch.js";
 
 export type {
   EngineConfig,

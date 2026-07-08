@@ -345,6 +345,24 @@
   details.server-path .grow-hint code { font-family: var(--mono); font-size: 11.5px; }
   details.server-path[open] { padding-bottom: var(--s1); }
   details.server-path > *:not(summary) { margin-top: var(--s2); }
+  .watch-opt {
+    display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .watch-opt input { accent-color: var(--verdant); }
+
+  .sync-pill {
+    display: flex; align-items: center; gap: 8px; margin-top: var(--s3);
+    padding: 8px 12px; border: 1px solid var(--verdant); border-radius: var(--r-sm);
+    background: var(--verdant-soft); font-size: 12.5px; color: var(--ink-soft);
+  }
+  .sync-pill .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--verdant); flex: none;
+    animation: sync-pulse 2s ease-in-out infinite;
+  }
+  .sync-pill #folder-sync-text { flex: 1; min-width: 0; }
+  .sync-pill .btn { padding: 3px 10px; font-size: 12px; }
+  @keyframes sync-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
   .doc-row {
     display: flex; gap: var(--s2); align-items: baseline; padding: 7px 4px;
@@ -488,12 +506,18 @@
           <input type="file" id="files-input" multiple accept=".pdf,.md,.markdown,.txt" hidden />
           <input type="file" id="folder-input" webkitdirectory multiple hidden />
           <div class="picker-row">
-            <button class="btn quiet" id="choose-folder-btn" type="button">Choose a folder…</button>
+            <button class="btn quiet" id="choose-folder-btn" type="button" title="The folder keeps syncing while this tab is open">Connect a folder…</button>
+          </div>
+          <div id="folder-sync" class="sync-pill hidden">
+            <span class="dot"></span>
+            <span id="folder-sync-text"></span>
+            <button class="btn quiet" id="folder-sync-stop" type="button">Stop</button>
           </div>
           <details class="server-path">
             <summary>Ingest a path on the server</summary>
             <p class="grow-hint">Reads a file or folder from the server's own disk — in Docker, that's the mounted <code>/docs</code>.</p>
             <input class="dir" id="ingest-input" placeholder="/path/to/docs or /path/to/file.md" />
+            <label class="watch-opt"><input type="checkbox" id="watch-check" /> Keep watching — future changes are ingested automatically</label>
             <button class="btn quiet" id="ingest-btn" type="button">Ingest server path</button>
           </details>
           <div id="ingest-progress" class="hidden">
@@ -1127,7 +1151,7 @@ $("ingest-btn").addEventListener("click", async () => {
     const r = await api("/api/ingest-dir", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dir }),
+      body: JSON.stringify({ dir, watch: $("watch-check").checked }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
@@ -1160,7 +1184,8 @@ $("ingest-btn").addEventListener("click", async () => {
           status.textContent =
             `✓ ${fresh.length} document${fresh.length === 1 ? "" : "s"} added` +
             (skipped ? ` (${skipped} already known, skipped)` : "") +
-            `, ${nodes} facts written or reinforced`;
+            `, ${nodes} facts written or reinforced` +
+            (ev.watching ? " — now watching this folder for changes" : "");
         } else if (ev.type === "error") {
           throw new Error(ev.error);
         }
@@ -1182,16 +1207,19 @@ $("ingest-btn").addEventListener("click", async () => {
 const UPLOAD_ACCEPT = /\.(pdf|md|markdown|txt)$/i;
 
 // Base64-encode file bytes in chunks (fromCharCode.apply chokes on huge arrays).
+// The relative path (from a folder pick or live sync) keys the document on the
+// server, so same-named files in different subfolders stay distinct.
 async function fileToPayload(file) {
+  const relPath = file._relPath || file.webkitRelativePath || undefined;
   if (/\.pdf$/i.test(file.name)) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let binary = "";
     for (let i = 0; i < bytes.length; i += 0x8000) {
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     }
-    return { name: file.name, dataBase64: btoa(binary) };
+    return { name: file.name, relPath, dataBase64: btoa(binary) };
   }
-  return { name: file.name, text: await file.text() };
+  return { name: file.name, relPath, text: await file.text() };
 }
 
 $("dropzone").addEventListener("click", () => $("files-input").click());
@@ -1206,7 +1234,20 @@ $("dropzone").addEventListener("drop", (e) => {
   if (ingestBusy) return;
   uploadFiles(Array.from(e.dataTransfer.files || []), "files");
 });
-$("choose-folder-btn").addEventListener("click", () => $("folder-input").click());
+$("choose-folder-btn").addEventListener("click", async () => {
+  // Chromium: keep a handle to the picked folder and live-sync it while the
+  // tab is open. Elsewhere: fall back to the classic one-shot folder upload.
+  if (!window.showDirectoryPicker) return $("folder-input").click();
+  try {
+    const handle = await showDirectoryPicker({ mode: "read" });
+    await startFolderSync(handle);
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      $("ingest-status").className = "grow-status err";
+      $("ingest-status").textContent = "Could not open the folder: " + e.message;
+    }
+  }
+});
 $("files-input").addEventListener("change", (e) => uploadPicked(e, "files"));
 $("folder-input").addEventListener("change", (e) => uploadPicked(e, "folder"));
 
@@ -1276,6 +1317,105 @@ async function uploadFiles(all, kind) {
   }
 }
 
+/* ---------- live folder sync (File System Access API, Chromium) ----------
+   The picked folder's handle stays with the page: every few seconds it is
+   re-scanned and files whose size/mtime moved are re-uploaded, so the graph
+   keeps evolving while the tab is open. Deletions are ignored on purpose —
+   the graph is append-only. */
+const SYNC_INTERVAL_MS = 5000;
+const SYNC_SKIP = new Set(["node_modules", "dist", "build", "out", "target", "vendor", "coverage", "__pycache__", "venv"]);
+const SYNC_MAX_BYTES = 1_000_000;
+let folderSync = null; // { handle, name, state: Map<rel, sig>, timer, busy }
+
+async function collectFolderFiles(handle, name) {
+  const files = [];
+  const state = new Map();
+  async function walk(dir, prefix) {
+    for await (const entry of dir.values()) {
+      if (entry.name.startsWith(".") || SYNC_SKIP.has(entry.name)) continue;
+      if (entry.kind === "directory") {
+        await walk(entry, prefix + entry.name + "/");
+      } else if (UPLOAD_ACCEPT.test(entry.name)) {
+        const f = await entry.getFile();
+        if (f.size > SYNC_MAX_BYTES) continue;
+        const rel = prefix + entry.name;
+        state.set(rel, f.size + ":" + f.lastModified);
+        f._relPath = name + "/" + rel;
+        f._rel = rel;
+        files.push(f);
+      }
+    }
+  }
+  await walk(handle, "");
+  return { files, state };
+}
+
+function renderSyncPill(msg) {
+  $("folder-sync-text").textContent = msg;
+  $("folder-sync").classList.remove("hidden");
+}
+
+async function startFolderSync(handle) {
+  stopFolderSync();
+  const session = { handle, name: handle.name, state: new Map(), timer: null, busy: false };
+  folderSync = session;
+  renderSyncPill(`Scanning “${handle.name}”…`);
+  const { files, state } = await collectFolderFiles(handle, handle.name);
+  session.state = state;
+  await uploadFiles(files, "folder"); // the usual progress UI for the first sweep
+  if (folderSync !== session) return; // stopped or replaced mid-sweep
+  session.timer = setInterval(syncTick, SYNC_INTERVAL_MS);
+  renderSyncPill(`Watching “${handle.name}” — ${state.size} files. Edits sync while this tab is open.`);
+}
+
+function stopFolderSync() {
+  if (!folderSync) return;
+  clearInterval(folderSync.timer);
+  folderSync = null;
+  $("folder-sync").classList.add("hidden");
+}
+$("folder-sync-stop").addEventListener("click", stopFolderSync);
+
+async function syncTick() {
+  const session = folderSync;
+  if (!session || session.busy || ingestBusy) return;
+  session.busy = true;
+  try {
+    const { files, state } = await collectFolderFiles(session.handle, session.name);
+    const changed = files.filter((f) => session.state.get(f._rel) !== state.get(f._rel));
+    session.state = state; // forgets deleted entries too — harmless, append-only
+    let synced = 0;
+    for (const f of changed) {
+      if (folderSync !== session) return; // stopped mid-batch
+      const r = await api("/api/ingest-upload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(await fileToPayload(f)),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.result && !data.result.skipped) synced++;
+      }
+    }
+    if (synced && folderSync === session) {
+      refreshStats().catch(() => {});
+      refreshGraph({ diff: true }).catch(() => {});
+      refreshDocs().catch(() => {});
+      const at = new Date().toLocaleTimeString();
+      renderSyncPill(`Watching “${session.name}” — synced ${synced} change${synced === 1 ? "" : "s"} at ${at}.`);
+    }
+  } catch (e) {
+    // Permission revoked or the folder went away — stop cleanly, not noisily.
+    if (folderSync === session) {
+      clearInterval(session.timer);
+      folderSync = null;
+      renderSyncPill(`Sync stopped: ${e.message}`);
+    }
+    return;
+  }
+  session.busy = false;
+}
+
 /* ---------- documents ---------- */
 const DOCS_PREVIEW = 10;
 let docsExpanded = false;
@@ -1329,6 +1469,25 @@ async function refreshDocs() {
     $("ask-form").requestSubmit();
   }
 })();
+
+/* ---------- live updates ----------
+   When the server runs with an auto-watcher (CONTEXT_GRAPH_WATCH=1), the graph
+   grows on its own as watched folders change. A cheap stats poll notices and
+   refreshes the heavier graph/docs views only when the counts actually moved. */
+let liveCounts = null;
+setInterval(async () => {
+  try {
+    const s = await refreshStats();
+    const counts = `${s.documents}|${s.nodes}|${s.edges}|${s.chunks}`;
+    if (liveCounts !== null && counts !== liveCounts) {
+      refreshGraph({ diff: true }).catch(() => {});
+      refreshDocs().catch(() => {});
+    }
+    liveCounts = counts;
+  } catch {
+    /* offline or token prompt pending — try again next tick */
+  }
+}, 10_000);
 </script>
 </body>
 </html>

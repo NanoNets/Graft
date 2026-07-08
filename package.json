@@ -50,6 +50,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
+    "chokidar": "^4.0.3",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "openai": "^6.45.0",

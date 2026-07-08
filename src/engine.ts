@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync, statSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { extractPdfText, isPdfPath } from "./ingest/pdf.js";
+import { DOC_EXTENSIONS, walkDir } from "./ingest/fs.js";
 import { buildGraphExport, type GraphExport } from "./graph/export.js";
 import type { GraphStore } from "./graph/store.js";
 import { SqliteStore } from "./graph/sqlite-store.js";
@@ -87,6 +88,19 @@ export interface RepoIngestResult {
 /** file path → { content hash, cached summary } */
 type RepoSummaryCache = Record<string, { hash: string; summary: string }>;
 
+/** A folder registered for auto-watching (see `context-graph watch`). */
+export interface WatchedDir {
+  /** Absolute path of the watched directory. */
+  dir: string;
+  /** Extensions to ingest; undefined means {@link DOC_EXTENSIONS}. */
+  extensions?: string[];
+  /** ISO timestamp of when the folder was first registered. */
+  addedAt: string;
+}
+
+/** absolute dir → registry entry (persisted as watched-dirs.json next to the db) */
+type WatchRegistry = Record<string, { extensions?: string[]; addedAt: string }>;
+
 /**
  * The Context Graph Engine.
  *
@@ -101,6 +115,7 @@ export class ContextGraphEngine {
   private _extractor?: Extractor;
   private _summarizer?: Summarizer;
   private _memRepoCache: RepoSummaryCache = {};
+  private _memWatchRegistry: WatchRegistry = {};
 
   constructor(config: EngineConfig = {}) {
     this.cfg = resolveConfig(config);
@@ -267,7 +282,7 @@ export class ContextGraphEngine {
       onProgress?: (info: { index: number; total: number; file: string }) => void;
     } = {},
   ): Promise<IngestResult[]> {
-    const exts = opts.extensions ?? [".pdf", ".md", ".markdown", ".txt"];
+    const exts = opts.extensions ?? DOC_EXTENSIONS;
     const files = walkDir(dir).filter((f) => exts.some((e) => f.toLowerCase().endsWith(e)));
     const results: IngestResult[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -361,6 +376,66 @@ export class ContextGraphEngine {
       );
     }
     return result;
+  }
+
+  /** Path of the watch registry, or undefined for in-memory graphs. */
+  private get watchRegistryPath(): string | undefined {
+    if (this.cfg.dbPath === ":memory:") return undefined;
+    return join(dirname(this.cfg.dbPath), "watched-dirs.json");
+  }
+
+  private loadWatchRegistry(): WatchRegistry {
+    const path = this.watchRegistryPath;
+    if (!path) return this._memWatchRegistry;
+    if (!existsSync(path)) return {};
+    try {
+      return JSON.parse(readFileSync(path, "utf8")) as WatchRegistry;
+    } catch {
+      return {};
+    }
+  }
+
+  private saveWatchRegistry(registry: WatchRegistry): void {
+    const path = this.watchRegistryPath;
+    if (!path) {
+      this._memWatchRegistry = registry;
+      return;
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(registry, null, 2));
+  }
+
+  /** Folders registered for auto-watching, in registration order. */
+  listWatchedDirs(): WatchedDir[] {
+    return Object.entries(this.loadWatchRegistry()).map(([dir, entry]) => ({ dir, ...entry }));
+  }
+
+  /**
+   * Register a folder for auto-watching (see `context-graph watch`). The
+   * registry lives in `watched-dirs.json` next to the db — machine-local
+   * paths deliberately stay out of the git-synced graph. Idempotent; the
+   * extensions of an existing entry are updated in place.
+   */
+  addWatchedDir(dir: string, extensions?: string[]): WatchedDir {
+    const abs = resolve(dir);
+    const registry = this.loadWatchRegistry();
+    const entry = {
+      extensions: extensions ?? registry[abs]?.extensions,
+      addedAt: registry[abs]?.addedAt ?? new Date().toISOString(),
+    };
+    registry[abs] = entry;
+    this.saveWatchRegistry(registry);
+    return { dir: abs, ...entry };
+  }
+
+  /** Unregister a watched folder. Returns false if it wasn't registered. */
+  removeWatchedDir(dir: string): boolean {
+    const abs = resolve(dir);
+    const registry = this.loadWatchRegistry();
+    if (!(abs in registry)) return false;
+    delete registry[abs];
+    this.saveWatchRegistry(registry);
+    return true;
   }
 
   /** Path of the file-summary cache, or undefined for in-memory graphs. */
@@ -504,46 +579,6 @@ export class ContextGraphEngine {
   async close(): Promise<void> {
     await this._store?.close();
   }
-}
-
-/** Directories that are dependency/build output, never knowledge. */
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "build",
-  "out",
-  "target",
-  "vendor",
-  "coverage",
-  "__pycache__",
-  "venv",
-]);
-
-/** Files above this size are generated/vendored in practice, not written docs or code. */
-const MAX_FILE_BYTES = 1_000_000;
-
-/**
- * Recursively list all files under a directory. Skips dot-directories,
- * dependency/build directories (node_modules, dist, …), and files over 1 MB.
- */
-function walkDir(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      out.push(...walkDir(full));
-    } else if (entry.isFile()) {
-      try {
-        if (statSync(full).size > MAX_FILE_BYTES) continue;
-      } catch {
-        continue;
-      }
-      out.push(full);
-    }
-  }
-  return out;
 }
 
 /** Run `fn` over `items` with at most `limit` in flight at once, preserving order. */
