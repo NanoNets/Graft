@@ -343,6 +343,37 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+
+/* ---------- access token (shared/team deployments) ---------- */
+// A share link carries ?token=…; stash it and strip it from the address bar.
+(function pickUpToken() {
+  const params = new URLSearchParams(location.search);
+  const t = params.get("token");
+  if (t) {
+    localStorage.setItem("cg-token", t.trim());
+    params.delete("token");
+    const qs = params.toString();
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+  }
+})();
+
+async function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const token = localStorage.getItem("cg-token");
+  if (token) headers["authorization"] = "Bearer " + token;
+  const r = await fetch(path, { ...opts, headers });
+  if (r.status === 401) {
+    const t = window.prompt(
+      "This graph is protected. Paste the access token (shown where the server was started, or in your share link):",
+    );
+    if (t && t.trim()) {
+      localStorage.setItem("cg-token", t.trim());
+      return api(path, opts);
+    }
+    throw new Error("access token required");
+  }
+  return r;
+}
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const COLOR_BASE = { background: "#b8c2ba", border: "#93a098" };
@@ -368,7 +399,7 @@ function receiptHtml(confidence, observations, sourceCount) {
 
 /* ---------- stats + provider ---------- */
 async function refreshStats() {
-  const s = await (await fetch("/api/stats")).json();
+  const s = await (await api("/api/stats")).json();
   $("stat-nodes").textContent = s.nodes;
   $("stat-edges").textContent = s.edges;
   $("stat-docs").textContent = s.documents;
@@ -396,7 +427,7 @@ function nodeVisual(n) {
 }
 
 async function refreshGraph({ diff = false } = {}) {
-  const g = await (await fetch("/api/graph")).json();
+  const g = await (await api("/api/graph")).json();
   $("atlas-empty").classList.toggle("hidden", g.nodes.length > 0);
 
   const freshIds = [];
@@ -585,7 +616,7 @@ $("ask-form").addEventListener("submit", async (ev) => {
   $("answer-body").innerHTML = '<span class="thinking">Consulting the graph…</span>';
   $("facts").innerHTML = ""; $("edges").innerHTML = ""; $("sources").innerHTML = "";
   try {
-    const r = await fetch("/api/ask", {
+    const r = await api("/api/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ question: q }),
@@ -626,7 +657,7 @@ $("teach-btn").addEventListener("click", async () => {
   status.className = "grow-status";
   status.textContent = "Extracting entities and folding them in…";
   try {
-    const r = await fetch("/api/contribute", {
+    const r = await api("/api/contribute", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ learning }),
@@ -659,7 +690,7 @@ $("ingest-btn").addEventListener("click", async () => {
   status.className = "grow-status";
   status.textContent = "Scanning " + dir + " …";
   try {
-    const r = await fetch("/api/ingest-dir", {
+    const r = await api("/api/ingest-dir", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ dir }),
@@ -716,7 +747,7 @@ $("ingest-btn").addEventListener("click", async () => {
 
 /* ---------- documents ---------- */
 async function refreshDocs() {
-  const docs = await (await fetch("/api/documents")).json();
+  const docs = await (await api("/api/documents")).json();
   $("docs-count").textContent = docs.length;
   $("docs").innerHTML = docs.slice(0, 30).map((d) => `
     <div class="doc-row">

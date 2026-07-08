@@ -9,12 +9,16 @@
  *
  * Env: CONTEXT_GRAPH_DB (graph file), PORT (default 4680),
  *      HOST (default 127.0.0.1 — set 0.0.0.0 to expose on a network, e.g. Docker),
+ *      CONTEXT_GRAPH_WEB_TOKEN (access token for /api; auto-generated and
+ *      printed at startup whenever the server is exposed beyond loopback),
  *      OPENROUTER_API_KEY (optional — enables synthesized answers + ingest
  *      extraction; without it retrieval and the graph view stay fully local).
  */
 import "dotenv/config";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, existsSync, statSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { resolve } from "node:path";
 import OpenAI from "openai";
 import { ContextGraphEngine } from "./engine.js";
@@ -92,6 +96,37 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
+/**
+ * Access token for the API. On the loopback default no token is needed — the
+ * OS already gates who can reach the port. The moment the server is exposed
+ * beyond loopback (HOST=0.0.0.0, Docker, a VPS) a token is required: taken
+ * from CONTEXT_GRAPH_WEB_TOKEN, or generated fresh and printed at startup.
+ */
+const EXPOSED = !LOCAL_HOSTNAMES.has(HOST);
+const WEB_TOKEN =
+  process.env.CONTEXT_GRAPH_WEB_TOKEN?.trim() ||
+  (EXPOSED ? randomBytes(18).toString("base64url") : undefined);
+
+function isAuthorized(req: IncomingMessage): boolean {
+  if (!WEB_TOKEN) return true;
+  const header = req.headers.authorization ?? "";
+  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+  // Hash both sides so timingSafeEqual gets equal-length buffers.
+  const a = createHash("sha256").update(presented).digest();
+  const b = createHash("sha256").update(WEB_TOKEN).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** Best-guess LAN address, to print a ready-to-share URL at startup. */
+function lanAddress(): string | undefined {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  }
+  return undefined;
+}
+
 function hostnameOf(headerValue: string | undefined): string | undefined {
   if (!headerValue) return undefined;
   try {
@@ -138,23 +173,29 @@ const server = createServer(async (req, res) => {
   try {
     if (rejectForeignRequest(req, res)) return;
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      // The page itself is public — it holds no data. All data flows through
+      // /api/*, which is what the token gates.
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(readFileSync(uiPath, "utf8"));
       return;
     }
 
+    if (url.pathname.startsWith("/api/") && !isAuthorized(req)) {
+      return json(res, 401, { error: "access token required" });
+    }
+
     if (req.method === "GET" && url.pathname === "/api/stats") {
-      json(res, 200, { ...engine.stats(), provider: providerStatus() });
+      json(res, 200, { ...(await engine.stats()), provider: providerStatus() });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/graph") {
-      json(res, 200, engine.exportGraph());
+      json(res, 200, await engine.exportGraph());
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/documents") {
-      json(res, 200, engine.store.allDocuments());
+      json(res, 200, await engine.store.allDocuments());
       return;
     }
 
@@ -196,7 +237,7 @@ const server = createServer(async (req, res) => {
         const results = await engine.ingestDir(abs, {
           onProgress: (info) => emit({ type: "progress", ...info }),
         });
-        emit({ type: "done", results, stats: engine.stats() });
+        emit({ type: "done", results, stats: await engine.stats() });
       } catch (e) {
         emit({ type: "error", error: e instanceof Error ? e.message : String(e) });
       }
@@ -211,7 +252,7 @@ const server = createServer(async (req, res) => {
       };
       if (!learning?.trim()) return json(res, 400, { error: "learning is required" });
       const result = await engine.contribute(learning, { agentId: agentId || "web-user" });
-      json(res, 200, { ...result, stats: engine.stats() });
+      json(res, 200, { ...result, stats: await engine.stats() });
       return;
     }
 
@@ -224,8 +265,11 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   const p = providerStatus();
   console.log(`Context Graph web UI  →  http://localhost:${PORT}`);
-  if (!LOCAL_HOSTNAMES.has(HOST)) {
-    console.log(`  listening on ${HOST} — exposed beyond this machine; put auth in front for shared deployments`);
+  if (EXPOSED && WEB_TOKEN) {
+    const lan = lanAddress();
+    console.log(`  access token: ${WEB_TOKEN}`);
+    if (lan) console.log(`  share with your team:  http://${lan}:${PORT}/?token=${WEB_TOKEN}`);
+    else console.log(`  share:  http://<this-machine>:${PORT}/?token=${WEB_TOKEN}`);
   }
   console.log(`  graph db:    ${p.db}`);
   console.log(`  extraction:  ${p.extraction} (${p.model})`);
