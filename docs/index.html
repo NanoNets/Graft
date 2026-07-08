@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Context Graph Engine — your team's answers, with receipts</title>
-<meta name="description" content="Open-source, self-hosted team brain. Point it at a folder of docs and get cited answers backed by a knowledge graph with confidence that grows with use." />
+<meta name="description" content="Open-source, self-hosted team brain. Connect a folder of docs and get cited answers backed by a knowledge graph that keeps evolving as your files change." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -527,9 +527,9 @@
       <p class="eyebrow">Open source · Self-hosted · MIT</p>
       <h1>Your team's answers, <em>with receipts.</em></h1>
       <p class="hero-sub">
-        Point it at a folder of docs. It builds a knowledge graph and answers
-        questions with citations — and a confidence score that grows every time
-        a fact is seen again.
+        Connect a folder of docs. It builds a knowledge graph and answers
+        questions with citations — and keeps watching the folder, so every
+        edit and new file flows into an evolving graph on its own.
       </p>
       <div class="hero-actions">
         <button class="cmd" id="copy-cmd" type="button" aria-label="Copy install command">
@@ -552,7 +552,7 @@
         <span class="corner bl"></span><span class="corner br"></span>
         <div class="ledger-head">
           <span>graph.db — 3 docs · 47 nodes</span>
-          <span class="live"><i></i>ledger</span>
+          <span class="live"><i></i>watching ./docs</span>
         </div>
         <div class="ledger-body">
           <p class="lq"><span class="prompt">?</span><span id="lq-text"></span><span class="caret" id="lq-caret"></span></p>
@@ -574,7 +574,7 @@
         </div>
         <div class="ledger-foot">
           <span>every claim traces to a source</span>
-          <span class="tick" id="tick">observation added · 68% → 74%</span>
+          <span class="tick" id="tick">deploys.md changed · re-ingested · 68% → 74%</span>
         </div>
       </div>
     </div>
@@ -586,20 +586,20 @@
     <p class="kicker">How it works</p>
     <h2>A folder in, a brain out.</h2>
     <p class="section-sub">
-      No pipelines to configure and nothing to label. The graph builds itself
-      from whatever your team already writes.
+      No pipelines to configure and nothing to label. Connect a folder once —
+      the graph builds itself, then keeps up as your team keeps writing.
     </p>
     <div class="steps">
       <div class="step">
         <p class="n">01</p>
-        <h3>Drop your docs</h3>
-        <p>Markdown, PDFs, Notion or Drive exports — ingest a whole directory in one command.</p>
-        <div class="art">$ context-graph ingest ./docs<br /><b>12 files</b> → 214 chunks → <span class="hl">embedded</span></div>
+        <h3>Connect your docs</h3>
+        <p>Markdown, PDFs, Notion or Drive exports — connect a folder once and it stays watched: edits and new files are re-ingested automatically.</p>
+        <div class="art">$ context-graph watch ./docs<br /><b>12 files</b> → <span class="hl">embedded</span> · watching for changes</div>
       </div>
       <div class="step">
         <p class="n">02</p>
-        <h3>The graph builds itself</h3>
-        <p>An LLM extracts entities and relationships. Duplicates merge; every fact keeps its provenance.</p>
+        <h3>The graph evolves</h3>
+        <p>An LLM extracts entities and relationships. Duplicates merge, changed docs replace their old version, and every fact keeps its provenance.</p>
         <div class="art"><b>Priya</b> ──owns──▸ <b>release sign-off</b><br /><span class="hl">confidence 0.74</span> · seen in 3 places</div>
       </div>
       <div class="step">
