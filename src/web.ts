@@ -104,6 +104,12 @@ export interface WebApp {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
   /** True if a presented bearer token authorizes /api access (always true when unguarded). */
   isAuthorized: (req: IncomingMessage) => boolean;
+  /**
+   * Browser-facing hardening (DNS-rebinding / CSRF): returns true and writes an
+   * error response if the request should be rejected. Callers that route around
+   * {@link WebApp.handler} (e.g. `serve`'s `/mcp`) must run this first.
+   */
+  rejectForeignRequest: (req: IncomingMessage, res: ServerResponse) => boolean;
   /** Whether the server is exposed beyond loopback (a token is then required). */
   exposed: boolean;
   /** The active access token, if any. */
@@ -437,6 +443,7 @@ export function createWebApp(opts: WebAppOptions): WebApp {
   return {
     handler,
     isAuthorized,
+    rejectForeignRequest,
     exposed: EXPOSED,
     webToken: WEB_TOKEN,
     sharePath: SHARE_PATH,

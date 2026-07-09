@@ -140,6 +140,11 @@ export async function startServe(opts: ServeOptions = {}): Promise<RunningServer
   const transports: Record<string, StreamableHTTPServerTransport> = {};
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Same browser hardening as the web handler: on a loopback bind, reject
+    // foreign Host/Origin headers (DNS-rebinding / CSRF) before doing anything.
+    // /mcp routes around app.handler, so this guard must be applied explicitly.
+    if (app.rejectForeignRequest(req, res)) return;
+
     // Gate /mcp with the same bearer token the web /api uses when exposed.
     if (app.exposed && !app.isAuthorized(req)) {
       res.writeHead(401, { "content-type": "application/json" });

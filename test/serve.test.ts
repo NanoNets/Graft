@@ -5,6 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { ContextGraphEngine } from "../src/index.js";
 import { startServe } from "../src/serve.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -68,6 +69,39 @@ test("serve requires no token on loopback and 404s unknown paths", async () => {
       body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
     });
     assert.equal(bad.status, 400);
+  } finally {
+    await server.close();
+  }
+});
+
+test("serve rejects /mcp requests with a foreign Host header (DNS-rebinding defense)", async () => {
+  const engine = new ContextGraphEngine({ dbPath: ":memory:", ...fakeProviders() });
+  const server = await startServe({ engine, host: "127.0.0.1", port: 0, watch: false });
+  try {
+    // fetch() forbids setting Host, so drive a raw request with a spoofed host —
+    // the shape a DNS-rebinding attack takes (browser rebinds evil.com → 127.0.0.1).
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port: server.port,
+          path: "/mcp",
+          method: "POST",
+          headers: {
+            host: "evil.example.com",
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+    });
+    assert.equal(status, 403, "a foreign Host header is rejected on /mcp, not just /api");
   } finally {
     await server.close();
   }
