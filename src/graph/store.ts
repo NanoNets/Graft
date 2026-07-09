@@ -52,11 +52,18 @@ export interface GraphStore {
   /** Every node in the graph (for export/visualization). */
   allNodes(): Promise<GraphNode[]>;
   upsertNode(node: GraphNode): Promise<void>;
+  /**
+   * Delete a node and (via the edge foreign keys) every edge incident to it.
+   * Used by the pruning path when a node's last supporting source disappears.
+   */
+  deleteNode(id: string): Promise<void>;
 
   // --- edges ---
   /** Existing edge with the same (source, target, relation), if any. */
   findEdge(sourceId: string, targetId: string, relation: string): Promise<GraphEdge | undefined>;
   upsertEdge(edge: GraphEdge): Promise<void>;
+  /** Delete a single edge by id (used when its last supporting source disappears). */
+  deleteEdge(id: string): Promise<void>;
   /** All edges incident to any of the given node ids. */
   edgesForNodes(nodeIds: string[]): Promise<GraphEdge[]>;
   /** Every edge in the graph (for export/visualization). */

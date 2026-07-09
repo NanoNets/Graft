@@ -400,7 +400,9 @@ function ensureWebWatcher(): GraphWatcher {
       if (event.type === "ingested" && !event.result.skipped) {
         console.log(`watch: ✓ ${event.result.title} (+${event.result.nodesCreated} entities)`);
       } else if (event.type === "deleted") {
-        console.log(`watch: • ${event.file} deleted (knowledge kept)`);
+        const p = event.pruned;
+        const detail = p ? ` (pruned ${p.nodesRemoved} entities, ${p.edgesRemoved} relationships)` : "";
+        console.log(`watch: • ${event.file} deleted${detail}`);
       } else if (event.type === "error") {
         console.error(`watch: ✗ ${event.file}: ${event.error}`);
       }

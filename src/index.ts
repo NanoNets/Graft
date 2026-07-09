@@ -22,6 +22,7 @@ export type {
   IngestResult,
   ContributeOptions,
   ContributeResult,
+  PruneResult,
   RepoIngestOptions,
   RepoIngestResult,
   WatchedDir,

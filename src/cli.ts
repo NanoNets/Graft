@@ -157,9 +157,14 @@ function logWatchEvent(event: WatchEvent): void {
           : `✓ ${event.result.title} — ${event.result.chunks} chunks, +${event.result.nodesCreated} nodes, +${event.result.edgesCreated} edges`,
       );
       break;
-    case "deleted":
-      console.log(`• ${event.file} — deleted (knowledge kept, graph is append-only)`);
+    case "deleted": {
+      const p = event.pruned;
+      const detail = p
+        ? ` (pruned ${p.nodesRemoved} entities, ${p.edgesRemoved} relationships; ${p.nodesDecayed} decayed)`
+        : "";
+      console.log(`• ${event.file} — deleted${detail}`);
       break;
+    }
     case "error":
       console.error(`✗ ${event.file}: ${event.error}`);
       break;

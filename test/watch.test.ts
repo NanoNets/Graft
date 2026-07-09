@@ -134,7 +134,7 @@ test("editing a file replaces its document instead of piling up copies", async (
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("deleting a file keeps its knowledge (append-only)", async () => {
+test("deleting a file prunes the facts only it supported", async () => {
   const dir = tempDir();
   const e = engine();
   const c = collector();
@@ -143,18 +143,114 @@ test("deleting a file keeps its knowledge (append-only)", async () => {
   writeFileSync(file, "[[Legacy System]] ==replaced_by==> [[New System]]");
   await w.add(dir);
   await w.idle();
-  const statsBefore = await e.stats();
+  assert.equal((await e.store.findNodesByName("legacy system")).length, 1);
 
   rmSync(file);
   await waitFor(() => c.of("deleted").length === 1, "the deletion to be observed");
   await w.idle();
 
-  assert.deepEqual(await e.stats(), statsBefore, "nothing is pruned on delete");
+  // The file was the only source for both entities and the relationship, so
+  // all of it decays out of the graph.
+  assert.equal((await e.store.findNodesByName("legacy system")).length, 0, "entity pruned");
+  assert.equal((await e.store.findNodesByName("new system")).length, 0, "entity pruned");
+  assert.deepEqual(await e.stats(), { documents: 0, nodes: 0, edges: 0, chunks: 0 });
   assert.equal(c.of("ingested").length, 1, "the delete triggered no ingest");
+
+  const deleted = c.of("deleted")[0];
+  assert.ok(deleted.type === "deleted" && deleted.pruned, "delete reports a prune result");
+  assert.equal(deleted.pruned.documentsRemoved, 1);
+  assert.equal(deleted.pruned.nodesRemoved, 2);
+  assert.equal(deleted.pruned.edgesRemoved, 1);
 
   await w.close();
   await e.close();
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("a shared fact survives when one of its sources is deleted", async () => {
+  const dir = tempDir();
+  const e = engine();
+  const c = collector();
+  const w = new GraphWatcher(e, { debounceMs: 50, onEvent: c.onEvent });
+  writeFileSync(join(dir, "a.md"), "[[Shared Service]] ==owns==> [[Cache]]");
+  writeFileSync(join(dir, "b.md"), "[[Shared Service]] ==owns==> [[Queue]]");
+  await w.add(dir);
+  await w.idle();
+  const shared = (await e.store.findNodesByName("shared service"))[0];
+  assert.equal(shared.observations, 2, "seen in both files");
+
+  rmSync(join(dir, "a.md"));
+  await waitFor(() => c.of("deleted").length === 1, "the deletion to be observed");
+  await w.idle();
+
+  // Shared Service and Queue live on (b.md still asserts them); Cache is gone.
+  assert.equal((await e.store.findNodesByName("shared service")).length, 1, "shared entity kept");
+  assert.equal((await e.store.findNodesByName("queue")).length, 1);
+  assert.equal((await e.store.findNodesByName("cache")).length, 0, "orphaned entity pruned");
+  const after = (await e.store.findNodesByName("shared service"))[0];
+  assert.equal(after.observations, 1, "confidence decayed to the remaining source");
+
+  await w.close();
+  await e.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a formatting-only save is skipped without re-extraction", async () => {
+  const dir = tempDir();
+  const e = engine();
+  const c = collector();
+  const w = new GraphWatcher(e, { debounceMs: 50, onEvent: c.onEvent });
+  const file = join(dir, "notes.md");
+  writeFileSync(file, "[[Payments]] ==charges==> [[Card]]");
+  await w.add(dir);
+  await w.idle();
+  assert.equal(c.of("ingested").filter((ev) => ev.type === "ingested" && !ev.result.skipped).length, 1);
+
+  // Reformat only: extra spaces, trailing whitespace, blank lines — same content.
+  writeFileSync(file, "  [[Payments]]   ==charges==>   [[Card]]  \n\n\n");
+  await waitFor(() => c.of("ingested").length === 2, "the reformat to be processed");
+  await w.idle();
+
+  const second = c.of("ingested")[1];
+  assert.ok(second.type === "ingested" && second.result.skipped, "reformat skipped, no LLM pass");
+  assert.equal((await e.stats()).documents, 1, "no new document");
+  assert.equal((await e.store.findNodesByName("payments"))[0].observations, 1, "not re-observed");
+
+  await w.close();
+  await e.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a meaningful edit decays facts dropped from the new version", async () => {
+  const e = engine();
+  await e.ingest("[[Alpha]] ==uses==> [[Beta]]", { source: "spec.md" });
+  await e.ingest("[[Alpha]] ==needs==> [[Gamma]]", { source: "spec.md" });
+
+  // Alpha appears in both versions and survives; Beta was dropped and decays;
+  // Gamma is new.
+  assert.equal((await e.store.findNodesByName("alpha")).length, 1, "kept across versions");
+  assert.equal((await e.store.findNodesByName("beta")).length, 0, "dropped fact pruned");
+  assert.equal((await e.store.findNodesByName("gamma")).length, 1, "new fact present");
+  assert.equal((await e.store.findNodesByName("alpha"))[0].observations, 1, "decayed to the live version");
+
+  const alphaId = (await e.store.findNodesByName("alpha"))[0].id;
+  const gammaId = (await e.store.findNodesByName("gamma"))[0].id;
+  assert.ok(await e.store.findEdge(alphaId, gammaId, "needs"), "new relationship exists");
+  assert.equal((await e.stats()).documents, 1, "still one document for the source");
+
+  await e.close();
+});
+
+test("pruning can be disabled, restoring grow-only behavior", async () => {
+  const e = new ContextGraphEngine({ dbPath: ":memory:", pruneSuperseded: false, ...fakeProviders() });
+  await e.ingest("[[One]] ==links==> [[Two]]", { source: "doc.md" });
+  await e.ingest("[[One]] ==links==> [[Three]]", { source: "doc.md" });
+
+  // With pruning off, the superseded "Two" lingers as before.
+  assert.equal((await e.store.findNodesByName("two")).length, 1, "stale fact retained when pruning is off");
+  assert.equal((await e.store.findNodesByName("three")).length, 1);
+
+  await e.close();
 });
 
 test("wrong extensions, oversized files, and skip-dirs are ignored", async () => {

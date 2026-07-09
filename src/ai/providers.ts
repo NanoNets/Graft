@@ -61,6 +61,16 @@ export interface EngineConfig {
    */
   mergeThreshold?: number;
 
+  /**
+   * When a changed file is re-ingested, prune the observations contributed by
+   * its now-superseded prior version: facts that survived into the new version
+   * are re-observed and stay, while facts that disappeared decay out (and orphan
+   * nodes/edges are removed). This is what keeps the graph fresh instead of
+   * accumulating stale facts forever. Env: CONTEXT_GRAPH_PRUNE (set to 0 to
+   * disable). Default: true.
+   */
+  pruneSuperseded?: boolean;
+
   // --- advanced: bring your own components ---
   /** Override the storage backend (defaults to a SQLite store at dbPath). */
   store?: GraphStore;
@@ -87,6 +97,7 @@ export interface ResolvedConfig {
   chunkSize: number;
   chunkOverlap: number;
   mergeThreshold: number;
+  pruneSuperseded: boolean;
   store?: GraphStore;
   embedder?: Embedder;
   extractor?: Extractor;
@@ -137,6 +148,9 @@ export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
     chunkSize: config.chunkSize ?? DEFAULTS.chunkSize,
     chunkOverlap: config.chunkOverlap ?? DEFAULTS.chunkOverlap,
     mergeThreshold: config.mergeThreshold ?? DEFAULTS.mergeThreshold,
+    pruneSuperseded:
+      config.pruneSuperseded ??
+      !["0", "false", "no"].includes((env.CONTEXT_GRAPH_PRUNE ?? "").toLowerCase()),
     store: config.store,
     embedder: config.embedder,
     extractor: config.extractor,

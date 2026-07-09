@@ -241,7 +241,8 @@ server.registerTool(
       "Connect a folder to the graph and keep it evolving: existing documents are ingested now, " +
       "and any file added or edited later is re-ingested automatically for as long as this session " +
       "lives. The folder is registered, so `context-graph watch` (or CONTEXT_GRAPH_AUTOWATCH=1) " +
-      "resumes it in future sessions. Append-only: deleting a file never removes learned knowledge.",
+      "resumes it in future sessions. Deleting a file forgets what it taught: its facts are pruned " +
+      "unless still supported by another source.",
     inputSchema: {
       dir: z.string().describe("Absolute path to the folder to watch."),
       extensions: z

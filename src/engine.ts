@@ -13,6 +13,7 @@ import { LocalEmbedder, OllamaExtractor } from "./ai/local.js";
 import { OllamaSummarizer, OpenRouterSummarizer, type Summarizer } from "./ai/summarize.js";
 import { chunkText } from "./ingest/chunker.js";
 import { mergeExtraction } from "./graph/merge.js";
+import { confidenceFromObservations, totalObservations } from "./graph/crdt.js";
 import { serializeGraph, importGraph, type ImportResult } from "./graph/serialize.js";
 import { retrieve, type RetrieveOptions } from "./retrieval/retriever.js";
 import type { ContextBundle, Chunk, Extraction, GraphStats } from "./graph/types.js";
@@ -50,6 +51,18 @@ export interface ContributeResult {
   nodesUpdated: number;
   edgesCreated: number;
   edgesUpdated: number;
+}
+
+/** Outcome of pruning stale observations (see {@link ContextGraphEngine.pruneDocuments}). */
+export interface PruneResult {
+  /** Nodes deleted because their last supporting observation was removed. */
+  nodesRemoved: number;
+  /** Nodes that lost an observation but retained others (confidence re-derived). */
+  nodesDecayed: number;
+  /** Edges deleted because their last supporting observation was removed. */
+  edgesRemoved: number;
+  /** Edges that lost an observation but retained others. */
+  edgesDecayed: number;
 }
 
 /** Extensions treated as source code by {@link ContextGraphEngine.ingestRepo}. */
@@ -215,9 +228,12 @@ export class ContextGraphEngine {
     // Same source, new content: the file changed, so replace its stale
     // document(s) instead of piling up superseded chunks. "inline" is the
     // catch-all source for pasted text and is exempt — many unrelated
-    // documents legitimately share it.
+    // documents legitimately share it. The prior ids are remembered so their
+    // observations can be pruned after the new content merges in (below).
+    const supersededIds: string[] = [];
     if (source !== "inline") {
       for (const prior of await this.store.documentsBySource(source)) {
+        supersededIds.push(prior.id);
         await this.store.deleteDocument(prior.id);
       }
     }
@@ -262,6 +278,15 @@ export class ContextGraphEngine {
       totals.nodesUpdated += r.nodesUpdated;
       totals.edgesCreated += r.edgesCreated;
       totals.edgesUpdated += r.edgesUpdated;
+    }
+
+    // Now that the new version has re-observed everything it still asserts,
+    // retire the superseded version's observations. Facts present in both
+    // versions keep the fresh observation; facts that vanished lose their last
+    // support and are pruned. Runs after the merge so a fact never briefly
+    // drops to zero observations mid-update.
+    if (this.cfg.pruneSuperseded && supersededIds.length > 0) {
+      await this.pruneDocuments(supersededIds);
     }
 
     return { documentId, title, skipped: false, chunks: pieces.length, ...totals };
@@ -568,6 +593,101 @@ export class ContextGraphEngine {
       edgesCreated: r.edgesCreated,
       edgesUpdated: r.edgesUpdated,
     };
+  }
+
+  /**
+   * Prune the observations contributed by one or more documents.
+   *
+   * For every node and edge, the given documents' observation keys are removed
+   * from the grow-only CRDT counter and provenance set, and `observations` /
+   * `confidence` are re-derived from what remains. A node or edge left with no
+   * supporting observation is deleted entirely (deleting a node cascades to its
+   * incident edges). Observations from *other* documents and from agent
+   * contributions are untouched — so a fact seen in several places survives the
+   * loss of any one of them.
+   *
+   * This is the counterpart to the grow-only merge: the deliberate, local
+   * write path that lets stale knowledge leave the graph.
+   */
+  async pruneDocuments(documentIds: string[]): Promise<PruneResult> {
+    const keys = new Set(documentIds.map((id) => `doc:${id}`));
+    const result: PruneResult = { nodesRemoved: 0, nodesDecayed: 0, edgesRemoved: 0, edgesDecayed: 0 };
+    if (keys.size === 0) return result;
+
+    // Nodes first. An orphaned node is removed, which cascades to its incident
+    // edges via the store's foreign keys — so we record those edge ids up front
+    // to count them, then let the cascade do the deletion.
+    const orphanedNodeIds: string[] = [];
+    for (const node of await this.store.allNodes()) {
+      let touched = false;
+      for (const key of keys) {
+        if (key in node.observationSources) {
+          delete node.observationSources[key];
+          touched = true;
+        }
+      }
+      if (!touched) continue;
+      node.provenance = node.provenance.filter((p) => !keys.has(p));
+      const total = totalObservations(node.observationSources);
+      if (total <= 0) {
+        orphanedNodeIds.push(node.id);
+      } else {
+        node.observations = total;
+        node.confidence = confidenceFromObservations(total);
+        await this.store.upsertNode(node);
+        result.nodesDecayed += 1;
+      }
+    }
+
+    // Edges that will vanish with their endpoints, counted before the cascade.
+    const cascadedEdgeIds = new Set(
+      orphanedNodeIds.length > 0
+        ? (await this.store.edgesForNodes(orphanedNodeIds)).map((e) => e.id)
+        : [],
+    );
+    for (const id of orphanedNodeIds) await this.store.deleteNode(id);
+    result.nodesRemoved += orphanedNodeIds.length;
+    result.edgesRemoved += cascadedEdgeIds.size;
+
+    // Surviving edges that themselves lost their last observation. (Edges that
+    // already cascaded above are gone from the store and won't reappear here.)
+    for (const edge of await this.store.allEdges()) {
+      let touched = false;
+      for (const key of keys) {
+        if (key in edge.observationSources) {
+          delete edge.observationSources[key];
+          touched = true;
+        }
+      }
+      if (!touched) continue;
+      edge.provenance = edge.provenance.filter((p) => !keys.has(p));
+      const total = totalObservations(edge.observationSources);
+      if (total <= 0) {
+        await this.store.deleteEdge(edge.id);
+        result.edgesRemoved += 1;
+      } else {
+        edge.observations = total;
+        edge.confidence = confidenceFromObservations(total);
+        await this.store.upsertEdge(edge);
+        result.edgesDecayed += 1;
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Forget a source that no longer exists (e.g. a watched file was deleted):
+   * delete its document(s) and prune the observations they contributed. Returns
+   * the prune result plus how many documents were removed. A source with no
+   * documents is a no-op.
+   */
+  async forgetSource(source: string): Promise<PruneResult & { documentsRemoved: number }> {
+    const docs = await this.store.documentsBySource(source);
+    const ids = docs.map((d) => d.id);
+    for (const id of ids) await this.store.deleteDocument(id);
+    const pruned = await this.pruneDocuments(ids);
+    return { ...pruned, documentsRemoved: ids.length };
   }
 
   /** Current graph statistics. */

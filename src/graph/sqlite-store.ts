@@ -336,6 +336,12 @@ export class SqliteStore implements GraphStore {
       });
   }
 
+  async deleteNode(id: string): Promise<void> {
+    // Incident edges cascade via the source_id/target_id foreign keys
+    // (foreign_keys = ON, set in the constructor).
+    this.db.prepare(`DELETE FROM nodes WHERE id = ?`).run(id);
+  }
+
   private rowToNode(row: NodeRow): GraphNode {
     const observationSources = parseCounter(row.observation_sources, row.observations);
     return {
@@ -402,6 +408,10 @@ export class SqliteStore implements GraphStore {
         created_at: edge.createdAt,
         updated_at: edge.updatedAt,
       });
+  }
+
+  async deleteEdge(id: string): Promise<void> {
+    this.db.prepare(`DELETE FROM edges WHERE id = ?`).run(id);
   }
 
   async edgesForNodes(nodeIds: string[]): Promise<GraphEdge[]> {
