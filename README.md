@@ -41,6 +41,16 @@ Everything runs on your machine (the server binds to localhost only). Set `OPENR
 
 Running it for your whole team? One `docker compose up` gives everyone the same graph at one URL — see [Team sharing](#team-sharing).
 
+### Or run everything at once — `context-graph serve`
+
+```bash
+context-graph serve
+# → web UI      http://localhost:4680
+#   MCP (HTTP)  http://localhost:4680/mcp
+```
+
+One process runs the web UI, the MCP server (over HTTP), and the folder watcher on a single port over **one shared engine** — the supported way to run the whole thing at once, with no separate `watch` daemon to babysit. Open the UI, click **Connect a folder**, tick **Keep watching**, and that folder is ingested and watched live; it's remembered, so the next `serve` resumes it. Prefer the command line? Pass folders directly: `context-graph serve ./sample-docs`.
+
 ### Runs locally by default — keys are optional
 
 Out of the box the engine needs **no accounts and no cloud calls**:
@@ -159,6 +169,18 @@ Add to your Claude Code / MCP client config:
   }
 }
 ```
+
+Or, if you're running `context-graph serve`, point any MCP client at its HTTP endpoint instead of spawning a process:
+
+```json
+{
+  "mcpServers": {
+    "context-graph": { "type": "http", "url": "http://localhost:4680/mcp" }
+  }
+}
+```
+
+When the server is exposed beyond localhost, add `"headers": { "Authorization": "Bearer <access-token>" }` — the same token the web UI prints.
 
 The API-key env vars are optional — add `OPENROUTER_API_KEY` (and optionally `OPENAI_API_KEY` for embeddings) only if you want cloud models instead of the local defaults.
 

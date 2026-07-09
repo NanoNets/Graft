@@ -25,7 +25,8 @@
   "bin": {
     "context-graph": "./dist/cli.js",
     "context-graph-mcp": "./dist/mcp.js",
-    "context-graph-web": "./dist/web.js"
+    "context-graph-web": "./dist/web.js",
+    "context-graph-serve": "./dist/serve.js"
   },
   "files": [
     "dist",
@@ -38,6 +39,7 @@
     "cli": "tsx src/cli.ts",
     "mcp": "tsx src/mcp.ts",
     "web": "tsx src/web.ts",
+    "serve": "tsx src/serve.ts",
     "example": "tsx examples/quickstart.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "prepare": "npm run build",

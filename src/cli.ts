@@ -20,6 +20,7 @@ import { ContextGraphEngine } from "./engine.js";
 import { GraphWatcher, type WatchEvent } from "./watch.js";
 import { resolveConfig } from "./ai/providers.js";
 import { toHtml, toMermaid } from "./graph/export.js";
+import { startServe } from "./serve.js";
 
 const program = new Command();
 
@@ -595,6 +596,53 @@ program
       await engine.close();
     }
   });
+
+program
+  .command("serve")
+  .description(
+    "Run everything in one process: the web UI, the MCP server (over HTTP at /mcp), and the " +
+      "watcher — one engine, one watcher, one port. Resumes registered folders unless --no-watch.",
+  )
+  .argument("[dirs...]", "extra folders to register and watch")
+  .option("-p, --port <port>", "port to listen on (default 4680)", (v) => parseInt(v, 10))
+  .option("-H, --host <host>", "host to bind (default 127.0.0.1; use 0.0.0.0 to expose)")
+  .option("-e, --ext <exts...>", 'extensions to watch (default: ".pdf" ".md" ".markdown" ".txt")')
+  .option("--no-watch", "start the web/MCP servers without resuming or watching any folders")
+  .action(
+    async (
+      dirs: string[],
+      opts: { port?: number; host?: string; ext?: string[]; watch: boolean },
+    ) => {
+      const { db } = program.opts<{ db?: string }>();
+      const running = await startServe({
+        host: opts.host,
+        port: opts.port,
+        watch: opts.watch,
+        dirs,
+        extensions: opts.ext,
+        engineConfig: { dbPath: db },
+      });
+      const cfg = resolveConfig({ dbPath: db });
+      const watched = running.engine.listWatchedDirs().length;
+      console.log(`Context Graph  →  ${running.url}`);
+      console.log(`  web UI:      ${running.url}`);
+      console.log(`  MCP (HTTP):  ${running.url}/mcp`);
+      console.log(`  graph db:    ${resolve(cfg.dbPath)}`);
+      if (opts.watch && watched > 0) console.log(`  watching:    ${watched} registered folder(s)`);
+      console.log("  Ctrl-C to stop.");
+
+      let stopping = false;
+      const stop = async () => {
+        if (stopping) return;
+        stopping = true;
+        console.log("\nstopping…");
+        await running.close();
+        process.exit(0);
+      };
+      process.on("SIGINT", () => void stop());
+      process.on("SIGTERM", () => void stop());
+    },
+  );
 
 program.parseAsync().catch((err) => {
   console.error(err instanceof Error ? err.message : err);

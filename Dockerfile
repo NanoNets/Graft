@@ -1,10 +1,13 @@
-# Context Graph — team-brain web UI in one container.
+# Context Graph — the whole engine in one container.
 #
-#   docker compose up          → http://localhost:4680
+#   docker compose up          → web UI at http://localhost:4680
+#                                MCP (HTTP) at http://localhost:4680/mcp
 #
-# The graph persists to the /data volume as a single SQLite file. The server
-# binds 0.0.0.0 inside the container and requires the access token printed in
-# the container logs on first start (or set CONTEXT_GRAPH_WEB_TOKEN).
+# Runs `context-graph serve`: the web UI, the MCP server (over HTTP), and the
+# folder watcher share one engine and one port. The graph persists to the /data
+# volume as a single SQLite file. The server binds 0.0.0.0 inside the container
+# and requires the access token printed in the container logs on first start
+# (or set CONTEXT_GRAPH_WEB_TOKEN); the token also gates /mcp.
 
 FROM node:22-slim AS build
 WORKDIR /app
@@ -32,4 +35,6 @@ RUN mkdir -p /data && chown node:node /data
 USER node
 EXPOSE 4680
 VOLUME /data
-CMD ["node", "dist/web.js"]
+# Resumes any registered watch folders; mount them and register via the UI or
+# `context-graph watch <dir>` so they persist in the /data volume.
+CMD ["node", "dist/serve.js"]

@@ -101,6 +101,16 @@ Add this to your Claude Code MCP config (`.mcp.json` in your project, or `claude
 ```
 Restart Claude Code so it picks up the server and its 7 tools.
 
+Alternatively, run one process for the web UI + MCP together with `context-graph serve` and point Claude Code at the HTTP endpoint (no per-session process to spawn):
+
+```json
+{
+  "mcpServers": {
+    "context-graph": { "type": "http", "url": "http://localhost:4680/mcp" }
+  }
+}
+```
+
 ### Step 3 — Ask Claude Code to build the graph (just say this)
 > "Use the context-graph tools to build a context graph from the folder
 > `/abs/path/context-graph-engine/examples/demo-docs`, then show me the stats."
