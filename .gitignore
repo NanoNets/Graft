@@ -2,20 +2,11 @@ node_modules/
 dist/
 *.log
 
-# Local graph databases
-*.db
-*.db-shm
-*.db-wal
+# The context graph's local LLM-call cache — regenerated, never committed.
+# The graph itself (.context/*.md + manifest.json) IS committed.
+.context/.cache/
 
-# Docker runtime volume — holds the graph db and the generated access token
-# (.web-token / share-link.txt). Never commit; the token would leak.
-data/
-# Ignore the local graph dir's contents (the SQLite replica) but keep the
-# committable, git-native team-sync file (Mode A).
-.context-graph/*
-!.context-graph/graph.jsonl
-
-# Benchmark run artifacts (raw rows + summaries are regenerated per run)
+# Benchmark run artifacts (regenerated per run)
 bench/results/
 
 # Env

@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "model": "openrouter:openai/gpt-4o-mini",
+  "repoDigest": "83e9219d224cc08f493579beca8812a8f7cc05ac76ecc206b055bfc033f85830",
+  "files": [
+    {
+      "path": "bench/agent.ts",
+      "hash": "e10d64f913c9517cef84cce58ea042d71bed3e94182c791245170eca54060e31"
+    },
+    {
+      "path": "bench/judge.ts",
+      "hash": "94c222341b066e4f3134b3d9d3f30f31b9ffe7b92967086b07c58f297d349936"
+    },
+    {
+      "path": "bench/llm.ts",
+      "hash": "6c0d2a02ac6aa86de94f779355020700a4d9016e2f4b431bf75560e1d3c51229"
+    },
+    {
+      "path": "bench/report.ts",
+      "hash": "775be8c40a8e4172521bba8f6a1f026fa23c4d24b9b5225da3ed5b745077a5b0"
+    },
+    {
+      "path": "bench/run.ts",
+      "hash": "f9d9235f3661e03b721564a786cc80cbd50584cedb6a80f0bbb5f7757ccd724b"
+    },
+    {
+      "path": "bench/selfcheck.ts",
+      "hash": "0eaf577938e20fa27d9cd0157bc8843fdc37165d85696789334b8605138f4bb4"
+    },
+    {
+      "path": "bench/tasks.ts",
+      "hash": "d21168797f40d193a914aca0c438409d29d300441bc0a6a518c93869240b3b69"
+    },
+    {
+      "path": "install.sh",
+      "hash": "01ca60d495dca47e9831b5fe2f0c80bdbe8405a944124d758b951ae263639ac2"
+    },
+    {
+      "path": "src/ai/providers.ts",
+      "hash": "8d4258cf8990f2fb6ac4664221fe96b5385edf8428f5f5b8a75958b8447c2cb0"
+    },
+    {
+      "path": "src/ai/summarize.ts",
+      "hash": "c207e3e66f7386f7baff659cf00a3d87901e86d33ad1c0b04e4bb7943f5b5c21"
+    },
+    {
+      "path": "src/ai/synthesize.ts",
+      "hash": "2455b828410429e13cb029b6d9d4ee00532808bb63deec658445aeabb1323db0"
+    },
+    {
+      "path": "src/cli.ts",
+      "hash": "b61374af84daa862309aef1b92fb43082be4021d4d19f2a14fb1b8378beb58bb"
+    },
+    {
+      "path": "src/context/build.ts",
+      "hash": "cfe11ecfeab1f69aad383db3a0a282a45033b61dc8b0af1ae80dc3d41687f0cb"
+    },
+    {
+      "path": "src/context/check.ts",
+      "hash": "df6c8cb642ea53f533c4deeb1143932d74b36fa5eb424c3bac73f46aca95a312"
+    },
+    {
+      "path": "src/context/node-file.ts",
+      "hash": "32e046ecd962e8709c5795fc42e3934064da5f3acc5eb5df584188b37cbfd5b9"
+    },
+    {
+      "path": "src/engine.ts",
+      "hash": "9ce688dafb10d7d3acbad361c36f7b13be33a104721779d3d8bfcb431ca6e2e9"
+    },
+    {
+      "path": "src/index.ts",
+      "hash": "5e3bfb88d938f9fbfbcefd4917e15fa32fb09ab3bd06e9de5739d248416b054a"
+    },
+    {
+      "path": "src/ingest/fs.ts",
+      "hash": "a8339532da34b44d35eb9ad16e7106adb1262d73d9895b1bd94574337fb2019f"
+    },
+    {
+      "path": "src/util/id.ts",
+      "hash": "5fabc8ddcc3abc907ce69f04ad2ebe51933262cf44aa2dfd40589f71f1926e8a"
+    },
+    {
+      "path": "test/context.test.ts",
+      "hash": "977ca7f64b4b9e3f5661be18ea3710399b976cb989aa5d17af3c6ee4692aed33"
+    },
+    {
+      "path": "test/helpers.ts",
+      "hash": "e45af1d38d7c6d4abc804fc74e9ae4c3373cf78769c17b16b185c3ee0e2c3228"
+    }
+  ],
+  "nodes": [
+    {
+      "slug": "ai-model-integration",
+      "name": "AI Model Integration",
+      "type": "system",
+      "sources": [
+        "src/ai/providers.ts",
+        "src/ai/summarize.ts",
+        "src/ai/synthesize.ts"
+      ],
+      "sourcesDigest": "22e2c0a1bc0211ff99916ab816560b79484d4b9f608ea978eeecd3c5f4116637"
+    },
+    {
+      "slug": "benchmarking-metrics",
+      "name": "Benchmarking Metrics",
+      "type": "concept",
+      "sources": [
+        "bench/agent.ts",
+        "bench/judge.ts",
+        "bench/report.ts"
+      ],
+      "sourcesDigest": "1a67b360c8323619bb19a61d96bfa51c43becce2db8f6422cc49ad32c0ef8fa6"
+    },
+    {
+      "slug": "benchmarking-results-reporting",
+      "name": "Benchmarking Results Reporting",
+      "type": "system",
+      "sources": [
+        "bench/report.ts"
+      ],
+      "sourcesDigest": "f7b46f3036503f43413cb48d25fa6ce54585514fb19e9b4e923c0c5628ce8aed"
+    },
+    {
+      "slug": "benchmarking-system",
+      "name": "Benchmarking System",
+      "type": "system",
+      "sources": [
+        "bench/agent.ts",
+        "bench/judge.ts",
+        "bench/llm.ts",
+        "bench/report.ts",
+        "bench/run.ts",
+        "bench/selfcheck.ts",
+        "bench/tasks.ts"
+      ],
+      "sourcesDigest": "b82fc41740c1a096a0fd5c3f20776231e57194958bef6c87a28a6975ff3d9142"
+    },
+    {
+      "slug": "configuration-management",
+      "name": "Configuration Management",
+      "type": "concept",
+      "sources": [
+        "src/ai/providers.ts"
+      ],
+      "sourcesDigest": "12e8fd63a512b486816eb62cb8cb53f9e8f7f3b5306eeb5d0bc2b30042178bf9"
+    },
+    {
+      "slug": "context-graph-management",
+      "name": "Context Graph Management",
+      "type": "system",
+      "sources": [
+        "src/context/build.ts",
+        "src/context/check.ts",
+        "src/context/node-file.ts",
+        "src/engine.ts",
+        "src/index.ts"
+      ],
+      "sourcesDigest": "2f4644c3979157085af4d66d5e6435e8e37100d180d5dd2b3519dbd7e01b96e2"
+    },
+    {
+      "slug": "error-handling-and-validation",
+      "name": "Error Handling and Validation",
+      "type": "concept",
+      "sources": [
+        "bench/run.ts",
+        "src/context/check.ts",
+        "test/context.test.ts"
+      ],
+      "sourcesDigest": "e957e54820d8650507a9ff640ca697db275bf5cc32a1452e76c5e7fc2c302048"
+    }
+  ]
+}

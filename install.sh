@@ -5,9 +5,8 @@
 #   1. From a checkout:  ./install.sh          (builds THIS directory — no re-clone)
 #   2. Over the network: curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | sh
 #
-# Either way it builds the project and puts the `context-graph`,
-# `context-graph-mcp`, and `context-graph-web` commands on your PATH.
-# Requires git, Node >= 20, and npm.
+# Either way it builds the project and puts the `context-graph` command on your
+# PATH. Requires git, Node >= 20, and npm.
 #
 # Environment overrides:
 #   CGE_REPO   git URL to clone from      (default: the NanoNets repo below)
@@ -67,28 +66,24 @@ info "Installing dependencies"
 info "Building"
 ( cd "$INSTALL_DIR" && npm run build --silent )
 
-info "Linking the 'context-graph', 'context-graph-mcp', and 'context-graph-web' commands"
+info "Linking the 'context-graph' command"
 ( cd "$INSTALL_DIR" && npm link >/dev/null 2>&1 )
 
 echo
-info "Installed. Try:  context-graph-web"
+info "Installed. Try it in any repo:"
 cat <<'NEXT'
 
-  The web UI is the fastest way in:
-          context-graph-web
-          # → open http://localhost:4680, ingest a folder of docs, ask questions
+  Build the graph, then commit it:
+          cd your-repo
+          context-graph init          # writes .context/*.md from your code
+          git add .context && git commit -m "add context graph"
+
+  Keep it honest in CI:
+          context-graph check         # exits non-zero if the graph is stale
 
   Runs locally out of the box:
-    • Embeddings run in-process (no key, no server — model downloads on first use).
-    • Extraction defaults to a local Ollama model. Install Ollama and pull one:
-          https://ollama.com   then   ollama pull llama3.2
-
-  Prefer higher-quality cloud extraction? Set a key and it's used automatically:
-          export OPENROUTER_API_KEY=sk-or-...     # extraction via OpenRouter
-          export OPENAI_API_KEY=sk-...            # embeddings (optional)
-
-  Quick start:
-          echo "Our billing worker retries failed charges 3x then marks past_due." \
-            | context-graph ingest-text --title "Billing"
-          context-graph query "how are failed charges handled?"
+    • Extraction/summaries default to a local Ollama model. Install Ollama and
+      pull one:  https://ollama.com   then   ollama pull llama3.2
+    • Prefer cloud quality? Set a key and it's used automatically:
+          export OPENROUTER_API_KEY=sk-or-...
 NEXT

@@ -1,15 +1,13 @@
 {
   "name": "context-graph-engine",
   "version": "0.1.0",
-  "description": "An open-source engine that turns docs into a structured context graph that AI agents read from and contribute learnings back to.",
+  "description": "Build a repo's context graph as a folder of linked markdown files that live in the repo and stay in sync with the code through git.",
   "keywords": [
     "ai",
     "agents",
     "knowledge-graph",
     "context",
-    "memory",
-    "rag",
-    "mcp",
+    "codebase",
     "llm"
   ],
   "license": "MIT",
@@ -23,10 +21,7 @@
     }
   },
   "bin": {
-    "context-graph": "./dist/cli.js",
-    "context-graph-mcp": "./dist/mcp.js",
-    "context-graph-web": "./dist/web.js",
-    "context-graph-serve": "./dist/serve.js"
+    "context-graph": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -34,13 +29,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"fs.mkdirSync('dist/web',{recursive:true});fs.copyFileSync('src/web/ui.html','dist/web/ui.html')\"",
+    "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "cli": "tsx src/cli.ts",
-    "mcp": "tsx src/mcp.ts",
-    "web": "tsx src/web.ts",
-    "serve": "tsx src/serve.ts",
-    "example": "tsx examples/quickstart.ts",
     "bench": "tsx bench/run.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "prepare": "npm run build",
@@ -50,20 +41,13 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.11.1",
-    "chokidar": "^4.0.3",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
-    "openai": "^6.45.0",
-    "unpdf": "^1.6.2",
-    "zod": "^4.4.3"
+    "gray-matter": "^4.0.3",
+    "openai": "^6.45.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
-    "pdfkit": "^0.17.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

@@ -1,14 +1,10 @@
 /**
- * Filesystem walking/filtering rules shared by directory ingestion and the
- * auto-watch daemon, so both always agree on which files are knowledge.
+ * Filesystem walking used by `init`/`check` to enumerate a repo's source files.
  */
 import { readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 
-/** Extensions treated as documents by `ingestDir` and the watcher. */
-export const DOC_EXTENSIONS = [".pdf", ".md", ".markdown", ".txt"];
-
-/** Directories that are dependency/build output, never knowledge. */
+/** Directories that are dependency/build output, never source. */
 export const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
@@ -21,7 +17,7 @@ export const SKIP_DIRS = new Set([
   "venv",
 ]);
 
-/** Files above this size are generated/vendored in practice, not written docs or code. */
+/** Files above this size are generated/vendored in practice, not hand-written code. */
 export const MAX_FILE_BYTES = 1_000_000;
 
 /**
@@ -46,50 +42,4 @@ export function walkDir(dir: string): string[] {
     }
   }
   return out;
-}
-
-/** True if any path segment is a dot-entry or a SKIP_DIRS directory. */
-function hasSkippedSegment(path: string): boolean {
-  return path
-    .split(sep)
-    .some((seg) => seg.length > 0 && (seg.startsWith(".") || SKIP_DIRS.has(seg)));
-}
-
-/**
- * True if this path passes the same rules {@link walkDir} applies below
- * `root`: a matching extension, no dot-file/dot-dir or SKIP_DIRS segment
- * under the root, and at most 1 MB. The root itself is exempt from the
- * segment rules — watching `~/.notes` is legitimate, just as `walkDir` never
- * inspects the directory it was pointed at.
- */
-export function isIngestablePath(
-  path: string,
-  root: string,
-  extensions: string[] = DOC_EXTENSIONS,
-): boolean {
-  if (hasSkippedSegment(relative(root, path))) return false;
-  const lower = path.toLowerCase();
-  if (!extensions.some((e) => lower.endsWith(e))) return false;
-  try {
-    if (statSync(path).size > MAX_FILE_BYTES) return false;
-  } catch {
-    return false;
-  }
-  return true;
-}
-
-/**
- * Predicate for a file watcher's `ignored` option: true for dot/SKIP_DIRS
- * entries below `root` (so they are never descended into) and for oversized
- * files. Extension filtering is left to the event handler — watchers hand us
- * stats only sometimes, and directories have no extension to test.
- */
-export function shouldIgnorePath(
-  path: string,
-  root: string,
-  stats?: { isDirectory(): boolean; size: number },
-): boolean {
-  if (hasSkippedSegment(relative(root, path))) return true;
-  if (stats && !stats.isDirectory() && stats.size > MAX_FILE_BYTES) return true;
-  return false;
 }
