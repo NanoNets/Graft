@@ -41,6 +41,7 @@
     "web": "tsx src/web.ts",
     "serve": "tsx src/serve.ts",
     "example": "tsx examples/quickstart.ts",
+    "bench": "tsx bench/run.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"

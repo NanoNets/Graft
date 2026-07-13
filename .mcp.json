@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "context-graph": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/anirudh/Documents/context-engine/dist/mcp.js"
+      ],
+      "env": {
+        "CONTEXT_GRAPH_DB": "/Users/anirudh/Documents/context-engine/.context-graph/demo.db"
+      }
+    }
+  }
+}

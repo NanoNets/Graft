@@ -15,6 +15,9 @@ data/
 .context-graph/*
 !.context-graph/graph.jsonl
 
+# Benchmark run artifacts (raw rows + summaries are regenerated per run)
+bench/results/
+
 # Env
 .env
 .env.local
