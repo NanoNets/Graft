@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Context Graph Engine — your team's answers, with receipts</title>
-<meta name="description" content="Open-source, self-hosted team brain. Connect a folder of docs and get cited answers backed by a knowledge graph that keeps evolving as your files change." />
+<title>Context Graph — read the graph before you work</title>
+<meta name="description" content="Point it at a repo and it builds a context graph — a folder of linked markdown files that lives in the repo and stays in sync with the code through git. Agents that read it first use 31% fewer tool calls." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -39,25 +39,11 @@
     outline-offset: 2px;
   }
 
-  /* page rails, like the source site's GridLines */
-  .rails {
-    pointer-events: none;
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-  }
-  .rails > div {
-    max-width: 1280px;
-    margin: 0 auto;
-    height: 100%;
-    position: relative;
-  }
+  /* page rails */
+  .rails { pointer-events: none; position: fixed; inset: 0; z-index: 40; }
+  .rails > div { max-width: 1280px; margin: 0 auto; height: 100%; position: relative; }
   .rails > div::before, .rails > div::after {
-    content: "";
-    position: absolute;
-    top: 0; bottom: 0;
-    width: 1px;
-    background: rgba(19,19,21,0.07);
+    content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(19,19,21,0.07);
   }
   .rails > div::before { left: 0; }
   .rails > div::after { right: 0; }
@@ -67,426 +53,148 @@
 
   /* ── nav ─────────────────────────────── */
   nav {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    background: rgba(240,240,240,0.92);
-    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(240,240,240,0.92); backdrop-filter: blur(8px);
     border-bottom: 1px solid rgba(19,19,21,0.08);
   }
-  .nav-inner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 60px;
-  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
   .wordmark {
-    font-size: 15px;
-    font-weight: 500;
-    letter-spacing: -0.2px;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    white-space: nowrap;
+    font-size: 15px; font-weight: 500; letter-spacing: -0.2px; text-decoration: none;
+    display: flex; align-items: center; gap: 10px; white-space: nowrap;
   }
   .wordmark .dot-cluster { display: inline-flex; gap: 3px; }
-  .wordmark .dot-cluster i {
-    width: 6px; height: 6px;
-    background: var(--ink);
-  }
+  .wordmark .dot-cluster i { width: 6px; height: 6px; background: var(--ink); }
   .wordmark .dot-cluster i:nth-child(2) { background: var(--primary); }
   .nav-links { display: none; gap: 28px; }
   @media (min-width: 768px) { .nav-links { display: flex; } }
-  .nav-links a {
-    font-size: 14px;
-    color: var(--muted);
-    text-decoration: none;
-  }
+  .nav-links a { font-size: 14px; color: var(--muted); text-decoration: none; }
   .nav-links a:hover { color: var(--ink); }
   .nav-cta { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
   @media (max-width: 479px) { .nav-cta .nav-github { display: none; } }
   .btn {
-    font-family: var(--sans);
-    font-size: 15px;
-    text-decoration: none;
-    padding: 8px 18px;
-    border: 1px solid var(--border);
-    background: var(--card);
-    color: var(--ink);
-    cursor: pointer;
-    transition: background 0.15s;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    font-family: var(--sans); font-size: 15px; text-decoration: none;
+    padding: 8px 18px; border: 1px solid var(--border); background: var(--card);
+    color: var(--ink); cursor: pointer; transition: background 0.15s;
+    display: inline-flex; align-items: center; gap: 8px;
   }
   .btn:hover { background: rgba(19,19,21,0.04); }
-  .btn-primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: #fff;
-  }
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
   .btn-primary:hover { background: var(--primary-dark); }
   .btn-sm { font-size: 14px; padding: 6px 14px; }
 
   /* ── hero ─────────────────────────────── */
   .hero { padding: 56px 0 64px; }
   @media (min-width: 1024px) { .hero { padding: 80px 0 88px; } }
-  .hero-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 48px;
-  }
-  @media (min-width: 1024px) {
-    .hero-grid { flex-direction: row; align-items: center; gap: 72px; }
-  }
-  .hero-copy { max-width: 560px; flex-shrink: 0; }
+  .hero-grid { display: flex; flex-direction: column; gap: 48px; }
+  @media (min-width: 1024px) { .hero-grid { flex-direction: row; align-items: center; gap: 72px; } }
+  .hero-copy { max-width: 580px; flex-shrink: 0; }
   .eyebrow {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted-light);
-    margin-bottom: 20px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted-light); margin-bottom: 20px;
   }
-  h1 {
-    font-size: 34px;
-    font-weight: 400;
-    letter-spacing: -1.5px;
-    line-height: 1.12;
-  }
-  @media (min-width: 640px) { h1 { font-size: 46px; letter-spacing: -2px; } }
-  @media (min-width: 1024px) { h1 { font-size: 52px; } }
-  h1 em {
-    font-style: normal;
-    color: var(--primary);
-  }
-  .hero-sub {
-    font-size: 17px;
-    color: var(--muted);
-    margin-top: 18px;
-    max-width: 480px;
-  }
+  h1 { font-size: 32px; font-weight: 400; letter-spacing: -1.5px; line-height: 1.12; }
+  @media (min-width: 640px) { h1 { font-size: 44px; letter-spacing: -2px; } }
+  @media (min-width: 1024px) { h1 { font-size: 50px; } }
+  h1 em { font-style: normal; color: var(--primary); }
+  .hero-sub { font-size: 17px; color: var(--muted); margin-top: 20px; max-width: 500px; }
   @media (min-width: 640px) { .hero-sub { font-size: 19px; } }
-  .hero-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-    margin-top: 32px;
-  }
+  .hero-sub b { color: var(--ink); font-weight: 500; }
+  .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 32px; }
   .cmd {
-    font-family: var(--mono);
-    font-size: 14px;
-    background: var(--ink);
-    color: #e8e8e6;
-    border: 1px solid var(--ink);
-    padding: 9px 16px;
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    cursor: pointer;
-    max-width: 100%;
-    overflow-x: auto;
-    white-space: nowrap;
+    font-family: var(--mono); font-size: 14px; background: var(--ink); color: #e8e8e6;
+    border: 1px solid var(--ink); padding: 9px 16px; display: inline-flex; align-items: center;
+    gap: 12px; cursor: pointer; max-width: 100%; overflow-x: auto; white-space: nowrap;
   }
   .cmd .prompt { color: #7a7a78; user-select: none; }
-  .cmd .copy-hint {
-    font-size: 11px;
-    color: #7a7a78;
-    border-left: 1px solid #3a3a3c;
-    padding-left: 12px;
-    user-select: none;
-  }
-  .hero-note {
-    font-size: 13px;
-    color: var(--muted-light);
-    margin-top: 14px;
-  }
+  .cmd .copy-hint { font-size: 11px; color: #7a7a78; border-left: 1px solid #3a3a3c; padding-left: 12px; user-select: none; }
+  .hero-note { font-size: 13px; color: var(--muted-light); margin-top: 14px; }
   .hero-note a { color: var(--muted); }
 
-  /* ── the ledger (signature) ─────────────── */
-  .ledger-frame { flex: 1; min-width: 0; max-width: 100%; position: relative; }
-  .ledger-body, .panel { min-width: 0; }
-  .panel {
-    position: relative;
-    background: var(--card);
-    border: 1px solid var(--border);
-  }
+  /* ── signature: the graph as files ─────── */
+  .filegraph { flex: 1; min-width: 0; max-width: 100%; position: relative; }
+  .panel { position: relative; background: var(--card); border: 1px solid var(--border); min-width: 0; }
   .corner { position: absolute; width: 8px; height: 8px; background: var(--mark); z-index: 10; }
   .corner.tl { top: -4px; left: -4px; }
   .corner.tr { top: -4px; right: -4px; }
   .corner.bl { bottom: -4px; left: -4px; }
   .corner.br { bottom: -4px; right: -4px; }
-
-  .ledger-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 16px;
-    border-bottom: 1px solid rgba(19,19,21,0.08);
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted-light);
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center; padding: 10px 16px;
+    border-bottom: 1px solid rgba(19,19,21,0.08); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-light);
   }
-  .ledger-head .live {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .ledger-head .live i {
-    width: 6px; height: 6px;
-    background: var(--primary);
-    animation: pulse 2.4s ease-in-out infinite;
-  }
+  .panel-head .live { display: inline-flex; align-items: center; gap: 6px; }
+  .panel-head .live i { width: 6px; height: 6px; background: var(--primary); animation: pulse 2.4s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
-  .ledger-body { padding: 20px; min-height: 320px; }
-  .lq {
-    font-family: var(--mono);
-    font-size: 14px;
-    color: var(--ink);
-    min-height: 22px;
+  .fg-body { padding: 18px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.85; }
+  .fg-file { color: var(--ink); font-weight: 500; }
+  .fg-body .muted { color: var(--muted-light); }
+  .fg-doc {
+    margin-top: 16px; padding: 14px 16px; background: var(--surface);
+    border: 1px solid rgba(19,19,21,0.08); font-size: 12.5px; line-height: 1.7;
   }
-  .lq .prompt { color: var(--primary); margin-right: 8px; }
-  .lq .caret {
-    display: inline-block;
-    width: 7px; height: 15px;
-    background: var(--ink);
-    vertical-align: -2px;
-    animation: blink 1s steps(1) infinite;
-  }
-  @keyframes blink { 50% { opacity: 0; } }
-  .la {
-    margin-top: 18px;
-    font-size: 16px;
-    line-height: 1.55;
-    color: var(--ink);
-    opacity: 0;
-    transform: translateY(8px);
-    transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22,1,0.36,1);
-  }
-  .la.show { opacity: 1; transform: none; }
-  .la .cite {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--primary);
-    vertical-align: super;
-    margin-left: 1px;
-  }
-  .receipts { margin-top: 20px; display: grid; gap: 8px; }
-  .receipt {
-    display: flex;
-    align-items: center;
+  .fg-doc .h { color: var(--ink); font-weight: 500; }
+  .fg-doc .link { color: var(--primary); }
+  .fg-doc .rel { color: var(--muted-light); }
+  .panel-foot {
+    border-top: 1px solid rgba(19,19,21,0.08); padding: 10px 16px; font-family: var(--mono);
+    font-size: 11px; color: var(--muted-light); display: flex; flex-wrap: wrap; gap: 4px 12px;
     justify-content: space-between;
-    gap: 12px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted);
-    background: var(--surface);
-    border: 1px solid rgba(19,19,21,0.08);
-    padding: 8px 12px;
-    opacity: 0;
-    transform: translateY(6px);
-    transition: opacity 0.35s ease, transform 0.35s ease;
   }
-  .receipt.show { opacity: 1; transform: none; }
-  .receipt { min-width: 0; }
-  .receipt .src { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .receipt .conf {
-    flex-shrink: 0;
-    color: var(--ink);
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .receipt .bar {
-    width: 56px; height: 4px;
-    background: rgba(19,19,21,0.1);
-    position: relative;
-  }
-  .receipt .bar i {
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 0%;
-    background: var(--primary);
-    transition: width 0.9s cubic-bezier(0.22,1,0.36,1);
-  }
-  .ledger-foot {
-    border-top: 1px solid rgba(19,19,21,0.08);
-    padding: 10px 16px;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted-light);
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 4px 12px;
-  }
-  .ledger-foot .tick { color: var(--primary); opacity: 0; transition: opacity 0.4s; }
-  .ledger-foot .tick.show { opacity: 1; }
+  .panel-foot .add { color: var(--primary); }
 
   /* ── section scaffolding ─────────────── */
   section { border-top: 1px solid rgba(19,19,21,0.08); }
   .section-pad { padding: 72px 0; }
   @media (min-width: 1024px) { .section-pad { padding: 96px 0; } }
   .kicker {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted-light);
-    margin-bottom: 16px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted-light); margin-bottom: 16px;
   }
-  h2 {
-    font-size: 28px;
-    font-weight: 400;
-    letter-spacing: -1px;
-    line-height: 1.15;
-    max-width: 640px;
-  }
+  h2 { font-size: 28px; font-weight: 400; letter-spacing: -1px; line-height: 1.15; max-width: 640px; }
   @media (min-width: 640px) { h2 { font-size: 36px; letter-spacing: -1.5px; } }
-  .section-sub {
-    font-size: 16px;
-    color: var(--muted);
-    margin-top: 14px;
-    max-width: 560px;
-  }
+  .section-sub { font-size: 16px; color: var(--muted); margin-top: 14px; max-width: 560px; }
 
   /* how it works */
   .steps {
-    margin-top: 48px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1px;
-    background: rgba(19,19,21,0.08);
-    border: 1px solid rgba(19,19,21,0.08);
+    margin-top: 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px;
+    background: rgba(19,19,21,0.08); border: 1px solid rgba(19,19,21,0.08);
   }
   @media (min-width: 768px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  .step {
-    background: var(--bg);
-    padding: 28px 24px 32px;
-  }
-  .step .n {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--primary);
-    margin-bottom: 18px;
-  }
-  .step h3 {
-    font-size: 19px;
-    font-weight: 500;
-    letter-spacing: -0.3px;
-    margin-bottom: 8px;
-  }
+  .step { background: var(--bg); padding: 28px 24px 32px; }
+  .step .n { font-family: var(--mono); font-size: 12px; color: var(--primary); margin-bottom: 18px; }
+  .step h3 { font-size: 19px; font-weight: 500; letter-spacing: -0.3px; margin-bottom: 8px; }
   .step p { font-size: 14.5px; color: var(--muted); }
   .step .art {
-    margin-top: 22px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted-light);
-    background: var(--card);
-    border: 1px solid rgba(19,19,21,0.1);
-    padding: 12px 14px;
-    line-height: 1.7;
-    overflow-x: auto;
+    margin-top: 22px; font-family: var(--mono); font-size: 12px; color: var(--muted-light);
+    background: var(--card); border: 1px solid rgba(19,19,21,0.1); padding: 12px 14px;
+    line-height: 1.7; overflow-x: auto;
   }
   .step .art b { color: var(--ink); font-weight: 500; }
   .step .art .hl { color: var(--primary); }
 
-  /* differentiator */
-  .diff-grid {
-    margin-top: 48px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 20px;
-  }
-  @media (min-width: 900px) { .diff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  .diff {
-    position: relative;
-    background: var(--card);
-    border: 1px solid var(--border);
-    padding: 26px 24px 30px;
-  }
-  .diff h3 {
-    font-size: 18px;
-    font-weight: 500;
-    letter-spacing: -0.3px;
-    margin-bottom: 10px;
-  }
-  .diff p { font-size: 14.5px; color: var(--muted); }
-  .diff .tag {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted-light);
-    display: block;
-    margin-top: 18px;
-  }
-  .diff .tag b { color: var(--ink); font-weight: 500; }
-
-  /* team lanes */
-  .lanes { margin-top: 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  @media (min-width: 900px) { .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  .lane {
-    position: relative;
-    background: var(--card);
-    border: 1px solid var(--border);
-    padding: 28px 26px 30px;
-  }
-  .lane .lane-k {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--primary);
-    margin-bottom: 14px;
-  }
-  .lane h3 { font-size: 20px; font-weight: 500; letter-spacing: -0.3px; margin-bottom: 10px; }
-  .lane p { font-size: 14.5px; color: var(--muted); }
-  .lane pre {
-    margin-top: 18px;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 1.8;
-    background: var(--ink);
-    color: #e8e8e6;
-    padding: 14px 16px;
-    overflow-x: auto;
-  }
-  .lane pre .c { color: #7a7a78; }
+  /* the proof — metric tiles */
+  .metrics { margin-top: 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  @media (min-width: 640px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .metric { position: relative; background: var(--card); border: 1px solid var(--border); padding: 28px 26px 30px; }
+  .metric .n { font-size: 46px; font-weight: 300; letter-spacing: -2px; color: var(--primary); line-height: 1; }
+  .metric .l { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .proof-note { font-size: 15px; color: var(--muted); margin-top: 28px; max-width: 620px; }
 
   /* quickstart */
-  .quick {
-    margin-top: 44px;
-    position: relative;
-    background: var(--ink);
-    border: 1px solid var(--ink);
-    color: #e8e8e6;
-    padding: 28px;
-  }
-  .quick pre {
-    font-family: var(--mono);
-    font-size: 13.5px;
-    line-height: 2;
-    overflow-x: auto;
-  }
+  .quick { margin-top: 44px; position: relative; background: var(--ink); border: 1px solid var(--ink); color: #e8e8e6; padding: 28px; }
+  .quick pre { font-family: var(--mono); font-size: 13.5px; line-height: 2; overflow-x: auto; }
   .quick .c { color: #7a7a78; }
   .quick .hl { color: #9daeff; }
   .quick-note { font-size: 13px; color: var(--muted-light); margin-top: 14px; }
   .quick-note a { color: var(--muted); }
+  .quick-note code { font-family: var(--mono); }
 
   /* footer */
   footer { border-top: 1px solid rgba(19,19,21,0.08); }
   .foot-inner {
-    padding: 36px 0 44px;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 16px;
-    font-size: 13.5px;
-    color: var(--muted-light);
+    padding: 36px 0 44px; display: flex; flex-wrap: wrap; justify-content: space-between;
+    align-items: baseline; gap: 16px; font-size: 13.5px; color: var(--muted-light);
   }
   .foot-inner a { color: var(--muted); text-decoration: none; }
   .foot-inner a:hover { color: var(--ink); }
@@ -506,12 +214,11 @@
   <div class="wrap nav-inner">
     <a class="wordmark" href="#">
       <span class="dot-cluster" aria-hidden="true"><i></i><i></i><i></i></span>
-      Context Graph Engine
+      Context Graph
     </a>
     <div class="nav-links">
       <a href="#how">How it works</a>
-      <a href="#receipts">Why receipts</a>
-      <a href="#team">Teams</a>
+      <a href="#proof">The proof</a>
       <a href="#quickstart">Quickstart</a>
     </div>
     <div class="nav-cta">
@@ -524,57 +231,53 @@
 <header class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <p class="eyebrow">Open source · Self-hosted · MIT</p>
-      <h1>Your team's answers, <em>with receipts.</em></h1>
+      <p class="eyebrow">Open source · Runs locally · MIT</p>
+      <h1><em>31%</em> fewer tool calls. <em>23%</em> less cost. <em>17%</em> lower latency.</h1>
       <p class="hero-sub">
-        Connect a folder of docs. It builds a knowledge graph and answers
-        questions with citations — and keeps watching the folder, so every
-        edit and new file flows into an evolving graph on its own.
+        That's what your agent gets from reading the repo's context graph before it works.
+        The graph is a folder of plain markdown files in the repo, kept in sync with the code
+        through git — so <b>anyone who clones the repo has it, no setup.</b>
       </p>
       <div class="hero-actions">
-        <button class="cmd" id="copy-cmd" type="button" aria-label="Copy install command">
+        <button class="cmd" id="copy-cmd" type="button" aria-label="Copy command">
           <span class="prompt">$</span>
-          <span id="cmd-text">docker compose up -d</span>
+          <span id="cmd-text">context-graph init</span>
           <span class="copy-hint" id="copy-hint">copy</span>
         </button>
         <a class="btn" href="https://github.com/NanoNets/context-graph-engine">View source</a>
       </div>
       <p class="hero-note">
-        One container, one SQLite file you own. No accounts, no cloud storage —
-        <a href="#quickstart">runs on your machine in about a minute</a>.
+        No database, no server, no embeddings — just files in git.
+        <a href="#quickstart">Set it up in about a minute</a>.
       </p>
     </div>
 
-    <!-- signature: the provenance ledger -->
-    <div class="ledger-frame">
+    <!-- signature: the graph, as linked markdown files -->
+    <div class="filegraph">
       <div class="panel">
         <span class="corner tl"></span><span class="corner tr"></span>
         <span class="corner bl"></span><span class="corner br"></span>
-        <div class="ledger-head">
-          <span>graph.db — 3 docs · 47 nodes</span>
-          <span class="live"><i></i>watching ./docs</span>
+        <div class="panel-head">
+          <span>.context/ — 41 entities</span>
+          <span class="live"><i></i>tracked in git</span>
         </div>
-        <div class="ledger-body">
-          <p class="lq"><span class="prompt">?</span><span id="lq-text"></span><span class="caret" id="lq-caret"></span></p>
-          <p class="la" id="la">
-            Deploys go out <strong>Tuesdays and Thursdays at 10:00</strong><span class="cite">[1]</span>,
-            gated by the release checklist<span class="cite">[2]</span>. Priya owns the
-            final sign-off<span class="cite">[1]</span>.
-          </p>
-          <div class="receipts">
-            <div class="receipt" id="r1">
-              <span class="src">[1] runbook/deploys.md · ops-notes.md</span>
-              <span class="conf"><span class="bar"><i data-w="74%"></i></span><span data-count>74% ×3</span></span>
-            </div>
-            <div class="receipt" id="r2">
-              <span class="src">[2] release-checklist.pdf</span>
-              <span class="conf"><span class="bar"><i data-w="62%"></i></span><span data-count>62% ×1</span></span>
-            </div>
+        <div class="fg-body">
+          <span class="muted">.context/</span><br />
+          &nbsp;&nbsp;<span class="fg-file">auth-service.md</span><br />
+          &nbsp;&nbsp;<span class="fg-file">billing.md</span><br />
+          &nbsp;&nbsp;<span class="fg-file">webhooks.md</span> <span class="muted">· +38 more</span>
+
+          <div class="fg-doc">
+            <span class="h"># auth-service.md</span><br />
+            Rotates tokens every 15 min. Fronts all login<br />
+            traffic; validated by <span class="link">[[api-gateway]]</span>.<br />
+            <span class="rel">depends on →</span> <span class="link">[[token-store]]</span>, <span class="link">[[user-db]]</span><br />
+            <span class="rel">used by &nbsp;&nbsp;→</span> <span class="link">[[billing]]</span>, <span class="link">[[webhooks]]</span>
           </div>
         </div>
-        <div class="ledger-foot">
-          <span>every claim traces to a source</span>
-          <span class="tick" id="tick">deploys.md changed · re-ingested · 68% → 74%</span>
+        <div class="panel-foot">
+          <span>the files are nodes, the links are edges</span>
+          <span class="add" id="diff">billing.md changed in the same PR as the code</span>
         </div>
       </div>
     </div>
@@ -584,120 +287,79 @@
 <section id="how" class="section-pad">
   <div class="wrap">
     <p class="kicker">How it works</p>
-    <h2>A folder in, a brain out.</h2>
+    <h2>Push builds it. Clone pulls it. Your agent reads it.</h2>
     <p class="section-sub">
-      No pipelines to configure and nothing to label. Connect a folder once —
-      the graph builds itself, then keeps up as your team keeps writing.
+      No pipelines, no server to run. The graph is files in the repo, so git does the syncing.
     </p>
     <div class="steps">
       <div class="step">
         <p class="n">01</p>
-        <h3>Connect your docs</h3>
-        <p>Markdown, PDFs, Notion or Drive exports — connect a folder once and it stays watched: edits and new files are re-ingested automatically.</p>
-        <div class="art">$ context-graph watch ./docs<br /><b>12 files</b> → <span class="hl">embedded</span> · watching for changes</div>
+        <h3>Point it at your repo</h3>
+        <p>It builds <code>.context/</code> — one markdown file per system, API, or concept, linked to each other. The files are the nodes, the links are the edges.</p>
+        <div class="art">$ context-graph init<br /><b>344 files</b> → <span class="hl">41 entities</span> · written to .context/</div>
       </div>
       <div class="step">
         <p class="n">02</p>
-        <h3>The graph evolves</h3>
-        <p>An LLM extracts entities and relationships. Duplicates merge, changed docs replace their old version, and every fact keeps its provenance.</p>
-        <div class="art"><b>Priya</b> ──owns──▸ <b>release sign-off</b><br /><span class="hl">confidence 0.74</span> · seen in 3 places</div>
+        <h3>Commit it</h3>
+        <p>The graph is just files in git, so git is the sync. Anyone who clones has it, and CI keeps it fresh — you see the graph diff next to the code, in the same PR.</p>
+        <div class="art">$ git add .context<br /><b>auth-service.md</b> <span class="hl">+3 −1</span> · alongside the code</div>
       </div>
       <div class="step">
         <p class="n">03</p>
-        <h3>Ask, get cited answers</h3>
-        <p>Ask in the web UI, the CLI, or from any agent over MCP. Answers cite their sources, always.</p>
-        <div class="art">? who owns deploys<br /><b>Priya</b> <span class="hl">[runbook/deploys.md]</span></div>
+        <h3>Your agent reads it</h3>
+        <p>Before doing work, from the CLI or any agent over MCP — so it starts knowing the codebase instead of rediscovering it from scratch.</p>
+        <div class="art">? how does auth work<br /><b>reads</b> <span class="hl">auth-service.md → api-gateway</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<section id="receipts" class="section-pad">
+<section id="proof" class="section-pad">
   <div class="wrap">
-    <p class="kicker">Why receipts</p>
-    <h2>A chatbot sounds sure. A ledger shows its work.</h2>
+    <p class="kicker">The proof</p>
+    <h2>Same model, same tools. The graph is the only difference.</h2>
     <p class="section-sub">
-      Most RAG tools give you a fluent paragraph and a shrug. This one keeps
-      an auditable record of where every claim came from and how often it held up.
+      On a real 344-file repo: agents that read the graph first, vs. agents that went in cold.
     </p>
-    <div class="diff-grid">
-      <div class="diff">
+    <div class="metrics">
+      <div class="metric">
         <span class="corner tl"></span><span class="corner br"></span>
-        <h3>Provenance on every claim</h3>
-        <p>Each statement in an answer links back to the exact document and passage it came from. If it can't cite, it doesn't say it.</p>
-        <span class="tag">runbook/deploys.md <b>· chunk 14</b></span>
+        <div class="n">−31%</div><div class="l">tool calls</div>
       </div>
-      <div class="diff">
+      <div class="metric">
         <span class="corner tl"></span><span class="corner br"></span>
-        <h3>Confidence that compounds</h3>
-        <p>A fact seen once is treated differently from a fact confirmed across three docs and a teammate's correction. The graph strengthens with use.</p>
-        <span class="tag">0.62 → 0.68 → <b>0.74</b> · 3 observations</span>
+        <div class="n">−23%</div><div class="l">cost</div>
       </div>
-      <div class="diff">
+      <div class="metric">
         <span class="corner tl"></span><span class="corner br"></span>
-        <h3>A file you own</h3>
-        <p>The whole graph is one local SQLite file. Back it up, diff it, move it, delete it. No vendor database, nothing leaves your network.</p>
-        <span class="tag">.context-graph/<b>graph.db</b></span>
+        <div class="n">−17%</div><div class="l">latency</div>
       </div>
     </div>
-  </div>
-</section>
-
-<section id="team" class="section-pad">
-  <div class="wrap">
-    <p class="kicker">Teams</p>
-    <h2>One brain for the whole team, two ways to share it.</h2>
-    <p class="section-sub">
-      Pick the lane that matches how your team already works. Both keep the
-      data on infrastructure you control.
+    <p class="proof-note">
+      The graph isn't magic — it's just that reading a few linked files beats rediscovering
+      the codebase from scratch every single time.
     </p>
-    <div class="lanes">
-      <div class="lane">
-        <span class="corner tl"></span><span class="corner tr"></span>
-        <span class="corner bl"></span><span class="corner br"></span>
-        <p class="lane-k">Recommended</p>
-        <h3>One shared server</h3>
-        <p>Run a single container; teammates open a link with an access token. Put it on your tailnet and it's reachable from anywhere, exposed to no one.</p>
-        <pre>$ docker compose up -d
-$ cat ./data/share-link.txt
-<span class="c"># optional: private access from anywhere</span>
-$ tailscale serve localhost:4680</pre>
-      </div>
-      <div class="lane">
-        <span class="corner tl"></span><span class="corner tr"></span>
-        <span class="corner bl"></span><span class="corner br"></span>
-        <p class="lane-k">No server at all</p>
-        <h3>Git mode</h3>
-        <p>Each person keeps a local graph; a conflict-free merge syncs them through a plain file in your repo. Knowledge travels with your code.</p>
-        <pre>$ context-graph sync
-<span class="c"># writes .context-graph/graph.jsonl</span>
-$ git pull &amp;&amp; context-graph sync
-<span class="c"># merges everyone's observations</span></pre>
-      </div>
-    </div>
   </div>
 </section>
 
 <section id="quickstart" class="section-pad">
   <div class="wrap">
     <p class="kicker">Quickstart</p>
-    <h2>Running in about a minute.</h2>
+    <h2>Set it up in about a minute.</h2>
     <div class="quick">
       <span class="corner tl"></span><span class="corner tr"></span>
       <span class="corner bl"></span><span class="corner br"></span>
-      <pre><span class="c"># with Docker (recommended)</span>
-git clone https://github.com/NanoNets/context-graph-engine
-cd context-graph-engine
-<span class="hl">docker compose up -d</span>        <span class="c"># web UI on :4680</span>
+      <pre><span class="c"># in your repo</span>
+<span class="hl">context-graph init</span>          <span class="c"># builds .context/ from your code</span>
+git add .context &amp;&amp; git commit
 
-<span class="c"># or straight onto your machine</span>
-curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | bash
-<span class="hl">context-graph-web</span>           <span class="c"># then drop docs in the UI</span></pre>
+<span class="c"># keep it honest — fails CI if the graph is stale</span>
+<span class="hl">context-graph check</span></pre>
     </div>
     <p class="quick-note">
-      Best extraction quality uses an <a href="https://openrouter.ai">OpenRouter</a> key
-      (set <code style="font-family:var(--mono)">OPENROUTER_API_KEY</code>). Fully-offline mode
-      works with <a href="https://ollama.com">Ollama</a> — no key, nothing leaves your machine.
+      Everything runs on your machine — no accounts, no cloud calls, no keys. Building the graph
+      uses a local model (<a href="https://ollama.com">Ollama</a>); set
+      <code>OPENROUTER_API_KEY</code> to use a cloud model for better summaries instead. Local stays the default.
     </p>
   </div>
 </section>
@@ -714,7 +376,7 @@ curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/
 </footer>
 
 <script>
-  // copy install command
+  // copy command
   const copyBtn = document.getElementById("copy-cmd");
   copyBtn.addEventListener("click", async () => {
     try {
@@ -724,44 +386,6 @@ curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/
       setTimeout(() => (hint.textContent = "copy"), 1600);
     } catch {}
   });
-
-  // hero ledger sequence
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const q = "when do we deploy, and who signs off?";
-  const lqText = document.getElementById("lq-text");
-  const caret = document.getElementById("lq-caret");
-  const la = document.getElementById("la");
-  const r1 = document.getElementById("r1");
-  const r2 = document.getElementById("r2");
-  const tick = document.getElementById("tick");
-
-  function fillBars() {
-    document.querySelectorAll(".receipt .bar i").forEach((b) => (b.style.width = b.dataset.w));
-  }
-
-  if (reduced) {
-    lqText.textContent = q;
-    caret.style.display = "none";
-    la.classList.add("show");
-    r1.classList.add("show");
-    r2.classList.add("show");
-    tick.classList.add("show");
-    fillBars();
-  } else {
-    let i = 0;
-    (function type() {
-      if (i <= q.length) {
-        lqText.textContent = q.slice(0, i++);
-        setTimeout(type, 34);
-      } else {
-        caret.style.display = "none";
-        setTimeout(() => la.classList.add("show"), 350);
-        setTimeout(() => { r1.classList.add("show"); }, 850);
-        setTimeout(() => { r2.classList.add("show"); fillBars(); }, 1100);
-        setTimeout(() => tick.classList.add("show"), 2100);
-      }
-    })();
-  }
 </script>
 
 </body>
