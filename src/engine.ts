@@ -7,17 +7,20 @@
  *     sync with the code (for CI).
  *
  * The graph is a folder of linked markdown files committed to the repo; git is
- * the sync. This class only wires the configured LLM providers (local Ollama by
- * default, OpenRouter when a key is present) into the build/check pipelines.
+ * the sync. This class wires the OpenRouter LLM providers into the build/check
+ * pipelines; an API key is required for any LLM-backed operation.
  */
 import { resolveConfig, type EngineConfig, type ResolvedConfig } from "./ai/providers.js";
-import { OpenRouterSynthesizer, OllamaSynthesizer, type Synthesizer } from "./ai/synthesize.js";
-import { OpenRouterSummarizer, OllamaSummarizer, type Summarizer } from "./ai/summarize.js";
+import { OpenRouterSynthesizer, type Synthesizer } from "./ai/synthesize.js";
+import { OpenRouterSummarizer, type Summarizer } from "./ai/summarize.js";
+import { OpenRouterCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
 import { buildContext, CODE_EXTENSIONS, type BuildProgress, type BuildResult } from "./context/build.js";
 import { checkContext, type CheckResult } from "./context/check.js";
+import { buildGraph, type GraphBuildOptions, type GraphBuildResult } from "./graph/build.js";
+import { checkGraph, type GraphCheckResult } from "./graph/check.js";
 
 export { CODE_EXTENSIONS };
-export type { BuildResult, BuildProgress, CheckResult };
+export type { BuildResult, BuildProgress, CheckResult, GraphBuildResult, GraphCheckResult };
 
 export interface InitOptions {
   /** Code extensions to include. Default: {@link CODE_EXTENSIONS}. */
@@ -28,6 +31,12 @@ export interface InitOptions {
 
 export interface CheckRunOptions {
   extensions?: string[];
+}
+
+export interface GraphRunOptions {
+  /** Run the Tier-2 LLM meaning pass (summary + crux). Absent → Tier-1 only. */
+  llm?: boolean;
+  onProgress?: GraphBuildOptions["onProgress"];
 }
 
 export class ContextGraphEngine {
@@ -49,39 +58,58 @@ export class ContextGraphEngine {
     });
   }
 
-  /** Report whether the committed graph is still in sync with the code. */
+  /** Report whether the committed `.context/` markdown graph is in sync with the code. */
   check(dir: string, opts: CheckRunOptions = {}): CheckResult {
     return checkContext(dir, { contextDir: this.cfg.contextDir, extensions: opts.extensions });
   }
 
-  private synthesizer(): Synthesizer {
-    if (this.cfg.synthesizer) return this.cfg.synthesizer;
-    if (!this.cfg.forceLocal && this.cfg.openrouterApiKey) {
-      return new OpenRouterSynthesizer(
-        this.cfg.openrouterApiKey,
-        this.cfg.openrouterModel,
-        this.cfg.openrouterBaseUrl,
+  /** Report whether the committed `graph.json` is in sync with the code (Tier-1 diff). */
+  checkGraph(dir: string): GraphCheckResult {
+    return checkGraph(dir, { contextDir: this.cfg.contextDir });
+  }
+
+  /**
+   * Build `.context/graph.json` — a per-symbol code graph from tree-sitter.
+   * Tier-1 (structure) always runs; the Tier-2 meaning layer runs only when
+   * `opts.llm` is set. Either way the prior meaning layer is preserved.
+   */
+  graph(dir: string, opts: GraphRunOptions = {}): Promise<GraphBuildResult> {
+    return buildGraph(dir, {
+      contextDir: this.cfg.contextDir,
+      summarizer: opts.llm ? this.cruxSummarizer() : undefined,
+      onProgress: opts.onProgress,
+    });
+  }
+
+  /** The OpenRouter API key, or a clear error telling the user how to set it. */
+  private requireKey(): string {
+    if (!this.cfg.openrouterApiKey) {
+      throw new Error(
+        "No OpenRouter API key. Set OPENROUTER_API_KEY (get one at https://openrouter.ai/keys) " +
+          "to build or summarize the graph.",
       );
     }
-    return new OllamaSynthesizer(this.cfg.ollamaModel, this.cfg.ollamaBaseUrl);
+    return this.cfg.openrouterApiKey;
+  }
+
+  private synthesizer(): Synthesizer {
+    if (this.cfg.synthesizer) return this.cfg.synthesizer;
+    return new OpenRouterSynthesizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
+  }
+
+  /** Per-node crux summarizer for the code graph's Tier-2 pass. */
+  private cruxSummarizer(): CruxSummarizer {
+    return new OpenRouterCruxSummarizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
   }
 
   private summarizer(): Summarizer {
     if (this.cfg.summarizer) return this.cfg.summarizer;
-    if (!this.cfg.forceLocal && this.cfg.openrouterApiKey) {
-      return new OpenRouterSummarizer(
-        this.cfg.openrouterApiKey,
-        this.cfg.openrouterModel,
-        this.cfg.openrouterBaseUrl,
-      );
-    }
-    return new OllamaSummarizer(this.cfg.ollamaModel, this.cfg.ollamaBaseUrl);
+    return new OpenRouterSummarizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
   }
 
   /** Human label for the active model, recorded in the manifest. */
   private modelLabel(): string {
     if (this.cfg.synthesizer || this.cfg.summarizer) return "custom";
-    if (!this.cfg.forceLocal && this.cfg.openrouterApiKey) return `openrouter:${this.cfg.openrouterModel}`;
-    return `ollama:${this.cfg.ollamaModel}`;
+    return `openrouter:${this.cfg.openrouterModel}`;
   }
 }

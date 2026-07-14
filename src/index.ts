@@ -22,13 +22,15 @@ export { buildContext } from "./context/build.js";
 export type { BuildOptions } from "./context/build.js";
 export { checkContext, formatCheckReport } from "./context/check.js";
 export type { CheckOptions } from "./context/check.js";
+export { checkGraph, formatGraphCheckReport } from "./graph/check.js";
+export type { GraphCheckResult, GraphCheckOptions } from "./graph/check.js";
 export type { ContextNode, NodeLink, SourceRef, Manifest } from "./context/node-file.js";
 
 export type { EngineConfig, ResolvedConfig } from "./ai/providers.js";
 export { resolveConfig, DEFAULTS } from "./ai/providers.js";
 
 // Providers, for advanced/custom setups.
-export { OpenRouterSynthesizer, OllamaSynthesizer } from "./ai/synthesize.js";
+export { OpenRouterSynthesizer } from "./ai/synthesize.js";
 export type { Synthesizer, SynthNode, SynthLink, FileSummary } from "./ai/synthesize.js";
-export { OpenRouterSummarizer, OllamaSummarizer } from "./ai/summarize.js";
+export { OpenRouterSummarizer } from "./ai/summarize.js";
 export type { Summarizer } from "./ai/summarize.js";
