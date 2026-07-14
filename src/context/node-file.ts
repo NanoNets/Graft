@@ -60,7 +60,7 @@ export interface ContextNode {
 /** The generated index written alongside the node files. */
 export interface Manifest {
   version: number;
-  /** Human label for the model that built the graph, e.g. "ollama:llama3.2". */
+  /** Human label for the model that built the graph, e.g. "openrouter:openai/gpt-4o-mini". */
   model: string;
   /** sha256 over every source file's `path:hash` — the whole-graph fingerprint. */
   repoDigest: string;

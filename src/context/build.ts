@@ -56,7 +56,7 @@ export interface BuildOptions {
   contextDir?: string;
   /** Extensions to treat as code. Default: {@link CODE_EXTENSIONS}. */
   extensions?: string[];
-  /** Human label for the model, recorded in the manifest (e.g. "ollama:llama3.2"). */
+  /** Human label for the model, recorded in the manifest (e.g. "openrouter:openai/gpt-4o-mini"). */
   model: string;
   summarizer: Summarizer;
   synthesizer: Synthesizer;
