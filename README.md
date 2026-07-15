@@ -14,7 +14,7 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/%40nanonets%2Fgraft?style=for-the-badge&logo=nodedotjs&logoColor=white" /></a>
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-20C997?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/runs-100%25%20local-546FFF?style=for-the-badge&logo=ollama&logoColor=white" />
+  <img src="https://img.shields.io/badge/telemetry-none-546FFF?style=for-the-badge" />
 </p>
 
 <!-- placeholder: numbers pending a committed benchmark run, see Benchmark below -->
@@ -37,6 +37,9 @@ flowchart LR
 ## Quick start
 
 ```bash
+export OPENROUTER_API_KEY=sk-or-...
+# the summaries are LLM-written — get a key at https://openrouter.ai/keys
+
 npx @nanonets/graft init
 # builds .context/ from your code, one node per system, API, or concept
 
@@ -75,7 +78,7 @@ Graft builds that understanding **once** and writes it into your repo as a folde
 - **A real graph you can read.** No embeddings, no similarity search, no index to keep warm. The graph is a set of linked files your agent opens, greps, and follows, exactly the way it reads any other file in the repo.
 - **Grafted into git.** The graph is just files in `.context/`. Commit it, and anyone who clones the repo has it. No database, no server, no setup. Git does the syncing, and a stale graph shows up as a diff in review instead of rotting in some external store.
 - **The diff lives with the code.** When a change moves things around, you see it in the graph diff in the same pull request, right next to the code that caused it.
-- **Local by default.** The graph builds with a local model, so your code stays on your machine. Cloud models are opt-in for richer summaries.
+- **Your key, your model.** Summaries are written by a model you pick on [OpenRouter](https://openrouter.ai), under your own key. The structural code graph (`graft graph`, `graft check`) is deterministic tree-sitter and never calls a model at all.
 
 ---
 
@@ -87,6 +90,8 @@ Graft builds the graph in two passes, both powered by a language model:
 2. **Group into nodes.** Those summaries are grouped into a curated set of nodes (subsystems, key files, and concepts) with typed links between them. Graft chooses the right level of detail for you instead of making one node per file, so a big repo becomes a few dozen readable nodes.
 
 Both passes are cached by content hash. Re-running only touches the files that changed, so the second build is fast and cheap.
+
+Alongside the markdown graph, `graft graph` builds `.context/graph.json` — a per-symbol code graph. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network). An optional Tier-2 pass (`graft graph --llm`) adds a one-line summary and a crux excerpt per symbol, cached by body hash.
 
 ---
 
@@ -108,7 +113,7 @@ That is three depths in one file: the summary says *what* the code does, the cru
 
 The crux is stored as the code itself, not as a line range, on purpose. Line numbers drift whenever unrelated code above them shifts, but the lines that matter do not. Keeping the text, not the numbers, means the crux stays correct even as the file around it moves.
 
-_Summary, sources, links, and notes ship today. The inline crux excerpt is rolling out as the node schema lands._
+_Summary, sources, links, and notes ship today in markdown nodes. The crux ships per-symbol in the code graph (`graft graph --llm`); inlining it into markdown nodes is next._
 
 ---
 
@@ -121,20 +126,20 @@ graft check          # exits non-zero if .context/ has drifted
 graft check --json   # machine-readable drift report
 ```
 
+When `graph.json` exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft graph`) and stale summaries both fail the check. A repo without a `graph.json` is not penalized; the markdown graph stands alone.
+
 <!-- placeholder: planned, not yet in the CLI -->
 > **Planned: auto-sync on commit.** `graft hook install` will add a post-commit hook that regenerates changed nodes automatically, so the graph stays current without anyone remembering to run `init`. Until then, regenerate with `graft init` and commit it alongside your code.
 
 ---
 
-## Runs locally
+## What runs where
 
-Everything runs on your machine. No accounts, no cloud calls, no keys required.
+- **On your machine, no key, no network:** the structural code graph. `graft graph` (Tier 1) and `graft check` are deterministic tree-sitter — they never call a model.
+- **Through your OpenRouter key:** the LLM-written parts — `graft init` (file summaries + node synthesis) and `graft graph --llm` (per-symbol summaries and cruxes). Set `OPENROUTER_API_KEY` and optionally pick the model with `GRAFT_OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`).
+- **No telemetry** and no analytics — the only network calls are the LLM requests you configured.
 
-- **Default.** A local model via [Ollama](https://ollama.com) builds the graph. Nothing leaves your machine.
-- **Optional.** Set `OPENROUTER_API_KEY` to use a cloud model for richer summaries. Pass `--local` to force local even when a key is set.
-- **No telemetry** and no analytics.
-
-See [`.env.example`](.env.example) for the full list of settings (model names, base URLs).
+See [`.env.example`](.env.example) for the full list of settings (model, base URL, graph directory).
 
 ---
 
@@ -143,7 +148,9 @@ See [`.env.example`](.env.example) for the full list of settings (model names, b
 ```bash
 graft init [dir]                     # build .context/ from the code at [dir] (default: .)
 graft init --extensions .ts .py      # only include these code extensions
-graft init --local                   # force local Ollama even if OPENROUTER_API_KEY is set
+
+graft graph [dir]                    # build .context/graph.json — per-symbol code graph (no LLM, no key)
+graft graph --llm                    # add the meaning layer: per-symbol summary + crux (cached)
 
 graft check [dir]                    # fail (exit 1) if .context/ has drifted from the code
 graft check --json                   # print the drift report as JSON
