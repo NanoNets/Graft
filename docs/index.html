@@ -241,7 +241,7 @@
       <div class="hero-actions">
         <button class="cmd" id="copy-cmd" type="button" aria-label="Copy command">
           <span class="prompt">$</span>
-          <span id="cmd-text">context-graph init</span>
+          <span id="cmd-text">graft build --deep</span>
           <span class="copy-hint" id="copy-hint">copy</span>
         </button>
         <a class="btn" href="https://github.com/NanoNets/context-graph-engine">View source</a>
@@ -258,11 +258,11 @@
         <span class="corner tl"></span><span class="corner tr"></span>
         <span class="corner bl"></span><span class="corner br"></span>
         <div class="panel-head">
-          <span>.context/ — 41 entities</span>
+          <span>graft/ — 41 entities</span>
           <span class="live"><i></i>tracked in git</span>
         </div>
         <div class="fg-body">
-          <span class="muted">.context/</span><br />
+          <span class="muted">graft/</span><br />
           &nbsp;&nbsp;<span class="fg-file">auth-service.md</span><br />
           &nbsp;&nbsp;<span class="fg-file">billing.md</span><br />
           &nbsp;&nbsp;<span class="fg-file">webhooks.md</span> <span class="muted">· +38 more</span>
@@ -295,14 +295,14 @@
       <div class="step">
         <p class="n">01</p>
         <h3>Point it at your repo</h3>
-        <p>It builds <code>.context/</code> — one markdown file per system, API, or concept, linked to each other. The files are the nodes, the links are the edges.</p>
-        <div class="art">$ context-graph init<br /><b>344 files</b> → <span class="hl">41 entities</span> · written to .context/</div>
+        <p>It builds <code>graft/</code> — one markdown file per system, API, or concept, linked to each other. The files are the nodes, the links are the edges.</p>
+        <div class="art">$ graft build --deep<br /><b>344 files</b> → <span class="hl">41 entities</span> · written to graft/</div>
       </div>
       <div class="step">
         <p class="n">02</p>
         <h3>Commit it</h3>
         <p>The graph is just files in git, so git is the sync. Anyone who clones has it, and CI keeps it fresh — you see the graph diff next to the code, in the same PR.</p>
-        <div class="art">$ git add .context<br /><b>auth-service.md</b> <span class="hl">+3 −1</span> · alongside the code</div>
+        <div class="art">$ git add graft<br /><b>auth-service.md</b> <span class="hl">+3 −1</span> · alongside the code</div>
       </div>
       <div class="step">
         <p class="n">03</p>
@@ -350,11 +350,11 @@
       <span class="corner tl"></span><span class="corner tr"></span>
       <span class="corner bl"></span><span class="corner br"></span>
       <pre><span class="c"># in your repo</span>
-<span class="hl">context-graph init</span>          <span class="c"># builds .context/ from your code</span>
-git add .context &amp;&amp; git commit
+<span class="hl">graft build --deep</span>  <span class="c"># builds graft/ from your code</span>
+git add graft &amp;&amp; git commit
 
 <span class="c"># keep it honest — fails CI if the graph is stale</span>
-<span class="hl">context-graph check</span></pre>
+<span class="hl">graft check</span></pre>
     </div>
     <p class="quick-note">
       Everything runs on your machine — no accounts, no cloud calls, no keys. Building the graph

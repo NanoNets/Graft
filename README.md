@@ -26,7 +26,7 @@
 
 ```mermaid
 flowchart LR
-    A["Your code"] -->|"graft init"| B[".context/<br/>a graph of linked<br/>markdown nodes"]
+    A["Your code"] -->|"graft build --deep"| B["graft/<br/>a graph of linked<br/>markdown nodes"]
     B -->|"git commit"| C[("your repo")]
     C -->|"git clone"| D["teammate + their agent"]
     D -->|"reads the graph first"| E["starts already knowing<br/>how the repo fits together"]
@@ -40,10 +40,10 @@ flowchart LR
 export OPENROUTER_API_KEY=sk-or-...
 # the summaries are LLM-written — get a key at https://openrouter.ai/keys
 
-npx @nanonets/graft init
-# builds .context/ from your code, one node per system, API, or concept
+npx @nanonets/graft build --deep
+# builds graft/ from your code, one node per system, API, or concept
 
-git add .context && git commit -m "add context graph"
+git add graft && git commit -m "add context graph"
 # commit it so everyone who clones the repo (and their agents) gets the graph
 ```
 
@@ -51,10 +51,10 @@ Or install it once and get the `graft` command everywhere:
 
 ```bash
 npm install -g @nanonets/graft
-graft init
+graft build --deep
 ```
 
-That is it. Point your agent at `.context/` and it reads the graph before it starts working.
+That is it. Point your agent at `graft/` and it reads the graph before it starts working.
 
 ---
 
@@ -76,9 +76,9 @@ Graft builds that understanding **once** and writes it into your repo as a folde
 
 - **Real explanations, not a list of symbols.** Each node says, in plain English, what a part of the system does and how it connects to the rest, the way a senior engineer would explain it. That is the part an agent actually needs so it can skip the exploration. It is not a dump of function names.
 - **A real graph you can read.** No embeddings, no similarity search, no index to keep warm. The graph is a set of linked files your agent opens, greps, and follows, exactly the way it reads any other file in the repo.
-- **Grafted into git.** The graph is just files in `.context/`. Commit it, and anyone who clones the repo has it. No database, no server, no setup. Git does the syncing, and a stale graph shows up as a diff in review instead of rotting in some external store.
+- **Grafted into git.** The graph is just files in `graft/`. Commit it, and anyone who clones the repo has it. No database, no server, no setup. Git does the syncing, and a stale graph shows up as a diff in review instead of rotting in some external store.
 - **The diff lives with the code.** When a change moves things around, you see it in the graph diff in the same pull request, right next to the code that caused it.
-- **Your key, your model.** Summaries are written by a model you pick on [OpenRouter](https://openrouter.ai), under your own key. The structural code graph (`graft graph`, `graft check`) is deterministic tree-sitter and never calls a model at all.
+- **Your key, your model.** Summaries are written by a model you pick on [OpenRouter](https://openrouter.ai), under your own key. The structural code graph (`graft build`, `graft check`) is deterministic tree-sitter and never calls a model at all.
 
 ---
 
@@ -91,7 +91,7 @@ Graft builds the graph in two passes, both powered by a language model:
 
 Both passes are cached by content hash. Re-running only touches the files that changed, so the second build is fast and cheap.
 
-Alongside the markdown graph, `graft graph` builds `.context/graph.json` — a per-symbol code graph. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network). An optional Tier-2 pass (`graft graph --llm`) adds a one-line summary and a crux excerpt per symbol, cached by body hash.
+Alongside the markdown graph, `graft build` builds `graft/.graph/wiring.json` — a per-symbol code graph — plus a per-file wiring card mirroring your source tree. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network), which is why plain `graft build` needs no key. The `--deep` pass adds a one-line summary and a crux excerpt per symbol, cached by body hash.
 
 ---
 
@@ -113,7 +113,7 @@ That is three depths in one file: the summary says *what* the code does, the cru
 
 The crux is stored as the code itself, not as a line range, on purpose. Line numbers drift whenever unrelated code above them shifts, but the lines that matter do not. Keeping the text, not the numbers, means the crux stays correct even as the file around it moves.
 
-_Summary, sources, links, and notes ship today in markdown nodes. The crux ships per-symbol in the code graph (`graft graph --llm`); inlining it into markdown nodes is next._
+_Summary, sources, links, and notes ship today in markdown nodes. The crux ships per-symbol in the code graph (`graft build --deep`); inlining it into markdown nodes is next._
 
 ---
 
@@ -122,21 +122,21 @@ _Summary, sources, links, and notes ship today in markdown nodes. The crux ships
 A graph that has drifted from the code is worse than no graph. `graft check` compares each node's tracked source hashes against the current files and fails if the graph is stale. Drop it in CI so a pull request cannot merge with an out-of-date map.
 
 ```bash
-graft check          # exits non-zero if .context/ has drifted
+graft check          # exits non-zero if graft/ has drifted
 graft check --json   # machine-readable drift report
 ```
 
-When `graph.json` exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft graph`) and stale summaries both fail the check. A repo without a `graph.json` is not penalized; the markdown graph stands alone.
+When the wiring graph exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft build`) and stale summaries both fail the check. A repo without a wiring graph is not penalized; the markdown graph stands alone.
 
 <!-- placeholder: planned, not yet in the CLI -->
-> **Planned: auto-sync on commit.** `graft hook install` will add a post-commit hook that regenerates changed nodes automatically, so the graph stays current without anyone remembering to run `init`. Until then, regenerate with `graft init` and commit it alongside your code.
+> **Planned: auto-regen on PR.** A single CI bot will regenerate changed nodes on a pull request and push the update, so the graph stays current without anyone remembering to run `build`. Until then, regenerate with `graft build --deep` and commit it alongside your code.
 
 ---
 
 ## What runs where
 
-- **On your machine, no key, no network:** the structural code graph. `graft graph` (Tier 1) and `graft check` are deterministic tree-sitter — they never call a model.
-- **Through your OpenRouter key:** the LLM-written parts — `graft init` (file summaries + node synthesis) and `graft graph --llm` (per-symbol summaries and cruxes). Set `OPENROUTER_API_KEY` and optionally pick the model with `GRAFT_OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`).
+- **On your machine, no key, no network:** the structural code graph. `graft build` (wiring graph + per-file cards), `graft check`, and `graft ask` are deterministic tree-sitter — they never call a model.
+- **Through your OpenRouter key:** the LLM-written parts — `graft build --deep` adds the concept nodes (file summaries + node synthesis) and the per-symbol summaries and cruxes. Set `OPENROUTER_API_KEY` and optionally pick the model with `GRAFT_OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`).
 - **No telemetry** and no analytics — the only network calls are the LLM requests you configured.
 
 See [`.env.example`](.env.example) for the full list of settings (model, base URL, graph directory).
@@ -146,20 +146,21 @@ See [`.env.example`](.env.example) for the full list of settings (model, base UR
 ## CLI
 
 ```bash
-graft init [dir]                     # build .context/ from the code at [dir] (default: .)
-graft init --extensions .ts .py      # only include these code extensions
+graft build [dir]                    # build graft/ from the code at [dir]: wiring graph + per-file cards (no LLM, no key)
+graft build --deep                   # add the LLM layer: concept nodes + per-symbol summary/crux (cached)
+graft build --extensions .ts .py     # only include these code extensions
 
-graft graph [dir]                    # build .context/graph.json — per-symbol code graph (no LLM, no key)
-graft graph --llm                    # add the meaning layer: per-symbol summary + crux (cached)
+graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
+graft ask "<task>" --json            # machine-readable result
 
-graft check [dir]                    # fail (exit 1) if .context/ has drifted from the code
+graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code
 graft check --json                   # print the drift report as JSON
 
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
 
 # global
-graft --dir <path>                   # use a context dir other than <repo>/.context
+graft --dir <path>                   # use a context dir other than <repo>/graft
 ```
 
 ## Visualize it (`graft viz`)
@@ -167,9 +168,9 @@ graft --dir <path>                   # use a context dir other than <repo>/.cont
 `graft viz` opens a local, interactive view of both graphs — no install, no dev
 server; the viewer ships prebuilt inside the package.
 
-- **Context** tab — the architecture graph from `.context/*.md`. Nodes colored by
+- **Context** tab — the architecture graph from `graft/*.md`. Nodes colored by
   type, sized by connectedness.
-- **Code** tab — the per-symbol graph from `graph.json` (run `graft graph` first).
+- **Code** tab — the per-symbol graph from `graft/.graph/wiring.json` (run `graft build` first).
 - **Outline** tab — the file → class → method hierarchy as a collapsible tree.
 
 Edges speak the code's language. Every link is one of a closed set of verbs, each
@@ -187,7 +188,7 @@ answering a question someone building or reviewing code actually asks:
 Select a node and its edges take on direction: **amber = what it depends on,
 teal = what depends on it**, with the verb written on each highlighted edge.
 Chips above the canvas filter by verb; tree-sitter-extracted edges draw solid
-while LLM-inferred ones draw dashed. The viewer live-reloads when `.context/`
+while LLM-inferred ones draw dashed. The viewer live-reloads when `graft/`
 changes on disk. Older graphs with vague verbs (`influences`, `supports`) are
 normalized on load — no regeneration needed.
 
@@ -197,7 +198,7 @@ normalized on load — no regeneration needed.
 
 <!-- placeholder: fill from a committed bench/results/ run before launch -->
 
-The claim Graft has to earn is simple: an agent that reads the graph first is cheaper and faster without getting more answers wrong. The harness runs every task twice through the same agent with the same file tools. One run is **cold** (it explores from zero) and one is **graph** (it gets the `.context/` bundle up front). A separate model judges correctness, with a required-keyword floor so a fast-but-wrong answer cannot win.
+The claim Graft has to earn is simple: an agent that reads the graph first is cheaper and faster without getting more answers wrong. The harness runs every task twice through the same agent with the same file tools. One run is **cold** (it explores from zero) and one is **graph** (it gets the `graft/` bundle up front). A separate model judges correctness, with a required-keyword floor so a fast-but-wrong answer cannot win.
 
 | Metric | Cold | Graph | Change |
 |---|---|---|---|
@@ -225,7 +226,7 @@ npm install
 npm run build
 npm test
 
-npm run cli -- init .      # run the CLI from source
+npm run cli -- build --deep .      # run the CLI from source
 ```
 
 ---
