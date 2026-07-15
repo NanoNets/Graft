@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "model": "openrouter:openai/gpt-4o-mini",
+  "repoDigest": "3b2a2ca79a7b49123c81fa6f4dc1bf949e12042e28aa491bca058d8ca300b913",
+  "files": [
+    {
+      "path": "bench/agent.ts",
+      "hash": "e10d64f913c9517cef84cce58ea042d71bed3e94182c791245170eca54060e31"
+    },
+    {
+      "path": "bench/judge.ts",
+      "hash": "94c222341b066e4f3134b3d9d3f30f31b9ffe7b92967086b07c58f297d349936"
+    },
+    {
+      "path": "bench/llm.ts",
+      "hash": "6c0d2a02ac6aa86de94f779355020700a4d9016e2f4b431bf75560e1d3c51229"
+    },
+    {
+      "path": "bench/report.ts",
+      "hash": "775be8c40a8e4172521bba8f6a1f026fa23c4d24b9b5225da3ed5b745077a5b0"
+    },
+    {
+      "path": "bench/run.ts",
+      "hash": "a0d2859628588f45ae31862f5f801d6219802449c23bbbdba9aa51b7b9febf47"
+    },
+    {
+      "path": "bench/selfcheck.ts",
+      "hash": "0eaf577938e20fa27d9cd0157bc8843fdc37165d85696789334b8605138f4bb4"
+    },
+    {
+      "path": "bench/tasks.ts",
+      "hash": "d21168797f40d193a914aca0c438409d29d300441bc0a6a518c93869240b3b69"
+    },
+    {
+      "path": "install.sh",
+      "hash": "e320ae0015d2d1fa093b919c95a1c233ccb355888f3c8cadd2b6ef0d97559467"
+    },
+    {
+      "path": "scripts/build-viewer.mjs",
+      "hash": "fb4ba16d7815dbdbaf2fd818362f914671903132be5573fbdd9a7734549b833d"
+    },
+    {
+      "path": "src/ai/crux.ts",
+      "hash": "e81750029e4c8641cdaf2b4894f595297839e07a73076e4cdac1522515f923a8"
+    },
+    {
+      "path": "src/ai/providers.ts",
+      "hash": "c0d1294d6fa49f6d06ff9bb137b34ea897f94a67810a839cd5705a1fa5995483"
+    },
+    {
+      "path": "src/ai/summarize.ts",
+      "hash": "6e67f3866c75d88a8b1d265e510578f3e3014d9cfd8b2469e6e4afbd67977f93"
+    },
+    {
+      "path": "src/ai/synthesize.ts",
+      "hash": "982ab91da10ae51fdba64466cbb614db14a51f2e100bb12a72178961d8dd97d7"
+    },
+    {
+      "path": "src/ask/ask.ts",
+      "hash": "62415cb36e835e8a5e9329a770489a726028284b8f40497beba6a721ecf05e21"
+    },
+    {
+      "path": "src/cli.ts",
+      "hash": "294b01aae943b958a291aa17387fe05439ca3b5ffe1a4ed97a4a2c378dcd7947"
+    },
+    {
+      "path": "src/context/build.ts",
+      "hash": "8c614e5dc6b1ef2d6949016ce7480099f95f021ea6b0882f2919397f97a68ce7"
+    },
+    {
+      "path": "src/context/check.ts",
+      "hash": "2444e1f4dfd78208a9b54942364ee1811d064459857c6d6cee178426e278d481"
+    },
+    {
+      "path": "src/context/node-file.ts",
+      "hash": "9e958d74597b4d6d31fa5391882ddab8faab4076d7d33f93de861ab6c2e0b93a"
+    },
+    {
+      "path": "src/engine.ts",
+      "hash": "26307935c472954b6511e7352cf6c0f11ce53dd151ac2407e5fcadc0b9b7c01b"
+    },
+    {
+      "path": "src/graph/build.ts",
+      "hash": "8b05c94896ca63d9c66bf5b3340db53cb8600d536a36880a3012599edf1b3a44"
+    },
+    {
+      "path": "src/graph/cards.ts",
+      "hash": "aef80e6f26a00e406385cd1faeb03d3b4e35a3cc7f1e0c50f7d94ad8a380f913"
+    },
+    {
+      "path": "src/graph/check.ts",
+      "hash": "f0b73053e31d03ec1280d465d614c97044541691675f2b3d09e10bcab5078b58"
+    },
+    {
+      "path": "src/graph/enrich.ts",
+      "hash": "7b8238702835246bfc446ae017157e627c7609fde83b090619de71d013edf8e6"
+    },
+    {
+      "path": "src/graph/extract.ts",
+      "hash": "58cd002d5ee7dfb750cb85293a795148ffbec31e68e2a9b693e0794543a7f727"
+    },
+    {
+      "path": "src/graph/resolve.ts",
+      "hash": "dad41f73d773c45f5237b85e10a36ae45331cd5959df578816ee8ab47622cffe"
+    },
+    {
+      "path": "src/graph/types.ts",
+      "hash": "757b84c059d13cda49e0f29518b31a5473f0d6e243b2ab1f374a7f7ff02492e4"
+    },
+    {
+      "path": "src/graph/write.ts",
+      "hash": "55dd6ea840135ade4db7f49042234bee0db07a9c8c959ab57767deb8bebc6345"
+    },
+    {
+      "path": "src/index.ts",
+      "hash": "e56e74612514fd45665b27e3c47b4a685b503a533b38e1674d256344511107fc"
+    },
+    {
+      "path": "src/ingest/fs.ts",
+      "hash": "a8339532da34b44d35eb9ad16e7106adb1262d73d9895b1bd94574337fb2019f"
+    },
+    {
+      "path": "src/util/id.ts",
+      "hash": "5fabc8ddcc3abc907ce69f04ad2ebe51933262cf44aa2dfd40589f71f1926e8a"
+    },
+    {
+      "path": "src/viz/assemble.ts",
+      "hash": "58ad5caed087bd7b929f5b625501a607e79e0476f998636bec241e0296706ece"
+    },
+    {
+      "path": "src/viz/serve.ts",
+      "hash": "14283762f454c01fc95cfbe9c2b41ef063fc17c4c3e5d120b5dc7f66f541fc1c"
+    },
+    {
+      "path": "test/context.test.ts",
+      "hash": "7c1242872b127117c7cc50404895d7ffcf286a51b611cd23c4ffabd5db8d43f3"
+    },
+    {
+      "path": "test/covers.test.ts",
+      "hash": "f5a75f405be1a01ad43fc806588858df3a8988fee62ad4ec024440d3f5e0fc0c"
+    },
+    {
+      "path": "test/helpers.ts",
+      "hash": "e45af1d38d7c6d4abc804fc74e9ae4c3373cf78769c17b16b185c3ee0e2c3228"
+    },
+    {
+      "path": "test/viz-assemble.test.ts",
+      "hash": "89a2a9f11f459a8110f9d89b2de780dfd164504f3b4c7dc61953a6c83c5911cb"
+    },
+    {
+      "path": "test/viz-serve.test.ts",
+      "hash": "d22168054844e83bc5257271c4cc80a6e3eb1315e600c03b48fe6b54afd5c243"
+    },
+    {
+      "path": "viewer/data.ts",
+      "hash": "e9c5c89ad933e06004cbeddc1b1d7b60a6057726a463c66f9673ba20a3c61afd"
+    },
+    {
+      "path": "viewer/detail.ts",
+      "hash": "fe8df7c5561f2a8588cf4e1ecb367d19cb6b480fe4855f05e4f96137d8078884"
+    },
+    {
+      "path": "viewer/graph.ts",
+      "hash": "192a59b16da8327457de6723893fd9207dd9570a35cd664f96534a7b85e73e01"
+    },
+    {
+      "path": "viewer/main.ts",
+      "hash": "ab45ce4dfe66aafbe779b71d49d6370b3fe64482307b994e857ce34d3f317325"
+    },
+    {
+      "path": "viewer/tree.ts",
+      "hash": "d66e0157f4c2a1525c16505306eb3aabce82565c3d0e56199ea5b7a860290b01"
+    }
+  ],
+  "nodes": [
+    {
+      "slug": "ai-model-evaluation",
+      "name": "AI Model Evaluation",
+      "type": "system",
+      "sources": [
+        "bench/judge.ts"
+      ],
+      "sourcesDigest": "bfba2049dadf6f189e964206041bfbb54d9515eabe1bf3cc28ea06450fa65de7"
+    },
+    {
+      "slug": "benchmarking-framework",
+      "name": "Benchmarking Framework",
+      "type": "system",
+      "sources": [
+        "bench/agent.ts",
+        "bench/judge.ts",
+        "bench/report.ts",
+        "bench/run.ts",
+        "bench/selfcheck.ts",
+        "bench/tasks.ts"
+      ],
+      "sourcesDigest": "cc0c5db726f28fff7640e4c1d4705d7cd4eb54660db1b399622bd8f580ffe58d"
+    },
+    {
+      "slug": "benchmarking-results-reporting",
+      "name": "Benchmarking Results Reporting",
+      "type": "system",
+      "sources": [
+        "bench/report.ts"
+      ],
+      "sourcesDigest": "f7b46f3036503f43413cb48d25fa6ce54585514fb19e9b4e923c0c5628ce8aed"
+    },
+    {
+      "slug": "caching-mechanism",
+      "name": "Caching Mechanism",
+      "type": "concept",
+      "sources": [
+        "bench/agent.ts",
+        "bench/report.ts",
+        "src/context/build.ts",
+        "src/graph/enrich.ts"
+      ],
+      "sourcesDigest": "bb866199bd2f821c5a9b3a9d3fbeff70c9b09d3f6f3b52200219b1a0b89e0fdd"
+    },
+    {
+      "slug": "code-summarization-and-synthesis",
+      "name": "Code Summarization and Synthesis",
+      "type": "system",
+      "sources": [
+        "src/ai/crux.ts",
+        "src/ai/summarize.ts",
+        "src/ai/synthesize.ts"
+      ],
+      "sourcesDigest": "1916d34902c4bd664703e6c5da273beb26c2be5f55e971b3cc3f590f65cde3c7"
+    },
+    {
+      "slug": "configuration-management",
+      "name": "Configuration Management",
+      "type": "concept",
+      "sources": [
+        "src/ai/providers.ts"
+      ],
+      "sourcesDigest": "a131fc0c197424e0b9a6a1da0c7e97f8aaa37eb06f6720480e7959923c918071"
+    },
+    {
+      "slug": "context-graph-management",
+      "name": "Context Graph Management",
+      "type": "system",
+      "sources": [
+        "src/context/build.ts",
+        "src/context/check.ts",
+        "src/context/node-file.ts",
+        "src/graph/build.ts",
+        "src/graph/check.ts",
+        "src/graph/enrich.ts",
+        "src/graph/extract.ts",
+        "src/graph/resolve.ts",
+        "src/graph/types.ts",
+        "src/graph/write.ts"
+      ],
+      "sourcesDigest": "55e6a39238b64c950511c3f7ca87ed1629d82b42231ba60ef5e8e90098ec441c"
+    },
+    {
+      "slug": "error-handling-and-robustness",
+      "name": "Error Handling and Robustness",
+      "type": "concept",
+      "sources": [
+        "bench/run.ts",
+        "bench/selfcheck.ts",
+        "src/engine.ts"
+      ],
+      "sourcesDigest": "f316b70320a3b6166ab65b4721c724c3b21b9e78cb80e77e2e94c67e3355f8aa"
+    },
+    {
+      "slug": "graph-visualization",
+      "name": "Graph Visualization",
+      "type": "system",
+      "sources": [
+        "viewer/data.ts",
+        "viewer/detail.ts",
+        "viewer/graph.ts",
+        "viewer/main.ts",
+        "viewer/tree.ts"
+      ],
+      "sourcesDigest": "fd0623540e7f7eed9942e3db2bc219f9a08b3814ac219dfb2b9a74f8c1aea966"
+    },
+    {
+      "slug": "markdown-context-graph",
+      "name": "Markdown Context Graph",
+      "type": "concept",
+      "sources": [
+        "src/graph/write.ts",
+        "src/index.ts"
+      ],
+      "sourcesDigest": "7883f522ca32a5ffcf1b690631a79925bbb7af24c682d2b389611674a5720a65"
+    },
+    {
+      "slug": "openrouter-integration",
+      "name": "OpenRouter Integration",
+      "type": "system",
+      "sources": [
+        "bench/llm.ts"
+      ],
+      "sourcesDigest": "1bdc59307386b5187ea92242900b2c3b286de3f9f45a08a7dfcf1c2d11801b27"
+    },
+    {
+      "slug": "self-check-mechanism",
+      "name": "Self-Check Mechanism",
+      "type": "system",
+      "sources": [
+        "bench/selfcheck.ts"
+      ],
+      "sourcesDigest": "bfb889927e966de42eecbab5b0186d21e7c5fc8fbde68f2a8a68c657bb120a9a"
+    },
+    {
+      "slug": "task-management",
+      "name": "Task Management",
+      "type": "system",
+      "sources": [
+        "bench/tasks.ts"
+      ],
+      "sourcesDigest": "2940a72050e0bee89a860d904a1ebf289505f797cd93c71d86c2e776227e3fb4"
+    }
+  ]
+}
