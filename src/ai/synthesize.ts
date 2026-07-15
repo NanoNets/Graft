@@ -46,7 +46,8 @@ Produce a CURATED set of nodes of mixed granularity:
 Rules:
 - Strongly prefer FEWER, larger, meaningful nodes. For a repo of N files, aim for well under N nodes. Do NOT emit one node per file, and never a node per incidental identifier (a local interface, helper, or third-party symbol).
 - Merge duplicates and surface-form variants into one node.
-- For each node give: a canonical human-readable name; a type ("system" | "file" | "concept"); a 1-3 sentence summary of its ROLE in the system; "sources" = the exact file paths (from the input) it is grounded in (a system lists all its files; a concept lists the files that motivate it); and "links" to other nodes you define, each with a snake_case relation (depends_on, part_of, uses, implements, produces) and a short description.
+- For each node give: a canonical human-readable name; a type ("system" | "file" | "concept"); a 1-3 sentence summary of its ROLE in the system; "sources" = the exact file paths (from the input) it is grounded in (a system lists all its files; a concept lists the files that motivate it); and "links" to other nodes you define, each with a relation and a short description of what concretely happens in the code.
+- The relation MUST be one of exactly these verbs (each answers a question a code reviewer asks): "part_of" (where does this live?), "uses" (what breaks if the target changes?), "depends_on" (same, for non-call dependencies), "produces" (where does this output come from?), "configures" (what changes its behavior without a code change?), "validates" (what checks or judges this? tests, drift checks, scoring), "implements" (what contract must this honor?). Never invent vague relations like "influences", "supports", or "relates_to" — if none of the verbs fit, drop the link.
 - Only link to nodes you actually define in this response.
 Respond only via the record_graph tool / JSON schema.`;
 
@@ -68,7 +69,10 @@ const NODES_SCHEMA = {
               type: "object",
               properties: {
                 to: { type: "string" },
-                relation: { type: "string" },
+                relation: {
+                  type: "string",
+                  enum: ["part_of", "uses", "depends_on", "produces", "configures", "validates", "implements"],
+                },
                 description: { type: "string" },
               },
               required: ["to", "relation"],
