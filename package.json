@@ -33,7 +33,7 @@
     }
   },
   "bin": {
-    "graft": "./dist/cli.js"
+    "graft": "dist/cli.js"
   },
   "files": [
     "dist",
