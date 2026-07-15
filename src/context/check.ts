@@ -4,7 +4,7 @@
  * Pure I/O + hashing: no LLM, no network, milliseconds. It re-hashes the source
  * files the manifest recorded and compares. Meant to run in CI: exit 0 when the
  * graph is fresh, 1 when it has drifted (so a PR that changed code but not the
- * graph fails until `context-graph init` is re-run and committed).
+ * graph fails until `graft init` is re-run and committed).
  *
  * Drift categories:
  *   content     a recorded source file's bytes changed
@@ -109,11 +109,11 @@ export function checkContext(dir: string, opts: CheckOptions = {}): CheckResult 
 /** Render a check result as a human-readable report. */
 export function formatCheckReport(r: CheckResult): string {
   if (r.missing) {
-    return "context-graph check: NO GRAPH\n\nNo .context/manifest.json found. Run `context-graph init` first.";
+    return "graft check: NO GRAPH\n\nNo .context/manifest.json found. Run `graft init` first.";
   }
-  if (r.ok) return "context-graph check: OK — the graph is in sync with the code.";
+  if (r.ok) return "graft check: OK — the graph is in sync with the code.";
 
-  const lines: string[] = ["context-graph check: STALE", ""];
+  const lines: string[] = ["graft check: STALE", ""];
   if (r.contentDrift.length) {
     lines.push(`changed (${r.contentDrift.length}):`);
     for (const c of r.contentDrift) lines.push(`  ~ ${c.path}  (${c.from} → ${c.to})`);
@@ -130,7 +130,7 @@ export function formatCheckReport(r: CheckResult): string {
     lines.push(`index mismatch (${r.indexDrift.length}):`);
     for (const s of r.indexDrift) lines.push(`  ! ${s}`);
   }
-  lines.push("", "Run `context-graph init` to regenerate, then commit .context/.");
+  lines.push("", "Run `graft init` to regenerate, then commit .context/.");
   return lines.join("\n");
 }
 

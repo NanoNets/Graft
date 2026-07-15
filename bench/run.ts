@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, readdirSync, rmSyn
 import { tmpdir } from "node:os";
 import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ContextGraphEngine } from "../src/index.js";
+import { Graft } from "../src/index.js";
 import { DOC_EXTENSIONS } from "../src/ingest/fs.js";
 import { extractPdfText, isPdfPath } from "../src/ingest/pdf.js";
 import { CORPORA, type Corpus } from "./tasks.js";
@@ -105,7 +105,7 @@ async function main() {
     // Fresh temp-backed engine; ingest once and reuse for the whole corpus.
     const dbDir = mkdtempSync(join(tmpdir(), "cge-bench-db-"));
     tmpDbDirs.push(dbDir);
-    const engine = new ContextGraphEngine({ dbPath: join(dbDir, "graph.db") });
+    const engine = new Graft({ dbPath: join(dbDir, "graph.db") });
 
     let agentRoot = corpus.path;
     let docsWorkdir: string | undefined;

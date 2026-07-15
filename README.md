@@ -9,9 +9,9 @@
 **Graft gives it the map it should have read first.**
 
 <p>
-  <a href="https://www.npmjs.com/package/graft"><img src="https://img.shields.io/npm/v/graft?style=for-the-badge&logo=npm&logoColor=white&label=npm" /></a>
-  <a href="https://www.npmjs.com/package/graft"><img src="https://img.shields.io/npm/dm/graft?style=for-the-badge&logo=npm&logoColor=white&label=downloads" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/graft?style=for-the-badge&logo=nodedotjs&logoColor=white" /></a>
+  <a href="https://www.npmjs.com/package/@nanonets/graft"><img src="https://img.shields.io/npm/v/%40nanonets%2Fgraft?style=for-the-badge&logo=npm&logoColor=white&label=npm" /></a>
+  <a href="https://www.npmjs.com/package/@nanonets/graft"><img src="https://img.shields.io/npm/dm/%40nanonets%2Fgraft?style=for-the-badge&logo=npm&logoColor=white&label=downloads" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/%40nanonets%2Fgraft?style=for-the-badge&logo=nodedotjs&logoColor=white" /></a>
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-20C997?style=for-the-badge" />
   <img src="https://img.shields.io/badge/runs-100%25%20local-546FFF?style=for-the-badge&logo=ollama&logoColor=white" />
@@ -37,14 +37,19 @@ flowchart LR
 ## Quick start
 
 ```bash
-npx graft init
+npx @nanonets/graft init
 # builds .context/ from your code, one node per system, API, or concept
 
 git add .context && git commit -m "add context graph"
 # commit it so everyone who clones the repo (and their agents) gets the graph
 ```
 
-<!-- placeholder: package publish + `graft` rename pending; until then the bin is `context-graph` -->
+Or install it once and get the `graft` command everywhere:
+
+```bash
+npm install -g @nanonets/graft
+graft init
+```
 
 That is it. Point your agent at `.context/` and it reads the graph before it starts working.
 
@@ -135,8 +140,6 @@ See [`.env.example`](.env.example) for the full list of settings (model names, b
 
 ## CLI
 
-Two commands. That is the whole surface.
-
 ```bash
 graft init [dir]                     # build .context/ from the code at [dir] (default: .)
 graft init --extensions .ts .py      # only include these code extensions
@@ -145,9 +148,41 @@ graft init --local                   # force local Ollama even if OPENROUTER_API
 graft check [dir]                    # fail (exit 1) if .context/ has drifted from the code
 graft check --json                   # print the drift report as JSON
 
+graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
+graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
+
 # global
 graft --dir <path>                   # use a context dir other than <repo>/.context
 ```
+
+## Visualize it (`graft viz`)
+
+`graft viz` opens a local, interactive view of both graphs — no install, no dev
+server; the viewer ships prebuilt inside the package.
+
+- **Context** tab — the architecture graph from `.context/*.md`. Nodes colored by
+  type, sized by connectedness.
+- **Code** tab — the per-symbol graph from `graph.json` (run `graft graph` first).
+- **Outline** tab — the file → class → method hierarchy as a collapsible tree.
+
+Edges speak the code's language. Every link is one of a closed set of verbs, each
+answering a question someone building or reviewing code actually asks:
+
+| Verb | The question it answers |
+|---|---|
+| `part_of` / `contains` | where does this live? |
+| `uses` / `calls` / `imports` / `depends_on` | what breaks if I change this? |
+| `produces` | where does this output come from? |
+| `configures` | what changes its behavior without a code change? |
+| `validates` | what checks or judges this? (tests, drift checks, scoring) |
+| `extends` / `implements` | what contract must this honor? |
+
+Select a node and its edges take on direction: **amber = what it depends on,
+teal = what depends on it**, with the verb written on each highlighted edge.
+Chips above the canvas filter by verb; tree-sitter-extracted edges draw solid
+while LLM-inferred ones draw dashed. The viewer live-reloads when `.context/`
+changes on disk. Older graphs with vague verbs (`influences`, `supports`) are
+normalized on load — no regeneration needed.
 
 ---
 
@@ -178,15 +213,13 @@ See [`bench/README.md`](bench/README.md) for the method and how to add your own 
 ## Development
 
 ```bash
-git clone https://github.com/nanonets/graft.git && cd graft
+git clone https://github.com/NanoNets/context-graph-engine.git && cd context-graph-engine
 npm install
 npm run build
 npm test
 
 npm run cli -- init .      # run the CLI from source
 ```
-
-<!-- placeholder: confirm repo URL once published -->
 
 ---
 

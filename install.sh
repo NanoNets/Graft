@@ -1,22 +1,22 @@
 #!/usr/bin/env sh
-# Context Graph Engine — one-line installer.
+# Graft — one-line installer.
 #
 # Two ways to use it:
 #   1. From a checkout:  ./install.sh          (builds THIS directory — no re-clone)
 #   2. Over the network: curl -fsSL https://raw.githubusercontent.com/NanoNets/context-graph-engine/main/install.sh | sh
 #
-# Either way it builds the project and puts the `context-graph` command on your
+# Either way it builds the project and puts the `graft` command on your
 # PATH. Requires git, Node >= 20, and npm.
 #
 # Environment overrides:
-#   CGE_REPO   git URL to clone from      (default: the NanoNets repo below)
-#   CGE_REF    branch/tag/commit to fetch (default: main)
-#   CGE_HOME   where to clone into        (default: ~/.context-graph-engine)
+#   GRAFT_REPO   git URL to clone from      (default: the NanoNets repo below)
+#   GRAFT_REF    branch/tag/commit to fetch (default: main)
+#   GRAFT_HOME   where to clone into        (default: ~/.graft)
 set -eu
 
-REPO_URL="${CGE_REPO:-https://github.com/NanoNets/context-graph-engine.git}"
-REF="${CGE_REF:-main}"
-INSTALL_DIR="${CGE_HOME:-$HOME/.context-graph-engine}"
+REPO_URL="${GRAFT_REPO:-https://github.com/NanoNets/context-graph-engine.git}"
+REF="${GRAFT_REF:-main}"
+INSTALL_DIR="${GRAFT_HOME:-$HOME/.graft}"
 
 info() { printf '\033[1;36m›\033[0m %s\n' "$1"; }
 err()  { printf '\033[1;31m✗ %s\033[0m\n' "$1" >&2; }
@@ -44,7 +44,7 @@ case "${0:-}" in
   */*) SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || SCRIPT_DIR="" ;;
 esac
 
-if [ -n "$SCRIPT_DIR" ] && grep -q '"context-graph-engine"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
+if [ -n "$SCRIPT_DIR" ] && grep -q '"@nanonets/graft"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
   INSTALL_DIR="$SCRIPT_DIR"
   info "Installing from local checkout at $INSTALL_DIR"
 else
@@ -66,7 +66,7 @@ info "Installing dependencies"
 info "Building"
 ( cd "$INSTALL_DIR" && npm run build --silent )
 
-info "Linking the 'context-graph' command"
+info "Linking the 'graft' command"
 ( cd "$INSTALL_DIR" && npm link >/dev/null 2>&1 )
 
 echo
@@ -75,11 +75,11 @@ cat <<'NEXT'
 
   Build the graph, then commit it:
           cd your-repo
-          context-graph init          # writes .context/*.md from your code
+          graft init          # writes .context/*.md from your code
           git add .context && git commit -m "add context graph"
 
   Keep it honest in CI:
-          context-graph check         # exits non-zero if the graph is stale
+          graft check         # exits non-zero if the graph is stale
 
   Runs locally out of the box:
     • Extraction/summaries default to a local Ollama model. Install Ollama and

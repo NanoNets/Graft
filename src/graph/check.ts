@@ -103,7 +103,7 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
 /** Render a graph-check result as a human-readable report. */
 export function formatGraphCheckReport(r: GraphCheckResult): string {
   if (r.missing) {
-    return "graph check: NO GRAPH\n\nNo .context/graph.json found. Run `context-graph graph` first.";
+    return "graph check: NO GRAPH\n\nNo .context/graph.json found. Run `graft graph` first.";
   }
   if (r.ok) {
     const note = r.pending ? ` (${r.pending} node(s) not yet summarized — run \`graph --llm\`)` : "";
@@ -129,7 +129,7 @@ export function formatGraphCheckReport(r: GraphCheckResult): string {
     for (const id of r.stale) lines.push(`  ! ${id}`);
   }
   lines.push("");
-  if (structural) lines.push("Run `context-graph graph` to rebuild the structure, then commit .context/.");
-  if (r.stale.length) lines.push("Run `context-graph graph --llm` to refresh stale summaries.");
+  if (structural) lines.push("Run `graft graph` to rebuild the structure, then commit .context/.");
+  if (r.stale.length) lines.push("Run `graft graph --llm` to refresh stale summaries.");
   return lines.join("\n");
 }
