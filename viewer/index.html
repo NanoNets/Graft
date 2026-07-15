@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graft viz</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="appbar">
+  <div class="brand"><b>graft</b><span id="repoName"></span></div>
+  <div class="counts" id="counts"></div>
+  <nav class="tabs" role="tablist" id="tabs">
+    <button class="tab" role="tab" aria-selected="true" data-tab="context">Context</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="code">Code</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="outline">Outline</button>
+  </nav>
+  <div class="searchbox">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="search" type="search" placeholder="Search nodes…" aria-label="Search nodes">
+  </div>
+  <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+  </button>
+</header>
+
+<main class="stage" id="stage">
+  <div class="canvas-wrap" id="canvasWrap">
+    <svg class="graph" id="graphSvg" role="img" aria-label="Force-directed graph"></svg>
+    <div class="edgestyle" id="edgeChips"><span class="cap">Edges</span></div>
+    <div class="lcount" id="lcount"></div>
+    <div class="legend" id="legend"></div>
+    <div class="zoomctl">
+      <button class="iconbtn" id="zin" aria-label="Zoom in">+</button>
+      <button class="iconbtn" id="zout" aria-label="Zoom out">−</button>
+      <button class="iconbtn" id="zreset" aria-label="Reset view">⟲</button>
+    </div>
+    <div class="emptytab" id="graphEmpty" hidden></div>
+  </div>
+  <div class="outline" id="outlineView" hidden>
+    <div class="tree" id="tree"></div>
+  </div>
+  <aside class="detail" id="detail"><div class="empty">Select a node to view details</div></aside>
+</main>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

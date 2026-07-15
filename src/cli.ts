@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `context-graph` CLI. Two commands:
+ * `graft` CLI. Two commands:
  *
  *   init    build .context/ from your code (one markdown node per system,
  *           API, or concept; linked to each other; committed to the repo).
@@ -12,20 +12,20 @@
 import "dotenv/config";
 import { Command } from "commander";
 import { relative } from "node:path";
-import { ContextGraphEngine } from "./engine.js";
+import { Graft } from "./engine.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
 
 const program = new Command();
 
 program
-  .name("context-graph")
+  .name("graft")
   .description("Build a repo's context graph as linked markdown, and keep it in sync with the code.")
   .option("--dir <path>", "context graph directory (default: <repo>/.context)");
 
-function engineFrom(): ContextGraphEngine {
+function engineFrom(): Graft {
   const opts = program.opts<{ dir?: string }>();
-  return new ContextGraphEngine({ contextDir: opts.dir });
+  return new Graft({ contextDir: opts.dir });
 }
 
 program
@@ -103,6 +103,42 @@ program
 
     // A missing graph.json is not a failure — the markdown graph stands alone.
     if (!r.ok || (!g.missing && !g.ok)) process.exit(1);
+  });
+
+program
+  .command("viz")
+  .description("Serve an interactive visualization of the context graph (and graph.json when present)")
+  .argument("[dir]", "repository root", ".")
+  .option("-p, --port <port>", "port to serve on", "4400")
+  .option("--no-open", "don't open the browser")
+  .action(async (dir: string, opts: { port: string; open: boolean }) => {
+    const { existsSync } = await import("node:fs");
+    const { resolve, basename } = await import("node:path");
+    const { spawn } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
+    const { contextDirFor } = await import("./context/node-file.js");
+    const { startVizServer } = await import("./viz/serve.js");
+
+    const root = resolve(dir);
+    const globalOpts = program.opts<{ dir?: string }>();
+    const contextDir = contextDirFor(root, globalOpts.dir);
+    if (!existsSync(contextDir)) {
+      console.error(`✗ no context graph at ${contextDir} — run \`graft init\` first`);
+      process.exit(1);
+    }
+    // dist/cli.js → dist/viewer/ (prebuilt at package build time)
+    const viewerDir = fileURLToPath(new URL("./viewer/", import.meta.url));
+    const srv = await startVizServer({
+      contextDir,
+      viewerDir,
+      port: Number(opts.port),
+      repoName: basename(root),
+    });
+    console.log(`graft viz → ${srv.url}  (ctrl-c to stop)`);
+    if (opts.open) {
+      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      spawn(opener, [srv.url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
+    }
   });
 
 program.parseAsync().catch((err) => {

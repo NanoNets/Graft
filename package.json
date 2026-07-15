@@ -1,5 +1,5 @@
 {
-  "name": "context-graph-engine",
+  "name": "@nanonets/graft",
   "version": "0.1.0",
   "description": "Build a repo's context graph as a folder of linked markdown files that live in the repo and stay in sync with the code through git.",
   "keywords": [
@@ -8,9 +8,21 @@
     "knowledge-graph",
     "context",
     "codebase",
-    "llm"
+    "llm",
+    "graft"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NanoNets/context-graph-engine.git"
+  },
+  "homepage": "https://github.com/NanoNets/context-graph-engine#readme",
+  "bugs": {
+    "url": "https://github.com/NanoNets/context-graph-engine/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,7 +33,7 @@
     }
   },
   "bin": {
-    "context-graph": "./dist/cli.js"
+    "graft": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -29,7 +41,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p viewer/tsconfig.json && node scripts/build-viewer.mjs",
     "dev": "tsc -p tsconfig.json --watch",
     "cli": "tsx src/cli.ts",
     "bench": "tsx bench/run.ts",
@@ -50,7 +62,10 @@
     "tree-sitter-typescript": "^0.23.2"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^26.1.0",
+    "d3-force": "^3.0.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
