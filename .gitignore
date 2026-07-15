@@ -2,9 +2,10 @@ node_modules/
 dist/
 *.log
 
-# The context graph's local LLM-call cache — regenerated, never committed.
-# The graph itself (.context/*.md + manifest.json) IS committed.
-.context/.cache/
+# The graph's local LLM-call cache — regenerated, never committed. Everything
+# else in graft/ (concept nodes, wiring cards, .graph/wiring.json, manifest.json)
+# IS committed — it's the lockfile teammates and their agents read.
+graft/.cache/
 
 # Benchmark run artifacts (regenerated per run)
 bench/results/

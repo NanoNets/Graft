@@ -15,7 +15,7 @@ import { extractFile, languageOf, type Language, type RawEdge } from "./extract.
 import { resolveEdges } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
-import { writeCards, writeIndex } from "./cards.js";
+import { writeCards, writeIndex, writeCovers } from "./cards.js";
 import type { GraphV1, Kind, NodeV1, Relation } from "./types.js";
 import type { CruxSummarizer } from "../ai/crux.js";
 
@@ -118,6 +118,9 @@ export async function buildGraph(
   // refresh the INDEX roster. Pure projection — no LLM, no network.
   const cardStats = writeCards(graph, outDir);
   writeIndex(outDir, cardStats.files);
+  // Backfill concept nodes with their `covers:` symbol/file:line list (the
+  // OKF↔Wiring link). No-op when there are no concept nodes (a $0 build).
+  writeCovers(graph, outDir);
 
   const byKind = {} as Record<Kind, number>;
   for (const n of nodes) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;

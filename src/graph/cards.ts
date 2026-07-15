@@ -14,8 +14,9 @@
  * `summary` when present (after `graft build --deep`), else its deterministic
  * `signature`, so cards are useful even in a $0 structure-only build.
  */
-import { mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import matter from "gray-matter";
 import type { GraphV1, NodeV1 } from "./types.js";
 import { CACHE_DIR, readNodes } from "../context/node-file.js";
 import { GRAPH_DIR } from "./write.js";
@@ -220,4 +221,63 @@ export function writeIndex(outDir: string, files: CardFileInfo[]): void {
   }
 
   writeFileSync(join(outDir, INDEX_FILE), lines.join("\n"));
+}
+
+/** One symbol a concept node covers: its name, kind, and `path:span` pointer. */
+export interface CoverRef {
+  symbol: string;
+  kind: string;
+  /** `src/ai/providers.ts:L28-L35` — same vocabulary `graft ask` returns. */
+  at: string;
+}
+
+/**
+ * Backfill each concept node's frontmatter with a `covers:` list — the symbols
+ * (and their exact `file:line`) it spans, read from the wiring graph. This is the
+ * explicit OKF↔Wiring link: it doubles as grep bait (a `grep <symbol>` lands on
+ * the prose node, not just its card) and lets an agent read the span straight
+ * from the node without ever opening `wiring.json`.
+ *
+ * A surgical frontmatter patch: the generated body and every other key are
+ * preserved verbatim; only `covers` is added/replaced. Concept nodes are the
+ * top-level `.md` files (cards live in subdirs; INDEX.md is skipped). On a $0
+ * structure-only build there are no concept nodes, so this is a no-op. Returns
+ * the number of nodes enriched.
+ */
+export function writeCovers(graph: GraphV1, outDir: string): number {
+  if (!existsSync(outDir)) return 0;
+
+  const symbolsByPath = new Map<string, NodeV1[]>();
+  for (const n of graph.nodes) {
+    if (n.kind === "file") continue;
+    const list = symbolsByPath.get(n.path) ?? [];
+    list.push(n);
+    symbolsByPath.set(n.path, list);
+  }
+  for (const list of symbolsByPath.values()) {
+    list.sort((a, b) => spanStart(a.span) - spanStart(b.span) || a.name.localeCompare(b.name));
+  }
+
+  let enriched = 0;
+  for (const entry of readdirSync(outDir)) {
+    if (!entry.endsWith(".md") || entry === INDEX_FILE) continue;
+    const full = join(outDir, entry);
+    const parsed = matter(readFileSync(full, "utf8"));
+    const sources = Array.isArray(parsed.data.sources)
+      ? (parsed.data.sources as Array<{ path?: string }>)
+      : [];
+
+    const covers: CoverRef[] = [];
+    for (const path of [...new Set(sources.map((s) => s.path ?? ""))].sort()) {
+      for (const n of symbolsByPath.get(path) ?? []) {
+        covers.push({ symbol: n.name, kind: n.kind, at: `${n.path}:${n.span}` });
+      }
+    }
+
+    // Re-stringify with covers appended last, so re-runs produce a stable diff.
+    const { covers: _prev, ...rest } = parsed.data as Record<string, unknown>;
+    writeFileSync(full, matter.stringify(parsed.content, { ...rest, covers }));
+    enriched++;
+  }
+  return enriched;
 }
