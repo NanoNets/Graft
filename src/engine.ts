@@ -2,8 +2,8 @@
  * The Context Graph Engine.
  *
  * Two operations, no database:
- *   - {@link ContextGraphEngine.init}  build `.context/` from a code repo.
- *   - {@link ContextGraphEngine.check} report whether `.context/` is still in
+ *   - {@link Graft.init}  build `.context/` from a code repo.
+ *   - {@link Graft.check} report whether `.context/` is still in
  *     sync with the code (for CI).
  *
  * The graph is a folder of linked markdown files committed to the repo; git is
@@ -39,7 +39,7 @@ export interface GraphRunOptions {
   onProgress?: GraphBuildOptions["onProgress"];
 }
 
-export class ContextGraphEngine {
+export class Graft {
   private cfg: ResolvedConfig;
 
   constructor(config: EngineConfig = {}) {

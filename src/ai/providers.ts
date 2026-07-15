@@ -7,12 +7,12 @@ import type { Synthesizer } from "./synthesize.js";
  * API key is required for any LLM-backed operation.
  */
 export interface EngineConfig {
-  /** Where the graph lives. Env: CONTEXT_GRAPH_DIR. Default: `<repo>/.context`. */
+  /** Where the graph lives. Env: GRAFT_DIR. Default: `<repo>/.context`. */
   contextDir?: string;
 
   /** OpenRouter key for extraction + summarization. Env: OPENROUTER_API_KEY. */
   openrouterApiKey?: string;
-  /** OpenRouter model id. Env: CONTEXT_GRAPH_OPENROUTER_MODEL. Default: openai/gpt-4o-mini */
+  /** OpenRouter model id. Env: GRAFT_OPENROUTER_MODEL. Default: openai/gpt-4o-mini */
   openrouterModel?: string;
   /** OpenRouter API base URL. Env: OPENROUTER_BASE_URL. Default: https://openrouter.ai/api/v1 */
   openrouterBaseUrl?: string;
@@ -43,10 +43,10 @@ export const DEFAULTS = {
 export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
   const env = process.env;
   return {
-    contextDir: config.contextDir ?? env.CONTEXT_GRAPH_DIR,
+    contextDir: config.contextDir ?? env.GRAFT_DIR,
     openrouterApiKey: config.openrouterApiKey ?? env.OPENROUTER_API_KEY,
     openrouterModel:
-      config.openrouterModel ?? env.CONTEXT_GRAPH_OPENROUTER_MODEL ?? DEFAULTS.openrouterModel,
+      config.openrouterModel ?? env.GRAFT_OPENROUTER_MODEL ?? DEFAULTS.openrouterModel,
     openrouterBaseUrl:
       config.openrouterBaseUrl ?? env.OPENROUTER_BASE_URL ?? DEFAULTS.openrouterBaseUrl,
     synthesizer: config.synthesizer,

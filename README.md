@@ -9,9 +9,9 @@
 **Graft gives it the map it should have read first.**
 
 <p>
-  <a href="https://www.npmjs.com/package/graft"><img src="https://img.shields.io/npm/v/graft?style=for-the-badge&logo=npm&logoColor=white&label=npm" /></a>
-  <a href="https://www.npmjs.com/package/graft"><img src="https://img.shields.io/npm/dm/graft?style=for-the-badge&logo=npm&logoColor=white&label=downloads" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/graft?style=for-the-badge&logo=nodedotjs&logoColor=white" /></a>
+  <a href="https://www.npmjs.com/package/@nanonets/graft"><img src="https://img.shields.io/npm/v/%40nanonets%2Fgraft?style=for-the-badge&logo=npm&logoColor=white&label=npm" /></a>
+  <a href="https://www.npmjs.com/package/@nanonets/graft"><img src="https://img.shields.io/npm/dm/%40nanonets%2Fgraft?style=for-the-badge&logo=npm&logoColor=white&label=downloads" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/%40nanonets%2Fgraft?style=for-the-badge&logo=nodedotjs&logoColor=white" /></a>
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-20C997?style=for-the-badge" />
   <img src="https://img.shields.io/badge/runs-100%25%20local-546FFF?style=for-the-badge&logo=ollama&logoColor=white" />
@@ -37,14 +37,19 @@ flowchart LR
 ## Quick start
 
 ```bash
-npx graft init
+npx @nanonets/graft init
 # builds .context/ from your code, one node per system, API, or concept
 
 git add .context && git commit -m "add context graph"
 # commit it so everyone who clones the repo (and their agents) gets the graph
 ```
 
-<!-- placeholder: package publish + `graft` rename pending; until then the bin is `context-graph` -->
+Or install it once and get the `graft` command everywhere:
+
+```bash
+npm install -g @nanonets/graft
+graft init
+```
 
 That is it. Point your agent at `.context/` and it reads the graph before it starts working.
 
