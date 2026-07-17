@@ -106,7 +106,7 @@ export function formatGraphCheckReport(r: GraphCheckResult): string {
     return "graph check: NO GRAPH\n\nNo graft/.graph/wiring.json found. Run `graft build` first.";
   }
   if (r.ok) {
-    const note = r.pending ? ` (${r.pending} node(s) not yet summarized — run \`graph --llm\`)` : "";
+    const note = r.pending ? ` (${r.pending} node(s) not yet summarized — run \`graft build --deep\`)` : "";
     return `graph check: OK — the wiring graph is in sync with the code.${note}`;
   }
 
