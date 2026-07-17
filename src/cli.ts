@@ -13,6 +13,7 @@ import "dotenv/config";
 import { Command } from "commander";
 import { relative } from "node:path";
 import { Graft } from "./engine.js";
+import { resolveConfig } from "./ai/providers.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
 
@@ -45,9 +46,21 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
+    // --deep needs a key; without one, degrade to the $0 structural build
+    // rather than failing — the wiring graph is still worth having.
+    let deep = opts.deep;
+    if (deep && !resolveConfig().openrouterApiKey) {
+      deep = false;
+      console.error(
+        "⚠ no OPENROUTER_API_KEY set — falling back to the structural build (no LLM summaries).\n" +
+          "  Set OPENROUTER_API_KEY (https://openrouter.ai/keys) and re-run `graft build --deep`\n" +
+          "  to add concept nodes and per-symbol summaries.",
+      );
+    }
+
     // --deep: concept nodes first (they're LLM prose; the wiring cards link up to
     // them), then the wiring graph rewrites the cards + INDEX with those up-links.
-    if (opts.deep) {
+    if (deep) {
       const c = await engine.init(dir, {
         extensions: opts.extensions,
         onProgress: ({ phase, index, total, file }) =>
@@ -64,7 +77,7 @@ program
 
     // Wiring graph (Tier-2 cards + Tier-3 wiring.json) — always. LLM meaning only with --deep.
     const g = await engine.graph(dir, {
-      llm: opts.deep,
+      llm: deep,
       onProgress: ({ phase, index, total, file }) =>
         process.stderr.write(
           `\r${phase === "enrich" ? "summarizing" : "parsing"} ${index + 1}/${total}: ${file.slice(0, 50).padEnd(50)}`,
@@ -72,7 +85,7 @@ program
     });
     process.stderr.write("\n");
     console.log(`✓ wiring: ${g.nodes} nodes (${fmt(g.byKind)}), ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
-    if (opts.deep) {
+    if (deep) {
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
     }
