@@ -58,6 +58,25 @@ That is it. Point your agent at `graft/` and it reads the graph before it starts
 
 ---
 
+## Claude Code integration
+
+If you use [Claude Code](https://claude.com/claude-code), one command wires Graft into every session in the repo:
+
+```bash
+npx @nanonets/graft init
+# writes .claude/ (statusline + hooks) and builds the graph if it's missing
+```
+
+From then on, any Claude Code session opened in the repo gets:
+
+- **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph
+- **auto-sync** — after you edit code, Graft rebuilds the graph in the background at the end of the turn (structural, `$0` — it never calls the LLM on its own)
+- **context on tap** — each prompt pulls the matching nodes into the session; editing a file surfaces what depends on it ("blast radius"); new sessions start with the repo map
+
+`graft init` is idempotent and never clobbers your existing `.claude/settings.json` — it merges its blocks and leaves the rest alone. Want the LLM summaries too? Run `graft build --deep` (with a key) whenever you like; auto-sync will never do it for you.
+
+---
+
 ## The problem
 
 Every task, your coding agent starts blind. Before it changes anything, it re-explores the repo: grep a term, open a file, follow an import, back out, try again. It is rebuilding a picture of a codebase it mapped an hour ago and threw away. That rediscovery burns most of a run's tool calls, tokens, and latency, and it is pure overhead:
@@ -158,6 +177,9 @@ graft check --json                   # print the drift report as JSON
 
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
+
+graft init [dir]                     # set up the Claude Code integration (.claude/ statusline + hooks) in this repo
+graft init --no-build                # wire the files only; don't build the graph
 
 # global
 graft --dir <path>                   # use a context dir other than <repo>/graft
