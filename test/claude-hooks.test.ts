@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { underGraft, main } from '../src/claude/hooks.js';
@@ -82,4 +82,23 @@ test('runSync stays dirty when build succeeds but wiring is unreadable', () => {
   assert.equal(s.dirty, true, 'unreadable wiring → stay dirty, retry next turn');
   assert.equal(s.syncedAt, null, 'not marked synced');
   assert.equal(acquireLock(d), true, 'lock released');
+});
+
+test('prompt branch stays silent and writes no session when graft is not built', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-prompt-'));
+  process.env.CLAUDE_PROJECT_DIR = d;
+  const chunks: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  (process.stdout as any).write = (s: any) => { chunks.push(String(s)); return true; };
+  try {
+    await runWithStdin(
+      JSON.stringify({ session_id: 'p1', prompt: 'how does pkce verification work' }),
+      () => main('prompt'),
+    );
+  } finally {
+    (process.stdout as any).write = orig;
+    delete process.env.CLAUDE_PROJECT_DIR;
+  }
+  assert.equal(chunks.join(''), '', 'no stdout when graft ask unavailable (no dist/cli.js in temp dir)');
+  assert.equal(existsSync(join(d, 'graft', '.cache', 'session', 'p1.json')), false, 'no session file on no-op');
 });
