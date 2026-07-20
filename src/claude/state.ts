@@ -40,6 +40,8 @@ function writeJsonAtomic(p: string, value: unknown): void {
 
 export function readStats(d: string): Stats | null { return readJson<Stats>(statsPath(d)); }
 export function writeStats(d: string, s: Stats): void { writeJsonAtomic(statsPath(d), s); }
+// Best-effort read-modify-write; not atomic across concurrent processes, but acceptable
+// for episodic hook writes (worst case is a lost update, not corruption).
 export function patchStats(d: string, patch: Partial<Stats>): Stats {
   const next: Stats = { ...(readStats(d) ?? emptyStats()), ...patch };
   writeStats(d, next);

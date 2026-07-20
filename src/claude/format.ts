@@ -48,7 +48,7 @@ export function renderStatusline(
 function nodeIdsInFile(w: GraphV1, filePath: string): Set<string> {
   const nodes = w.nodes ?? [];
   return new Set(
-    nodes.filter((n) => n.path && (filePath === n.path || filePath.endsWith(`/${n.path}`) || filePath.endsWith(n.path)))
+    nodes.filter((n) => n.path && (filePath === n.path || filePath.endsWith(`/${n.path}`)))
       .map((n) => n.id),
   );
 }

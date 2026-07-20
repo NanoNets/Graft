@@ -24,7 +24,14 @@ function graftJson(dir: string, args: string[]): any | null {
     const out = execFileSync(process.execPath, [join(dir, 'dist', 'cli.js'), ...args],
       { cwd: dir, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
-  } catch { return null; }
+  } catch (e: any) {
+    // `graft check` exits non-zero when the graph is stale (by design) but still
+    // prints valid JSON to stdout; recover it from the thrown error before giving up.
+    if (e && typeof e.stdout === 'string' && e.stdout.trim()) {
+      try { return JSON.parse(e.stdout); } catch { /* not JSON — fall through */ }
+    }
+    return null;
+  }
 }
 function checkStaleCount(dir: string): number {
   const r = graftJson(dir, ['check', '.', '--json']);
