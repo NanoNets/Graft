@@ -11,11 +11,13 @@
  */
 import "dotenv/config";
 import { Command } from "commander";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
 import { resolveConfig } from "./ai/providers.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
+import { runInit } from "./claude/init.js";
 
 const program = new Command();
 
@@ -178,6 +180,22 @@ program
       const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
       spawn(opener, [srv.url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
     }
+  });
+
+program
+  .command("init")
+  .description("Set up the Claude Code integration (.claude/ statusline + hooks) in this repo")
+  .argument("[dir]", "target repo directory", ".")
+  .option("--no-build", "skip building the graph (wire files only)")
+  .action((dir: string, opts: { build?: boolean }) => {
+    const cliPath = fileURLToPath(import.meta.url);
+    const res = runInit(resolve(dir), { build: opts.build, cliPath });
+    console.error(`✓ wrote ${res.settingsPath}`);
+    for (const s of res.shims) console.error(`✓ wrote ${s}`);
+    console.error(res.built ? "✓ built the graph (graft build)" : "· skipped graph build");
+    for (const w of res.warnings) console.error(`⚠ ${w}`);
+    console.error("\nDone. The statusline + hooks activate in Claude Code sessions in this repo.");
+    console.error("For LLM summaries: set OPENROUTER_API_KEY and run `graft build --deep`.");
   });
 
 program.parseAsync().catch((err) => {
