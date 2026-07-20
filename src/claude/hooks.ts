@@ -4,6 +4,7 @@ import { join, basename } from 'node:path';
 import { readWiring } from './stats.js';
 import { formatBlastRadius, formatRetrieval, retrievalTokensSaved, formatOrientation } from './format.js';
 import { patchStats, readStats, acquireLock, readSession, writeSession } from './state.js';
+import { graftCliPath, claudeScriptPath } from './paths.js';
 
 function readStdin(): any {
   const seam = process.env.GRAFT_TEST_STDIN;
@@ -19,16 +20,9 @@ export function underGraft(dir: string, file: string): boolean {
   const rel = file.startsWith(dir) ? file.slice(dir.length) : file;
   return rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').startsWith('graft/');
 }
-/** Resolve the graft CLI: the repo's own build when present (graft self-hosting),
- * else the globally-installed `graft` on PATH (any other repo using graft). */
-function graftCli(dir: string): { cmd: string; pre: string[] } {
-  const local = join(dir, 'dist', 'cli.js');
-  return existsSync(local) ? { cmd: process.execPath, pre: [local] } : { cmd: 'graft', pre: [] };
-}
 function graftJson(dir: string, args: string[]): any | null {
-  const { cmd, pre } = graftCli(dir);
   try {
-    const out = execFileSync(cmd, [...pre, ...args],
+    const out = execFileSync(process.execPath, [graftCliPath(), ...args],
       { cwd: dir, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
   } catch (e: any) {
@@ -71,10 +65,10 @@ export async function main(event: string): Promise<void> {
   }
 
   if (event === 'stop') {
-    // Auto-sync needs graft's own build (sync-run.js). Only graft's self-hosted
-    // repo has it; in any other repo skip rather than spawn a missing script and
-    // get wedged on syncing:true (those repos regen via their own build/CI).
-    const syncRun = join(dir, 'dist', 'claude', 'sync-run.js');
+    // sync-run.js ships next to this module inside the package, so it resolves in
+    // any repo that installs graft (not just graft's own). Defensive existsSync:
+    // if the package is somehow incomplete, skip rather than wedge on syncing:true.
+    const syncRun = claudeScriptPath('sync-run.js');
     if (!existsSync(syncRun)) return;
     const stats = readStats(dir);
     if (stats?.dirty && acquireLock(dir)) {
