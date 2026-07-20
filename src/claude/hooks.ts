@@ -4,6 +4,7 @@ import { join, basename } from 'node:path';
 import { readWiring } from './stats.js';
 import { formatBlastRadius, formatRetrieval, formatOrientation } from './format.js';
 import { patchStats, readStats, acquireLock, readSession, writeSession } from './state.js';
+import { graftCliPath, claudeScriptPath } from './paths.js';
 
 function readStdin(): any {
   const seam = process.env.GRAFT_TEST_STDIN;
@@ -21,7 +22,7 @@ export function underGraft(dir: string, file: string): boolean {
 }
 function graftJson(dir: string, args: string[]): any | null {
   try {
-    const out = execFileSync(process.execPath, [join(dir, 'dist', 'cli.js'), ...args],
+    const out = execFileSync(process.execPath, [graftCliPath(), ...args],
       { cwd: dir, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
   } catch (e: any) {
@@ -67,7 +68,7 @@ export async function main(event: string): Promise<void> {
     const stats = readStats(dir);
     if (stats?.dirty && acquireLock(dir)) {
       patchStats(dir, { syncing: true });
-      const child = spawn(process.execPath, [join(dir, 'dist', 'claude', 'sync-run.js'), dir],
+      const child = spawn(process.execPath, [claudeScriptPath('sync-run.js'), dir],
         { detached: true, stdio: 'ignore' });
       child.unref();
     }

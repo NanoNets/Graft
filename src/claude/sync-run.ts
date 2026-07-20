@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readWiring, computeStats } from './stats.js';
 import { patchStats, releaseLock } from './state.js';
+import { graftCliPath } from './paths.js';
 
 /** MONEY GUARD: plain `graft build` only — structural, $0, offline. Never --deep. */
 function realBuild(dir: string): void {
-  execFileSync(process.execPath, [join(dir, 'dist', 'cli.js'), 'build', '.'],
+  execFileSync(process.execPath, [graftCliPath(), 'build', '.'],
     { cwd: dir, stdio: 'ignore', timeout: 120000 });
 }
 
