@@ -25,10 +25,15 @@ import type { Crux, NodeV1 } from "./types.js";
 /** Cap on the stored crux: an over-long pick is trimmed to its leading slice. */
 const MAX_CRUX_LINES = 12;
 
+/** Files summarized at once. Each is an independent LLM call; order is preserved. */
+const DEFAULT_CONCURRENCY = 5;
+
 export interface EnrichOptions {
   /** When present, (re)compute meaning for stale/pending nodes. Absent → cache only. */
   summarizer?: CruxSummarizer;
-  /** Progress is reported per file (one LLM call each), not per node. */
+  /** Max files summarized in parallel (each is one LLM call). Default {@link DEFAULT_CONCURRENCY}. */
+  concurrency?: number;
+  /** Progress is reported per file (one LLM call each), as files finish — not per node. */
   onProgress?: (info: { index: number; total: number; node: string }) => void;
 }
 
@@ -86,34 +91,33 @@ export async function enrichGraph(
     else byFile.set(node.path, [node]);
   }
 
+  // Each file is an independent LLM call, so run several in flight at once —
+  // the slow part is the round-trip, not local work. Files never share state:
+  // one file's nodes and source stand alone, so parallelism can't corrupt the
+  // per-file line numbers the crux slicing depends on. `stats` mutation is safe
+  // because JS is single-threaded — increments run between awaits, never during.
+  const summarizer = opts.summarizer;
   const files = [...byFile.keys()];
-  for (let i = 0; i < files.length; i++) {
-    const path = files[i];
+  const limit = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
+  let done = 0;
+
+  await mapWithConcurrency(files, limit, async (path) => {
     const fileNodes = byFile.get(path)!;
     const source = sources.get(path)!;
     const lineCount = source.split("\n").length;
-    opts.onProgress?.({ index: i, total: files.length, node: path });
 
     const refs: NodeRef[] = fileNodes.map((n) => {
       const [startLine, endLine] = spanLines(n.span, lineCount);
       return { id: n.id, kind: n.kind, signature: n.signature, startLine, endLine };
     });
 
-    const { results, error } = await collectFileCrux(opts.summarizer, path, source, refs);
+    const { results, error } = await collectFileCrux(summarizer, path, source, refs);
     if (error) stats.errors.push(`${path}: ${error}`);
-    if (results.size === 0) {
-      // whole-file call failed: leave every node as-is (stale hint or pending).
-      for (const node of fileNodes) {
-        if (node.summary_state === "stale") stats.stale++;
-        else stats.pending++;
-      }
-      continue;
-    }
 
     for (const node of fileNodes) {
-      const r = results.get(node.id);
+      const r = results.size > 0 ? results.get(node.id) : undefined;
       if (!r) {
-        // model skipped this symbol; keep whatever it had.
+        // whole-file call failed, or the model skipped this symbol: keep what it had.
         if (node.summary_state === "stale") stats.stale++;
         else stats.pending++;
         continue;
@@ -123,8 +127,30 @@ export async function enrichGraph(
       node.summary_state = "ready";
       stats.computed++;
     }
-  }
+
+    // Report on completion so the counter climbs monotonically under concurrency.
+    opts.onProgress?.({ index: done++, total: files.length, node: path });
+  });
+
   return stats;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight, preserving result order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /**

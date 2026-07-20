@@ -38,7 +38,13 @@ program
   .argument("[dir]", "repository root", ".")
   .option("--deep", "run the LLM pass: concept nodes (graft/*.md) + per-symbol summary/crux")
   .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py")')
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[] }) => {
+  .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
+  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string }) => {
+    const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
+    if (opts.concurrency && !Number.isFinite(concurrency)) {
+      console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
+      process.exit(1);
+    }
     const engine = engineFrom();
     const fmt = (o: Record<string, number>) =>
       Object.entries(o)
@@ -78,6 +84,7 @@ program
     // Wiring graph (Tier-2 cards + Tier-3 wiring.json) — always. LLM meaning only with --deep.
     const g = await engine.graph(dir, {
       llm: deep,
+      concurrency,
       onProgress: ({ phase, index, total, file }) =>
         process.stderr.write(
           `\r${phase === "enrich" ? "summarizing" : "parsing"} ${index + 1}/${total}: ${file.slice(0, 50).padEnd(50)}`,

@@ -24,6 +24,8 @@ export interface GraphBuildOptions {
   contextDir?: string;
   /** Run the Tier-2 LLM meaning pass. Absent → Tier-1 only (cache is still preserved). */
   summarizer?: CruxSummarizer;
+  /** Max files summarized in parallel during the Tier-2 pass. Default is set in enrich. */
+  concurrency?: number;
   onProgress?: (info: {
     phase: "parse" | "enrich";
     index: number;
@@ -96,6 +98,7 @@ export async function buildGraph(
   const priorById = new Map((prior?.nodes ?? []).map((n) => [n.id, n]));
   const meaning = await enrichGraph(nodes, priorById, sources, {
     summarizer: opts.summarizer,
+    concurrency: opts.concurrency,
     onProgress: ({ index, total, node }) =>
       opts.onProgress?.({ phase: "enrich", index, total, file: node }),
   });

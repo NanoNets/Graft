@@ -37,6 +37,8 @@ export interface CheckRunOptions {
 export interface GraphRunOptions {
   /** Run the Tier-2 LLM meaning pass (summary + crux). Absent → Tier-1 only. */
   llm?: boolean;
+  /** Max files summarized in parallel during the LLM pass. */
+  concurrency?: number;
   onProgress?: GraphBuildOptions["onProgress"];
 }
 
@@ -78,6 +80,7 @@ export class Graft {
     return buildGraph(dir, {
       contextDir: this.cfg.contextDir,
       summarizer: opts.llm ? this.cruxSummarizer() : undefined,
+      concurrency: opts.concurrency,
       onProgress: opts.onProgress,
     });
   }
