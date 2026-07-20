@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 export interface Stats {
   nodeCount: number; edgeCount: number; languages: string[];
@@ -32,7 +32,7 @@ function readJson<T>(p: string): T | null {
   try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return null; }
 }
 function writeJsonAtomic(p: string, value: unknown): void {
-  mkdirSync(join(p, '..'), { recursive: true });
+  mkdirSync(dirname(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2));
   renameSync(tmp, p);
@@ -54,9 +54,19 @@ export function writeSession(d: string, id: string, s: SessionState): void {
 
 export function acquireLock(d: string): boolean {
   const p = lockPath(d);
-  if (existsSync(p) && Date.now() - statSync(p).mtimeMs < LOCK_STALE_MS) return false;
   mkdirSync(cacheDir(d), { recursive: true });
-  writeFileSync(p, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
-  return true;
+  const payload = JSON.stringify({ pid: process.pid, at: new Date().toISOString() });
+  try {
+    writeFileSync(p, payload, { flag: 'wx' }); // atomic exclusive create
+    return true;
+  } catch (e: any) {
+    if (e?.code !== 'EEXIST') throw e;
+    let stale: boolean;
+    try { stale = Date.now() - statSync(p).mtimeMs >= LOCK_STALE_MS; } catch { stale = true; }
+    if (!stale) return false;
+    try { rmSync(p); } catch { /* another process reclaimed it */ }
+    try { writeFileSync(p, payload, { flag: 'wx' }); return true; }
+    catch (e2: any) { if (e2?.code === 'EEXIST') return false; throw e2; }
+  }
 }
 export function releaseLock(d: string): void { try { rmSync(lockPath(d)); } catch { /* already gone */ } }
