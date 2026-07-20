@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, basename } from 'node:path';
 import { readWiring } from './stats.js';
-import { formatBlastRadius, formatRetrieval } from './format.js';
+import { formatBlastRadius, formatRetrieval, formatOrientation } from './format.js';
 import { patchStats, readStats, acquireLock, readSession, writeSession } from './state.js';
 
 function readStdin(): any {
@@ -38,6 +38,14 @@ function emit(eventName: string, additionalContext: string): void {
 export async function main(event: string): Promise<void> {
   const input = readStdin();
   const dir = projectDir(input);
+
+  if (event === 'session-start') {
+    try {
+      const idx = readFileSync(join(dir, 'graft', 'INDEX.md'), 'utf8');
+      emit('SessionStart', formatOrientation(idx));
+    } catch { /* no INDEX.md — skip */ }
+    return;
+  }
 
   if (event === 'post-edit') {
     const file: string | undefined = input?.tool_input?.file_path;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStatusline, enrichedSegment, incomingEdges, formatBlastRadius, formatRetrieval } from '../src/claude/format.js';
+import { renderStatusline, enrichedSegment, incomingEdges, formatBlastRadius, formatRetrieval, formatOrientation } from '../src/claude/format.js';
 import { emptyStats } from '../src/claude/state.js';
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -75,4 +75,11 @@ test('formatRetrieval renders top hits, trims snippet, first pointer only', () =
 
 test('formatRetrieval returns null for no hits', () => {
   assert.equal(formatRetrieval({ query: 'x', mode: 'empty', hits: [] } as any), null);
+});
+
+test('formatOrientation labels and truncates to budget', () => {
+  const md = 'X'.repeat(3000);
+  const out = strip(formatOrientation(md, 1500));
+  assert.match(out, /repo map/);
+  assert.ok(out.length < 1600, 'trimmed to budget + short header');
 });

@@ -87,3 +87,7 @@ export function formatRetrieval(ask: AskJson, cap = 5): string | null {
   });
   return `[graft] relevant context for this prompt:\n${lines.join('\n')}`;
 }
+
+export function formatOrientation(indexMd: string, budgetBytes = 1500): string {
+  return `[graft] repo map (graft/INDEX.md):\n${indexMd.slice(0, budgetBytes)}`;
+}
