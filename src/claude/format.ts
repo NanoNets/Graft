@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import type { Stats, SessionState } from './state.js';
+import type { GraphV1, EdgeV1 } from '../graph/types.js';
 
 const C = {
   indigo: (s: string) => `\x1b[38;2;84;111;255m${s}\x1b[0m`,
@@ -42,4 +43,31 @@ export function renderStatusline(
   const lines = [top.join(SEP)];
   if (bottom.length) lines.push(C.muted('▸ ') + bottom.join(SEP));
   return lines;
+}
+
+function nodeIdsInFile(w: GraphV1, filePath: string): Set<string> {
+  const nodes = w.nodes ?? [];
+  return new Set(
+    nodes.filter((n) => n.path && (filePath === n.path || filePath.endsWith(`/${n.path}`) || filePath.endsWith(n.path)))
+      .map((n) => n.id),
+  );
+}
+
+export function incomingEdges(w: GraphV1, filePath: string): EdgeV1[] {
+  const ids = nodeIdsInFile(w, filePath);
+  if (!ids.size) return [];
+  return (w.edges ?? []).filter((e) => ids.has(e.target) && !ids.has(e.source));
+}
+
+export function formatBlastRadius(w: GraphV1, filePath: string, cap = 8): string | null {
+  const edges = incomingEdges(w, filePath);
+  if (!edges.length) return null;
+  const byId = new Map((w.nodes ?? []).map((n) => [n.id, n]));
+  const items = edges.slice(0, cap).map((e) => {
+    const n = byId.get(e.source);
+    const label = n ? `${n.name} (${basename(n.path)})` : e.source;
+    return ` • ${e.relation} ← ${label}`;
+  });
+  const more = edges.length > cap ? `\n • +${edges.length - cap} more` : '';
+  return `[graft] blast radius for ${basename(filePath)} — who depends on it:\n${items.join('\n')}${more}`;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStatusline, enrichedSegment } from '../src/claude/format.js';
+import { renderStatusline, enrichedSegment, incomingEdges, formatBlastRadius } from '../src/claude/format.js';
 import { emptyStats } from '../src/claude/state.js';
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -35,4 +35,30 @@ test('syncing overrides stale; synced when clean', () => {
   const base = { ...emptyStats(), nodeCount: 1, edgeCount: 0, totalCount: 1 };
   assert.match(strip(renderStatusline({ ...base, syncing: true, dirty: true }, null, { ctxPct: null })[0]), /syncing/);
   assert.match(strip(renderStatusline(base, null, { ctxPct: null })[0]), /✓ synced/);
+});
+
+const wiring2 = {
+  meta: { nodeCount: 3, edgeCount: 2, languages: ['typescript'] },
+  nodes: [
+    { id: 'src/pkce.ts#verify', name: 'verify', path: 'src/pkce.ts', summary_state: 'ready' },
+    { id: 'src/client.ts#exchange', name: 'exchange', path: 'src/client.ts', summary_state: 'ready' },
+    { id: 'src/pkce.ts#gen', name: 'gen', path: 'src/pkce.ts', summary_state: 'ready' },
+  ],
+  edges: [
+    { source: 'src/client.ts#exchange', target: 'src/pkce.ts#verify', relation: 'calls', confidence: 'extracted' },
+    { source: 'src/pkce.ts#gen', target: 'src/pkce.ts#verify', relation: 'calls', confidence: 'extracted' },
+  ],
+} as any;
+
+test('incomingEdges: external callers of nodes in the edited file', () => {
+  const e = incomingEdges(wiring2, '/abs/repo/src/pkce.ts');
+  assert.equal(e.length, 1, 'same-file edge (gen→verify) excluded');
+  assert.equal(e[0].source, 'src/client.ts#exchange');
+});
+
+test('formatBlastRadius renders callers or null', () => {
+  const txt = formatBlastRadius(wiring2, '/abs/repo/src/pkce.ts');
+  assert.match(strip(txt!), /blast radius for pkce\.ts/);
+  assert.match(strip(txt!), /exchange \(client\.ts\)/);
+  assert.equal(formatBlastRadius(wiring2, '/abs/repo/src/unknown.ts'), null);
 });
