@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * `graft` CLI. Two commands:
+ * `graft` CLI. Commands:
  *
- *   init    build .context/ from your code (one markdown node per system,
- *           API, or concept; linked to each other; committed to the repo).
- *   check   fail if .context/ has drifted from the code — for CI.
+ *   build   build graft/ from your code (structural graph; --deep adds LLM summaries).
+ *   ask     query the graph ($0, no LLM).
+ *   check   fail if graft/ has drifted from the code — for CI.
+ *   viz     serve the interactive graph viewer.
+ *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
- * Git is the sync: commit .context/ and anyone who clones the repo has the
+ * Git is the sync: commit graft/ and anyone who clones the repo has the
  * graph, with no setup.
  */
 import "dotenv/config";
