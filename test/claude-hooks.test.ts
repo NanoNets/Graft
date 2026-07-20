@@ -71,3 +71,15 @@ test('runSync clears syncing even if build throws (money-safe failure)', () => {
   assert.equal(s.dirty, true, 'stays dirty so the bar keeps ⚠ and it retries next turn');
   assert.equal(acquireLock(d), true, 'lock always released');
 });
+
+test('runSync stays dirty when build succeeds but wiring is unreadable', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-sync-'));
+  writeStats(d, { ...emptyStats(), dirty: true, syncing: true, staleCount: 2 });
+  acquireLock(d);
+  runSync(d, () => { /* build "succeeds" but writes no wiring.json */ });
+  const s = readStats(d)!;
+  assert.equal(s.syncing, false);
+  assert.equal(s.dirty, true, 'unreadable wiring → stay dirty, retry next turn');
+  assert.equal(s.syncedAt, null, 'not marked synced');
+  assert.equal(acquireLock(d), true, 'lock released');
+});
