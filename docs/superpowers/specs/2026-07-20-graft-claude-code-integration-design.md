@@ -7,9 +7,10 @@
 
 ## 1. Goal
 
-Make Graft *visible and active* inside a Claude Code session, the way ruflo's
-statusline makes ruflo visible. Today Graft is a passive `graft/` folder that an
-agent is *supposed* to read. This feature ships a `.claude/` integration that:
+Make Graft *visible and active* inside a Claude Code session — a live statusline
+that surfaces what Graft holds, and hooks that feed the graph to the model. Today
+Graft is a passive `graft/` folder that an agent is *supposed* to read. This
+feature ships a `.claude/` integration that:
 
 1. **Shows** the developer what Graft holds and whether it's trustworthy (a live statusline).
 2. **Feeds** relevant graph context into the model automatically (retrieval + orientation + blast-radius).
@@ -84,7 +85,7 @@ dollar cost. If a signal can't be measured honestly, it isn't displayed.
 
 ## 4. Architecture — readers vs. writers, one state file
 
-The ruflo pattern: the **statusline only reads**; **hooks write and act**. They meet
+The core pattern: the **statusline only reads**; **hooks write and act**. They meet
 at one small gitignored state file, so rendering never invokes Graft and the
 expensive work happens only on real events.
 
@@ -116,8 +117,8 @@ expensive work happens only on real events.
 | `graft/.cache/session/<session_id>.json` | state | per-session: `{lastQuery, perAgentQuery, graftReads, sourceReads}` |
 | `graft/.cache/.sync.lock` | lock | one background `graft build` at a time |
 
-CJS Node scripts, no new dependencies (matches ruflo + Graft's own stack). All paths
-resolved relative to `CLAUDE_PROJECT_DIR` with a `$HOME` fallback (ruflo's pattern).
+CJS Node scripts, no new dependencies (matches Graft's own stack). All paths
+resolved relative to `CLAUDE_PROJECT_DIR` with a `$HOME` fallback.
 
 ## 5. The status bar (D1/D2)
 
@@ -146,7 +147,7 @@ reality from Claude Code stdin. Example:
   (muted). Missing stdin fields → omit that segment, never error.
 - **Performance:** reads only small files (`stats.json`, one session file). Optional
   ~2s /tmp memo keyed by `session_id` to coalesce render storms. Never spawns a
-  subprocess. (Guards against the load-average storm ruflo hit by shelling out per render.)
+  subprocess. (Guards against a load-average storm from shelling out on every render.)
 
 ## 6. Feed features
 
