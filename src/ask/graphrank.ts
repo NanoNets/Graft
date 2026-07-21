@@ -85,17 +85,22 @@ export function personalizedPageRank(
     const next = new Map<string, number>();
     // Teleport: every step, alpha of the mass returns to the seed set.
     for (const [id, r] of restart) next.set(id, alpha * r);
+    // Dangling mass (nodes with no walk edges) is pooled and returned to the
+    // seed set ONCE per iteration — same math as redistributing per node, but
+    // O(nodes + seeds) instead of O(dangling × seeds).
+    let dangling = 0;
     for (const [id, mass] of rank) {
       const nbrs = adj.get(id);
       if (!nbrs || nbrs.length === 0) {
-        // Dangling node: return its mass to the seed set (conserves probability
-        // and keeps it personalized — mass never escapes to the whole graph).
-        for (const [sid, r] of restart)
-          next.set(sid, (next.get(sid) ?? 0) + (1 - alpha) * mass * r);
+        dangling += mass;
         continue;
       }
       const share = ((1 - alpha) * mass) / nbrs.length;
       for (const nb of nbrs) next.set(nb, (next.get(nb) ?? 0) + share);
+    }
+    if (dangling > 0) {
+      const dm = (1 - alpha) * dangling;
+      for (const [sid, r] of restart) next.set(sid, (next.get(sid) ?? 0) + dm * r);
     }
     rank = next;
   }

@@ -79,6 +79,48 @@ test("PageRank: edges to non-node targets (unresolved imports) are ignored", () 
   assert.equal(pr.has("react"), false, "the module string never becomes a ranked node");
 });
 
+test("PageRank: dangling-mass pooling is algebraically identical to per-node redistribution", () => {
+  // 5 nodes: a-b-c chain, d dangling with seed mass, e isolated non-seed.
+  // Reference values captured from the pre-fix (per-dangling-node redistribution)
+  // implementation, run once before the O(dangling×seeds) fix was applied.
+  const g = graphOf(
+    ["a", "b", "c", "d", "e"],
+    [edge("a", "b"), edge("b", "c")],
+  );
+  const seeds = new Map([["a", 2], ["d", 1]]);
+  const out = personalizedPageRank(g, seeds);
+  // Captured from the pre-fix (per-dangling-node redistribution) implementation.
+  const EXPECTED_A = 0.9577162737326514;
+  const EXPECTED_B = 1;
+  const EXPECTED_C = 0.37462976423958994;
+  const EXPECTED_D = 0.29154325474653076;
+  assert.ok(Math.abs((out.get("a") ?? 0) - EXPECTED_A) < 1e-9, `a: ${out.get("a")}`);
+  assert.ok(Math.abs((out.get("b") ?? 0) - EXPECTED_B) < 1e-9, `b: ${out.get("b")}`);
+  assert.ok(Math.abs((out.get("c") ?? 0) - EXPECTED_C) < 1e-9, `c: ${out.get("c")}`);
+  assert.ok(Math.abs((out.get("d") ?? 0) - EXPECTED_D) < 1e-9, `d: ${out.get("d")}`);
+  assert.equal(out.get("b"), 1, "top-ranked node is the hub linking both chain ends");
+  assert.ok((out.get("a") ?? 0) > 0);
+  assert.ok((out.get("d") ?? 0) > 0, "dangling seed keeps mass");
+  assert.equal(out.get("e"), undefined, "unreached node absent");
+});
+
+test("PageRank: broad seeds on a large mostly-dangling graph complete fast", () => {
+  // 20k dangling nodes (no edges) + 100 connected ones; seed EVERY node — the
+  // pathological shape from real 32k-node graphs with common-word queries.
+  // Pre-fix, per-dangling-node redistribution makes this O(dangling × seeds)
+  // and takes minutes; pooled dangling mass makes it O(nodes + seeds).
+  const ids = Array.from({ length: 20000 }, (_, i) => `n${i}`);
+  const edges: EdgeV1[] = [];
+  for (let i = 0; i < 100; i++) edges.push(edge(`n${i}`, `n${i + 1}`));
+  const g = graphOf(ids, edges);
+  const seeds = new Map(ids.map((id) => [id, 1]));
+  const t0 = Date.now();
+  const out = personalizedPageRank(g, seeds);
+  const ms = Date.now() - t0;
+  assert.ok(out.size > 0);
+  assert.ok(ms < 3000, `took ${ms}ms — dangling redistribution must not be O(dangling × seeds)`);
+});
+
 // ── Integration: ask() with and without graph-rank ──────────────────────────
 
 /** A fixture with a same-word collision: `fooHandler` (wired to two helpers)
