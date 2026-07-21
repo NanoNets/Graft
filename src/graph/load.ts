@@ -12,6 +12,13 @@
  * next call re-stats, so a file created after a prior miss is picked up
  * immediately (no negative caching).
  *
+ * **Cache invalidation assumption:** This strategy assumes filesystem mtime
+ * resolution is finer than build cadence. This is safe because `graft build`
+ * rewrites the entire output file atomically, so same-size rewrites within a
+ * single mtime tick (which would serve stale data) are infeasible in practice.
+ * On APFS (macOS) mtime is nanosecond-granular and a build takes milliseconds,
+ * so invalidation is immediate and reliable.
+ *
  * Dependency-free by design: this module imports only `node:fs`, `./write.js`,
  * and `../ask/index-file.js`, so it can be imported from both `ask.ts` and
  * `mcp/tools.ts` without creating an import cycle.
@@ -74,7 +81,8 @@ function loadCached<T>(
 }
 
 /** Cached `readGraph(wiringPath(outDir))` — same null-on-missing/unparseable
- * semantics, re-reads only when the wiring file's `(mtimeMs, size)` changed. */
+ * semantics, re-reads only when the wiring file's `(mtimeMs, size)` changed.
+ * Returns a shared cached reference; callers must not mutate the returned graph. */
 export function loadGraphCached(outDir: string): GraphV1 | null {
   const path = wiringPath(outDir);
   return loadCached(graphCache, path, () => readGraph(path), () => {
@@ -82,7 +90,8 @@ export function loadGraphCached(outDir: string): GraphV1 | null {
   });
 }
 
-/** Cached `readAskIndex(outDir)` — same semantics, keyed on the sidecar file. */
+/** Cached `readAskIndex(outDir)` — same semantics, keyed on the sidecar file.
+ * Returns a shared cached reference; callers must not mutate the returned index. */
 export function loadAskIndexCached(outDir: string): AskIndex | null {
   const path = askIndexPath(outDir);
   return loadCached(askIndexCache, path, () => readAskIndex(outDir), () => {
