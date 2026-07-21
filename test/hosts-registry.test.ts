@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOSTS, detectHosts, hostIds, type DetectProbe } from '../src/hosts/registry.js';
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 
 function probeFor(home: string, repo: string): DetectProbe {
   return {

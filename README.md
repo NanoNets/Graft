@@ -35,7 +35,7 @@ npm install -g @nanonets/graft   # install the CLI, once
 graft init                       # build the graph + wire it into Claude Code
 ```
 
-That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no MCP server, no re-indexing to remember, and nothing else to run.
+That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no re-indexing to remember, nothing to run or maintain by default — the graph is just files.
 
 Commit `graft/` so everyone who clones the repo (and their agents) gets the map:
 
@@ -72,6 +72,8 @@ npx @nanonets/graft init
 | `--all-agents` | write instruction files for every known agent, detected or not |
 | `--no-agents` | Claude Code wiring only; skip other agents |
 | `--list-agents` | print the known agent ids and exit |
+| `--no-mcp` | skip MCP server registration |
+| `--no-hooks` | skip hook installation |
 
 ### MCP server
 
