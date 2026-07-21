@@ -11,15 +11,16 @@
  * M1 populates Tier-1 only; Tier-2 fields ship as `pending`/null.
  */
 
-/** What a node represents. LSP SymbolKind, narrowed to what TS + Python produce. */
+/** What a node represents. LSP SymbolKind, narrowed to what TS + Python + Go produce. */
 export type Kind =
   | "file"
   | "class"
   | "function"
   | "method"
-  | "interface" // TS only
-  | "type" // TS only (type alias)
-  | "enum"; // TS only
+  | "interface" // TS + Go
+  | "type" // TS + Go (type alias / named type)
+  | "enum" // TS only
+  | "struct"; // Go only
 
 /** How confident we are an edge is true. */
 export type Confidence = "extracted" | "inferred";

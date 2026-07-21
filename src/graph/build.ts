@@ -54,6 +54,17 @@ export function listSourceFiles(root: string, outDir: string): string[] {
   return walkDir(root).filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
 }
 
+/** The module path from `<root>/go.mod` (`module github.com/x/y`), or undefined if the
+ * repo isn't a Go module. Lets edge resolution map Go import paths to in-repo files. */
+function readGoModule(root: string): string | undefined {
+  try {
+    const m = readFileSync(resolve(root, "go.mod"), "utf8").match(/^\s*module\s+(\S+)/m);
+    return m?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 export async function buildGraph(
   dir: string,
   opts: GraphBuildOptions = {},
@@ -90,7 +101,7 @@ export async function buildGraph(
     }
   });
 
-  const edges = resolveEdges(nodes, rawEdges);
+  const edges = resolveEdges(nodes, rawEdges, { goModule: readGoModule(root) });
 
   // graph.json is its own Tier-2 cache: fold in the prior meaning layer so an
   // unchanged body is never re-summarized (and a Tier-1-only run never wipes it).

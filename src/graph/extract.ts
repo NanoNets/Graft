@@ -9,11 +9,12 @@
 import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
+import Go from "tree-sitter-go";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python";
+export type Language = "typescript" | "tsx" | "python" | "go";
 
 /** Map a file path to a supported language, or null if unsupported. */
 export function languageOf(path: string): Language | null {
@@ -21,6 +22,7 @@ export function languageOf(path: string): Language | null {
   if (p.endsWith(".tsx") || p.endsWith(".jsx")) return "tsx";
   if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return "typescript";
   if (p.endsWith(".py") || p.endsWith(".pyi")) return "python";
+  if (p.endsWith(".go")) return "go";
   return null;
 }
 
@@ -98,6 +100,20 @@ const PY_KINDS: Record<string, Kind> = {
   function_definition: "function", // → "method" inside a class (resolved in the walk)
 };
 
+// Go: `type_spec` is intentionally absent — its kind (struct/interface/type) depends on
+// the named type's shape, so it's resolved dynamically in describe().
+const GO_KINDS: Record<string, Kind> = {
+  function_declaration: "function",
+  method_declaration: "method",
+};
+
+const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
+  typescript: TS_KINDS,
+  tsx: TS_KINDS,
+  python: PY_KINDS,
+  go: GO_KINDS,
+};
+
 const FUNCTION_VALUE_TYPES = new Set([
   "arrow_function",
   "function",
@@ -110,6 +126,7 @@ const GRAMMARS: Record<Language, unknown> = {
   typescript: TypeScript.typescript,
   tsx: TypeScript.tsx,
   python: Python,
+  go: Go,
 };
 
 interface WalkCtx {
@@ -122,9 +139,10 @@ interface WalkCtx {
   parentId: string; // nearest enclosing definition id, or the file id
 }
 
-/** A definition we're about to emit, normalized across the two shapes we handle. */
+/** A definition we're about to emit, normalized across the shapes we handle. */
 interface DefDescriptor {
-  name: string;
+  name: string; // the bare symbol name (used for the node's `name` and call resolution)
+  idName?: string; // id-scope segment when it differs from `name` (Go: `Receiver.method`)
   kind: Kind;
   headerEnd: number; // char index where the signature ends (body starts)
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
@@ -167,7 +185,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     rel,
     source,
     lang,
-    kinds: lang === "python" ? PY_KINDS : TS_KINDS,
+    kinds: KINDS_BY_LANG[lang],
     scope: [],
     enclosingKind: null,
     parentId: rel,
@@ -182,7 +200,10 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
 function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEdge[]): void {
   const desc = describe(node, ctx);
   if (desc) {
-    const id = `${ctx.rel}#${[...ctx.scope, desc.name].join(".")}`;
+    // `idName` scopes the id (e.g. a Go method under its receiver: `#DB.Count`) while
+    // `name` stays the bare symbol name so member-call resolution matches it.
+    const idPart = desc.idName ?? desc.name;
+    const id = `${ctx.rel}#${[...ctx.scope, idPart].join(".")}`;
     out.push({
       id,
       name: desc.name,
@@ -190,7 +211,12 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       path: ctx.rel,
       span: `L${desc.hashNode.startPosition.row + 1}-L${desc.hashNode.endPosition.row + 1}`,
       signature: clean(ctx.source.slice(desc.hashNode.startIndex, desc.headerEnd)),
-      exported: ctx.lang === "python" ? !desc.name.startsWith("_") : tsExported(node),
+      exported:
+        ctx.lang === "python"
+          ? !desc.name.startsWith("_")
+          : ctx.lang === "go"
+            ? goExported(desc.name)
+            : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -205,7 +231,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
 
     const childCtx: WalkCtx = {
       ...ctx,
-      scope: [...ctx.scope, desc.name],
+      scope: [...ctx.scope, idPart],
       enclosingKind: desc.kind,
       parentId: id,
     };
@@ -226,7 +252,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         file: ctx.rel,
       });
     }
-  } else if (isImport(node)) {
+  } else if (isImport(node, ctx.lang)) {
     const spec = importSpecifier(node, ctx.lang);
     if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
   }
@@ -234,8 +260,11 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   for (const child of node.namedChildren) walk(child, ctx, out, edges);
 }
 
-/** Recognize the two definition shapes: mapped node types, and TS arrow-consts. */
+/** Recognize the definition shapes: mapped node types, Go's type/method forms, and
+ * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  if (ctx.lang === "go") return describeGo(node, ctx);
+
   const mapped = ctx.kinds[node.type];
   if (mapped) {
     const name = node.childForFieldName("name")?.text;
@@ -249,7 +278,7 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   }
 
   // TS: `const foo = (…) => …` / `const foo = function () {}`
-  if (ctx.lang !== "python" && node.type === "variable_declarator") {
+  if ((ctx.lang === "typescript" || ctx.lang === "tsx") && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");
     if (value && FUNCTION_VALUE_TYPES.has(value.type)) {
       const name = node.childForFieldName("name")?.text;
@@ -264,6 +293,67 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+/** Go definition shapes: top-level funcs, receiver methods, and named types
+ * (struct / interface / type alias). Methods carry no nesting — they're qualified
+ * by their receiver type (`User.Save`) so calls can resolve and cards read clearly. */
+function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | null {
+  if (node.type === "function_declaration") {
+    const name = node.childForFieldName("name")?.text;
+    if (!name) return null;
+    const body = node.childForFieldName("body");
+    return { name, kind: "function", headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+  }
+
+  if (node.type === "method_declaration") {
+    const name = node.childForFieldName("name")?.text;
+    if (!name) return null;
+    const recv = goReceiverType(node);
+    const body = node.childForFieldName("body");
+    // Bare `name` (so `recv.Method()` calls resolve); receiver-qualified `idName`
+    // (so the id is `file.go#Receiver.Method` and stays unique per receiver).
+    return {
+      name,
+      idName: recv ? `${recv}.${name}` : name,
+      kind: "method",
+      headerEnd: body ? body.startIndex : node.endIndex,
+      hashNode: node,
+    };
+  }
+
+  // `type Name <shape>` — one type_spec per name (grouped `type ( … )` yields several).
+  if (node.type === "type_spec") {
+    const name = node.childForFieldName("name")?.text;
+    if (!name) return null;
+    const type = node.childForFieldName("type");
+    const kind: Kind =
+      type?.type === "struct_type" ? "struct" : type?.type === "interface_type" ? "interface" : "type";
+    // Header ends where the body opens (`{`) for struct/interface, else the whole node
+    // (a one-line alias like `type ID int`).
+    const headerEnd = type && (kind === "struct" || kind === "interface") ? type.startIndex : node.endIndex;
+    return { name, kind, headerEnd, hashNode: node };
+  }
+
+  return null;
+}
+
+/** The receiver's base type name for a Go method, unwrapping a pointer receiver
+ * (`func (u *User) …` → `User`). Null if it can't be read. */
+function goReceiverType(node: Parser.SyntaxNode): string | null {
+  const recv = node.childForFieldName("receiver"); // parameter_list
+  const param = recv?.namedChildren.find((c) => c.type === "parameter_declaration");
+  let type = param?.childForFieldName("type");
+  if (type?.type === "pointer_type") type = type.namedChildren.at(-1) ?? null;
+  return type?.type === "type_identifier" ? type.text : null;
+}
+
+/** Go visibility: a symbol is exported iff its own name starts with an uppercase
+ * letter. For a receiver-qualified method name, the own name is the part after the dot. */
+function goExported(name: string): boolean {
+  const own = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name;
+  const first = own[0] ?? "";
+  return first !== first.toLowerCase() && first === first.toUpperCase();
 }
 
 function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): RawEdge[] {
@@ -306,14 +396,22 @@ function calleeName(
     const a = fn.childForFieldName("attribute") ?? fn.namedChildren.at(-1);
     return a ? { name: a.text, viaMember: true } : null;
   }
-  if (lang !== "python" && fn.type === "member_expression") {
+  if (lang === "go" && fn.type === "selector_expression") {
+    // `pkg.Fn()` / `recv.Method()` — the called name is the trailing field.
+    const p = fn.childForFieldName("field") ?? fn.namedChildren.at(-1);
+    return p ? { name: p.text, viaMember: true } : null;
+  }
+  if ((lang === "typescript" || lang === "tsx") && fn.type === "member_expression") {
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true } : null;
   }
   return null;
 }
 
-function isImport(node: Parser.SyntaxNode): boolean {
+function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
+  // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
+  // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
+  if (lang === "go") return node.type === "import_spec";
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -323,6 +421,11 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
       node.childForFieldName("module_name") ??
       node.namedChildren.find((c) => c.type === "dotted_name" || c.type === "relative_import");
     return m?.text ?? null;
+  }
+  if (lang === "go") {
+    // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
+    const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
+    return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
