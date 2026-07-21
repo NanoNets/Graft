@@ -9,12 +9,14 @@ import { homedir } from 'node:os';
 import { HOSTS, detectHosts, type DetectProbe, type HostTarget } from './registry.js';
 import { upsertSection } from './sections.js';
 import { registerMcpConfigs, type McpWrite } from './mcp-config.js';
+import { installCodexHooks, type HookWrite } from './codex-hooks.js';
 
 export interface HostsInitResult {
   written: { id: string; path: string; action: string }[];
   skipped: string[];
   unknown: string[];
   mcp: McpWrite[];
+  hooks: HookWrite[];
 }
 
 function probeFor(home: string, repo: string): DetectProbe {
@@ -34,7 +36,7 @@ function writeOwned(path: string, content: string): string {
 
 export function runHostsInit(
   repo: string,
-  opts: { agents?: string[]; all?: boolean; home?: string; mcp?: boolean } = {},
+  opts: { agents?: string[]; all?: boolean; home?: string; mcp?: boolean; hooks?: boolean } = {},
 ): HostsInitResult {
   const home = opts.home ?? homedir();
   const probe = probeFor(home, repo);
@@ -62,5 +64,9 @@ export function runHostsInit(
   }
   const skipped = HOSTS.filter((h) => !selected.includes(h)).map((h) => h.id);
   const mcp = opts.mcp === false ? [] : registerMcpConfigs(repo, selected.map((h) => h.id), { home });
-  return { written, skipped, unknown, mcp };
+  const hooks =
+    opts.hooks === false || !selected.some((h) => h.id === 'agents')
+      ? []
+      : installCodexHooks(home);
+  return { written, skipped, unknown, mcp, hooks };
 }

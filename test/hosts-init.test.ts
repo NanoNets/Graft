@@ -120,3 +120,19 @@ test('CLI: --no-mcp writes the rule file but no MCP config', () => {
   assert.ok(existsSync(join(repo, '.cursor', 'rules', 'graft.mdc')));
   assert.ok(!existsSync(join(repo, '.cursor', 'mcp.json')));
 });
+
+test('runHostsInit installs hooks for the agents id when the CLI home exists', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const r = runHostsInit(repo, { home, agents: ['agents'] });
+  assert.equal(r.hooks.length, 2);
+  assert.ok(existsSync(join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs')));
+});
+
+test('hooks: false skips hook installation', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const r = runHostsInit(repo, { home, agents: ['agents'], hooks: false });
+  assert.deepEqual(r.hooks, []);
+  assert.ok(!existsSync(join(home, '.codex', 'hooks.json')));
+});
