@@ -1,0 +1,44 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { HOSTS, detectHosts, hostIds, type DetectProbe } from '../src/hosts/registry.js';
+import { existsSync, statSync } from 'node:fs';
+
+function probeFor(home: string, repo: string): DetectProbe {
+  return {
+    home, repo,
+    dirExists: (p) => { try { return statSync(p).isDirectory(); } catch { return false; } },
+  };
+}
+function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-registry-')); }
+
+test('registry exposes the six phase-1 hosts', () => {
+  assert.deepEqual(hostIds().sort(), ['agents', 'copilot', 'cursor', 'gemini', 'kiro', 'windsurf']);
+  for (const h of HOSTS) {
+    assert.ok(h.relPath.length > 0);
+    assert.ok(h.content().length > 0);
+  }
+});
+
+test('nothing detected on a bare machine and bare repo', () => {
+  assert.deepEqual(detectHosts(probeFor(fresh(), fresh())), []);
+});
+
+test('home config dirs light up their hosts', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.cursor'));
+  mkdirSync(join(home, '.gemini'));
+  mkdirSync(join(home, '.codex'));
+  const ids = detectHosts(probeFor(home, repo)).map((h) => h.id).sort();
+  assert.deepEqual(ids, ['agents', 'cursor', 'gemini']);
+});
+
+test('repo-local markers also light up hosts', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(repo, '.github'));
+  mkdirSync(join(repo, '.kiro'));
+  const ids = detectHosts(probeFor(home, repo)).map((h) => h.id).sort();
+  assert.deepEqual(ids, ['copilot', 'kiro']);
+});
