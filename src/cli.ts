@@ -6,6 +6,7 @@
  *   ask     query the graph ($0, no LLM).
  *   check   fail if graft/ has drifted from the code — for CI.
  *   viz     serve the interactive graph viewer.
+ *   mcp     serve the graph over MCP (stdio) for coding agents.
  *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
@@ -184,6 +185,16 @@ program
       const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
       spawn(opener, [srv.url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
     }
+  });
+
+program
+  .command("mcp")
+  .description("Serve the graph over MCP (stdio) — exposes graft_ask / graft_check / graft_blast_radius as tools")
+  .argument("[dir]", "repository root", ".")
+  .action(async (dir: string) => {
+    const { resolve } = await import("node:path");
+    const { startMcpServer } = await import("./mcp/server.js");
+    startMcpServer(resolve(dir));
   });
 
 program
