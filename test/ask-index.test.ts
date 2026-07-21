@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
@@ -18,6 +18,8 @@ import { ask } from "../src/ask/ask.js";
 import { contextDirFor } from "../src/context/node-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { askIndexPath, readAskIndex, tokenize, counts, writeAskIndex } from "../src/ask/index-file.js";
+import { extractFile, languageOf } from "../src/graph/extract.js";
+import type { GraphV1, NodeV1 } from "../src/graph/types.js";
 
 /** A small multi-file fixture with enough overlapping vocabulary that IDF and
  * BM25 actually differentiate hits, so a parity test on scores is meaningful. */
@@ -49,11 +51,49 @@ function makeFixture(): string {
 
 const QUERY = "How does authentication middleware validate incoming API requests?";
 
+/**
+ * Reconstruct a "fat" wiring.json — body_text present on every node, as EVERY
+ * build produced before the slim-serialization change (see `write.ts`) — by
+ * re-extracting it from each fixture source file and merging it back onto the
+ * (now-slim) wiring.json already on disk. `extractFile` is a pure function of
+ * source text, so this reproduces byte-identical values to what the sidecar
+ * was actually tokenized from at build time.
+ *
+ * Several tests below pin down sidecar-corruption fallback behavior (unknown
+ * version / stale docCount / unparseable file) — a concern orthogonal to
+ * whether wiring.json itself is slim or fat. Before the slim-serialization
+ * change those tests got a fat graph for free; this helper keeps them testing
+ * the same thing (does falling back to live tokenization reproduce the
+ * sidecar exactly?) now that a fresh build no longer hands them one.
+ */
+function reinjectBodyText(dir: string, outDir: string): void {
+  const wpath = wiringPath(outDir);
+  const graph = JSON.parse(readFileSync(wpath, "utf8")) as GraphV1;
+  const bodyById = new Map<string, string>();
+  for (const entry of readdirSync(dir)) {
+    const lang = languageOf(entry);
+    if (!lang) continue;
+    const source = readFileSync(join(dir, entry), "utf8");
+    const { nodes } = extractFile(entry, source, lang);
+    for (const n of nodes) if (n.body_text !== undefined) bodyById.set(n.id, n.body_text);
+  }
+  for (const n of graph.nodes as NodeV1[]) {
+    const bt = bodyById.get(n.id);
+    if (bt !== undefined) n.body_text = bt;
+  }
+  writeFileSync(wpath, JSON.stringify(graph));
+}
+
 test("writeAskIndex + readAskIndex round-trip matches live tokenization exactly", async () => {
   const dir = makeFixture();
   try {
     await buildGraph(dir);
     const outDir = contextDirFor(dir);
+    // This test asserts the sidecar is a byte-for-byte cache of tokenizing the
+    // graph's OWN fields — which requires body_text, no longer present on a
+    // freshly-built wiring.json. Reconstruct it (deterministically) so the
+    // cache-correctness check below is meaningful.
+    reinjectBodyText(dir, outDir);
     const graph = readGraph(wiringPath(outDir));
     assert.ok(graph, "wiring graph should exist after build");
 
@@ -93,6 +133,12 @@ test("ask results are IDENTICAL with and without the sidecar (same hits, same sc
   try {
     await buildGraph(dir);
     const outDir = contextDirFor(dir);
+    // A fresh build's wiring.json is slim (no body_text) by design (Task 2) —
+    // the live-tokenization fallback only reproduces the sidecar exactly when
+    // the underlying graph is fat, so reconstruct that here to test what this
+    // test is actually about: does the fallback path correctly reproduce the
+    // sidecar's numbers?
+    reinjectBodyText(dir, outDir);
     const idxPath = askIndexPath(outDir);
 
     const withIndex = ask(dir, QUERY, { source: false });
@@ -118,6 +164,7 @@ test("unknown sidecar version falls back to live tokenization without crashing",
   try {
     await buildGraph(dir);
     const outDir = contextDirFor(dir);
+    reinjectBodyText(dir, outDir); // see comment above: fallback == live tokenization only on a fat graph
     const idxPath = askIndexPath(outDir);
 
     const live = ask(dir, QUERY, { source: false });
@@ -139,6 +186,7 @@ test("a stale sidecar (docCount mismatch) falls back to live tokenization", asyn
   try {
     await buildGraph(dir);
     const outDir = contextDirFor(dir);
+    reinjectBodyText(dir, outDir); // see comment above: fallback == live tokenization only on a fat graph
     const idxPath = askIndexPath(outDir);
 
     const live = ask(dir, QUERY, { source: false });
@@ -159,6 +207,7 @@ test("an unparseable sidecar file falls back to live tokenization", async () => 
   try {
     await buildGraph(dir);
     const outDir = contextDirFor(dir);
+    reinjectBodyText(dir, outDir); // see comment above: fallback == live tokenization only on a fat graph
     const idxPath = askIndexPath(outDir);
 
     const live = ask(dir, QUERY, { source: false });
@@ -222,6 +271,106 @@ test("a failed sidecar write is recorded in build errors, not fatal", async () =
     const graph = readGraph(wiringPath(outDir));
     assert.ok(graph, "wiring graph should still be written despite the sidecar failure");
     assert.ok(result.cards > 0, "cards should still be written despite the sidecar failure");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Task-2: body_text moves out of wiring.json entirely ────────────────────
+
+test("ask WITH sidecar: identical hits/scores whether the underlying wiring.json is slim or fat", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const outDir = contextDirFor(dir);
+    const wpath = wiringPath(outDir);
+
+    const slimResult = ask(dir, QUERY, { source: false });
+    assert.ok(slimResult.hits.length > 0, "sanity: the fixture query matches something");
+
+    // Simulate a "fat" wiring.json (as an old build, or a hand-edit, would
+    // produce) by re-injecting an arbitrary body_text onto every node. When
+    // the sidecar is present, scoring reads token bags from IT, not from
+    // node.body_text, so this must have zero effect on the result.
+    const raw = JSON.parse(readFileSync(wpath, "utf8")) as GraphV1;
+    for (const n of raw.nodes) (n as { body_text?: string }).body_text = `junk filler text for ${n.id}`;
+    writeFileSync(wpath, JSON.stringify(raw));
+
+    const fatResult = ask(dir, QUERY, { source: false });
+    assert.deepEqual(
+      fatResult,
+      slimResult,
+      "sidecar-driven ask must be identical whether wiring.json is slim or carries body_text",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask WITHOUT sidecar on a SLIM graph: no crash, body contributions absent, name matching still works", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-index-slim-nosidecar-"));
+  try {
+    // "stripe" appears only inside checkout's body — never in its name/signature.
+    writeFileSync(
+      join(dir, "pay.ts"),
+      `export function checkout(amount: number): string {\n` +
+        `  const token = createStripeCharge(amount);\n` +
+        `  return token;\n` +
+        `}\n`,
+    );
+    await buildGraph(dir); // writes a slim wiring.json + the sidecar
+    const outDir = contextDirFor(dir);
+    const idxPath = askIndexPath(outDir);
+    unlinkSync(idxPath); // no sidecar from here on
+    assert.equal(readAskIndex(outDir), null, "sanity: sidecar is really gone");
+
+    // Body-only term: with no sidecar AND a slim graph, body text isn't
+    // available anywhere — must not crash, and must simply find nothing.
+    const byBody = ask(dir, "stripe");
+    assert.equal(
+      byBody.hits.find((h) => h.title.startsWith("checkout")),
+      undefined,
+      "a body-only term cannot be found once body_text lives only in the (now-missing) sidecar",
+    );
+
+    // Name matching is unaffected — it never depended on body_text.
+    const byName = ask(dir, "checkout");
+    const hit = byName.hits.find((h) => h.title.startsWith("checkout"));
+    assert.ok(hit, "name-field matching still works with no sidecar and a slim graph");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask on an OLD fat graph (body_text present, no sidecar): unchanged behavior — body_text still used", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-index-old-fat-"));
+  try {
+    // Build a wiring.json by hand via extractFile directly (bypassing
+    // buildGraph/writeGraph entirely), so body_text survives on disk exactly
+    // as a pre-slim-serialization build would have written it. No sidecar.
+    const source =
+      `export function checkout(amount: number): string {\n` +
+      `  const token = createStripeCharge(amount);\n` +
+      `  return token;\n` +
+      `}\n`;
+    const { nodes } = extractFile("pay.ts", source, "typescript");
+    const graph: GraphV1 = {
+      meta: { version: 1, nodeCount: nodes.length, edgeCount: 0, languages: ["typescript"] },
+      nodes,
+      edges: [],
+    };
+    const outDir = contextDirFor(dir);
+    const wpath = wiringPath(outDir);
+    mkdirSync(dirname(wpath), { recursive: true });
+    writeFileSync(wpath, JSON.stringify(graph));
+    assert.ok(
+      nodes.some((n) => n.body_text?.toLowerCase().includes("stripe")),
+      "sanity: extractFile actually populated body_text for this fixture",
+    );
+
+    const r = ask(dir, "stripe");
+    const hit = r.hits.find((h) => h.title.startsWith("checkout"));
+    assert.ok(hit, "an old fat graph with no sidecar must still find a body-only term via node.body_text");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

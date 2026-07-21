@@ -143,6 +143,11 @@ export async function buildGraph(
   // Best-effort: wiring.json is already on disk at this point, so a sidecar
   // write failure (e.g. an unwritable cache dir) must not abort cards/index/
   // covers below — record it and keep going, same as other recoverable errors.
+  //
+  // MUST pass the in-memory `graph` here, never a re-read of wiringPath(outDir):
+  // `writeGraph` strips `body_text` from what it serializes (dead weight once
+  // this sidecar exists), so the nodes on disk no longer carry it — only this
+  // in-memory object, still holding what `extractFile` populated, does.
   try {
     writeAskIndex(outDir, graph);
   } catch (err) {

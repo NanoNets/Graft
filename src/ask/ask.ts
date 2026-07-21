@@ -302,7 +302,11 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       // The body (indexed at build) joins the signature + summary as the low-weight
       // body field, so a term that appears only in the code — not the name/signature
       // — still makes the node findable. IDF (from these same bags) keeps a word
-      // common across many bodies from dominating.
+      // common across many bodies from dominating. `body_text` is absent on every
+      // node loaded from a wiring.json written after the slim-serialization change
+      // (it's stripped there — see `write.ts`) as well as on file nodes and
+      // pre-body_text graphs; `?? ""` degrades gracefully to signature+summary
+      // only, it never crashes on the missing field.
       body: counts(tokenize(`${n.signature ?? ""} ${n.summary ?? ""} ${n.body_text ?? ""}`)),
     };
   });
