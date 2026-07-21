@@ -17,24 +17,42 @@ same understanding costs thousands.
 - Ask: `graft ask "<your task, in plain words>"` — returns the relevant nodes,
   ranked, with file:line pointers. Add `--source` to inline the actual code at
   each span, so the result IS the code you need — no separate file read.
+  Ask is cheap (<1s) — re-ask with different phrasings for each sub-question,
+  and use structural forms too: `graft ask "who calls <symbol>"`.
 - Or explore as usual: grep / ls / cat inside `graft/`. A grep for any concept,
   symbol, or filename hits the node that covers it; `graft/INDEX.md` lists them
   all.
 
-**Then STOP at the node. It is the answer, not a lookup toward the answer.**
+**Match the tool to the task shape:**
 
-- **Explaining / tracing / understanding** (no code change): the node's prose
-  IS your deliverable. Cite files and functions straight from its `covers:`
-  list — `covers:` gives you the exact `file:line` for every symbol, so you can
-  cite precisely **without opening the source at all.** Do NOT open source to
-  "verify," "confirm," or "see the real code" — the node was generated from that
-  source and the spans are authoritative. Opening it costs thousands of tokens
-  and changes nothing in your answer.
+- **Understanding, explaining, locating where a change goes** — the node IS the
+  answer. Cite files and functions straight from its `covers:` list — it gives
+  the exact `file:line` for every symbol, so you can cite precisely without
+  opening the source. The spans are generated from that source and are
+  authoritative; don't re-open files just to "double-check" them.
 - **Editing:** run `graft ask "<symbol>" --source` to pull the exact span's
-  code inline, and edit straight from that. Only touch the file to apply the
-  change at the named `file:line` — never read the whole file, never open
-  neighbouring files to "get oriented"; the pack already oriented you.
+  code inline, and edit straight from that. Touch the file only to apply the
+  change at the named `file:line` — never read the whole file to get oriented;
+  the pack already oriented you.
+- **Exhaustive tasks — "every occurrence / every provider / every caller of
+  this pattern":** ranked results are top-N, not a complete list. Use graft to
+  orient (what is the pattern, where does it live), then ENUMERATE with grep
+  over the source and verify each hit. Ask alone will miss instances; that is
+  expected, not a graft failure.
 
-If a node genuinely lacks a detail you need, `graft ask` for a more specific
-node before falling back to source. Reading whole source files to build
-understanding is the thing graft exists to replace — it already did that work.
+**Precise graph modes** — for structural questions, skip ranking and go
+straight to precomputed edges:
+
+- `graft callers <symbol>` / `graft callees <symbol>` — who breaks if this
+  changes / what does this call — precomputed edges, exact answers; structural
+  phrasing inside ask ("who calls X") routes here too.
+- `graft impact <symbol> [-d N]` — BFS over incoming edges out to depth N: the
+  full blast radius of a change.
+
+If a returned span is truncated ("+N more lines"), open the file at that exact
+range before finalizing.
+
+If a node genuinely lacks a detail you need, ask for a more specific node, and
+if it still lacks it, read the source — at the exact file:line the node points
+to, not the whole file. Reading whole source files to build understanding is
+the thing graft exists to replace.
