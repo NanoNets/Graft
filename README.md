@@ -195,6 +195,10 @@ graft build --extensions .ts .py     # only include these code extensions
 graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
 graft ask "<task>" --json            # machine-readable result
 
+graft callers <symbol> [dir]         # who calls/references/imports/implements/extends a symbol (no LLM, no key)
+graft callees <symbol> [dir]         # what a symbol calls/references/imports/implements/extends (no LLM, no key)
+graft impact <symbol> [dir] -d N     # BFS over incoming edges — who breaks if this symbol changes (no LLM, no key)
+
 graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code
 graft check --json                   # print the drift report as JSON
 

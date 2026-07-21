@@ -8,6 +8,9 @@ test('canonical body names the three essentials', () => {
   assert.match(b, /graft ask "/);
   assert.match(b, /graft\/INDEX\.md/);
   assert.match(b, /graft build/);
+  assert.match(b, /every occurrence|enumerate with grep/i, 'teaches the exhaustive-task grep rule');
+  assert.match(b, /callers/, 'teaches the callers/callees/impact commands');
+  assert.match(b, /truncated/i, 'tells the agent to follow up on truncated spans');
   assert.ok(!/\bhook|statusline\b/i.test(b), 'no host-specific machinery in the shared body');
 });
 
