@@ -7,7 +7,7 @@ import { formatAsk } from '../ask/ask.js';
 import { formatCheckReport } from '../context/check.js';
 import { formatGraphCheckReport } from '../graph/check.js';
 import { formatBlastRadius } from '../claude/format.js';
-import { readGraph, wiringPath } from '../graph/write.js';
+import { loadGraphCached } from '../graph/load.js';
 import { contextDirFor } from '../context/node-file.js';
 
 export interface ToolDef {
@@ -72,7 +72,7 @@ export function callTool(
       case 'graft_blast_radius': {
         const file = String(args.file ?? '');
         if (!file) return { text: 'graft_blast_radius requires a file', isError: true };
-        const w = readGraph(wiringPath(contextDirFor(root)));
+        const w = loadGraphCached(contextDirFor(root));
         if (!w) return { text: 'no graph found — run `graft build` first', isError: true };
         const br = formatBlastRadius(w, file);
         return { text: br ?? `no known dependents of ${file}`, isError: false };

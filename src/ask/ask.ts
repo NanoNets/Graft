@@ -17,10 +17,10 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
-import { readGraph, wiringPath } from "../graph/write.js";
+import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { personalizedPageRank } from "./graphrank.js";
-import { counts, readAskIndex, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
+import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
 
 export interface AskHit {
   kind: "concept" | "symbol" | "caller" | "callee";
@@ -97,7 +97,7 @@ function loadCorpus(outDir: string): Corpus {
       });
     }
   }
-  return { concepts, graph: readGraph(wiringPath(outDir)), askIndex: readAskIndex(outDir) };
+  return { concepts, graph: loadGraphCached(outDir), askIndex: loadAskIndexCached(outDir) };
 }
 
 /** Score a document's token counts against the query counts (name field
