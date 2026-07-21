@@ -43,6 +43,45 @@ export interface ExtractResult {
   rawEdges: RawEdge[];
 }
 
+/** Max chars of normalized body stored per symbol for search. Large enough that
+ * essentially every real definition is stored whole — only a rare giant function
+ * is clipped — while bounding how much the committed graph can grow. */
+const MAX_BODY_CHARS = 5000;
+
+/** Cap for a file node's module-level residual (imports, constants, module
+ * docstring — everything not inside a symbol). Higher than the per-symbol cap
+ * because a data-heavy module (constant tables, big config dicts) is legitimate
+ * residual, and it's the recall play — but still bounded. */
+const MAX_FILE_BODY_CHARS = 16000;
+
+/** The searchable body of a definition: its source text, whitespace-collapsed
+ * so every identifier becomes a token, capped at `max`. Search-only — the agent
+ * still reads verbatim source via `ask --source`, which slices the file from
+ * disk, so nothing here reaches the agent's context. */
+function searchBody(text: string, max = MAX_BODY_CHARS): string {
+  const norm = text.replace(/\s+/g, " ").trim();
+  return norm.length > max ? norm.slice(0, max) : norm;
+}
+
+/** A file's module-level residual: the lines NOT covered by any symbol span.
+ * Symbol bodies are already indexed on their own nodes, so this captures only
+ * what they miss — top-of-file imports, module constants, module docstrings —
+ * making a file findable by a term that lives outside every function/class.
+ * `symbols` are the file's emitted nodes (with `Lx-Ly` spans); `source` is the
+ * whole file. Far leaner than storing full-file bodies (no symbol duplication). */
+function fileResidual(source: string, symbols: NodeV1[]): string {
+  const lines = source.split("\n");
+  const covered = new Uint8Array(lines.length + 2);
+  for (const s of symbols) {
+    const m = s.span.match(/^L(\d+)-L(\d+)$/);
+    if (!m) continue;
+    for (let r = Number(m[1]); r <= Number(m[2]) && r < covered.length; r++) covered[r] = 1;
+  }
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) if (!covered[i + 1]) kept.push(lines[i]);
+  return searchBody(kept.join(" "), MAX_FILE_BODY_CHARS);
+}
+
 const TS_KINDS: Record<string, Kind> = {
   class_declaration: "class",
   abstract_class_declaration: "class",
@@ -91,9 +130,19 @@ interface DefDescriptor {
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
 }
 
+/** tree-sitter's string `parse()` fails with "Invalid argument" on any input
+ * ≥ 32 KB, which silently drops large files — often the most important ones (a
+ * 2000-line command module, a core tab implementation). The callback form has
+ * no such limit as long as each returned chunk is under 32 KB, so we always feed
+ * the source in <32 KB slices. Code-unit indexing matches `String.slice`. */
+const PARSE_CHUNK = 16384;
+function parseSource(source: string): Parser.SyntaxNode {
+  return parser.parse((index: number) => source.slice(index, index + PARSE_CHUNK)).rootNode;
+}
+
 export function extractFile(rel: string, source: string, lang: Language): ExtractResult {
   parser.setLanguage(GRAMMARS[lang] as never);
-  const root = parser.parse(source).rootNode;
+  const root = parseSource(source);
 
   const nodes: NodeV1[] = [
     {
@@ -124,6 +173,9 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     parentId: rel,
   };
   for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges);
+  // nodes[0] is the file node; the rest are its symbols. Index the module-level
+  // residual on the file node so a term outside every symbol still surfaces it.
+  nodes[0].body_text = fileResidual(source, nodes.slice(1));
   return { nodes, rawEdges };
 }
 
@@ -141,6 +193,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       exported: ctx.lang === "python" ? !desc.name.startsWith("_") : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
+      body_text: searchBody(desc.hashNode.text),
       summary_state: "pending",
       summary: null,
       crux: null,

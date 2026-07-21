@@ -19,6 +19,7 @@ import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
 import { readGraph, wiringPath } from "../graph/write.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
+import { personalizedPageRank } from "./graphrank.js";
 
 export interface AskHit {
   kind: "concept" | "symbol" | "caller" | "callee";
@@ -116,12 +117,59 @@ function loadCorpus(outDir: string): Corpus {
   return { concepts, graph: readGraph(wiringPath(outDir)) };
 }
 
-/** Score a document's token counts against the query counts (name field pre-weighted by caller). */
-function score(query: Map<string, number>, doc: Map<string, number>): number {
+/** Score a document's token counts against the query counts (name field
+ * pre-weighted by caller). Each shared term is weighted by its inverse document
+ * frequency (`idf`), so a word that appears in many nodes — "overlay" across a
+ * whole widget subsystem, or a repeated word in a pasted issue body — counts for
+ * far less than a rare, discriminating identifier ("scrolling"). Without idf,
+ * pure term-frequency lets an incidental common word dominate the ranking; this
+ * is the lexical half of the keyword-collision fix (graph-rank is the other). */
+function score(
+  query: Map<string, number>,
+  doc: Map<string, number>,
+  idf: Map<string, number>,
+): number {
   let s = 0;
   for (const [t, qn] of query) {
     const dn = doc.get(t);
-    if (dn) s += qn * dn;
+    if (dn) s += qn * dn * (idf.get(t) ?? 1);
+  }
+  return s;
+}
+
+/** Inverse document frequency over the scored corpus. `df` counts how many
+ * documents (concept nodes + symbol nodes) contain each token; N is the corpus
+ * size. `log(1 + N/(1+df))` is the smoothed standard form: monotonically
+ * decreasing in df, always positive, ~0 extra weight for a token in every doc. */
+function computeIdf(docBags: Array<Set<string>>): Map<string, number> {
+  const n = docBags.length;
+  const df = new Map<string, number>();
+  for (const bag of docBags)
+    for (const t of bag) df.set(t, (df.get(t) ?? 0) + 1);
+  const idf = new Map<string, number>();
+  for (const [t, d] of df) idf.set(t, Math.log(1 + n / (1 + d)));
+  return idf;
+}
+
+/** BM25 term score for a document field, used for the (potentially large) body
+ * field. Unlike raw term-frequency, BM25 saturates repeated occurrences (`k1`)
+ * and normalizes by document length (`b`, against the corpus-average length
+ * `avgdl`), so a big definition — a sprawling test class — can't outrank a
+ * tight, on-point function merely by containing more words. Standard params. */
+function bm25(
+  query: Map<string, number>,
+  doc: Map<string, number>,
+  idf: Map<string, number>,
+  dl: number,
+  avgdl: number,
+): number {
+  const k1 = 1.2;
+  const b = 0.75;
+  const norm = k1 * (1 - b + (b * dl) / (avgdl || 1));
+  let s = 0;
+  for (const t of query.keys()) {
+    const tf = doc.get(t);
+    if (tf) s += (idf.get(t) ?? 1) * ((tf * (k1 + 1)) / (tf + norm));
   }
   return s;
 }
@@ -199,16 +247,60 @@ function structural(query: string, graph: GraphV1, limit: number): AskResult | n
 
 // ── Lexical rank ─────────────────────────────────────────────────────────────
 
-function lexical(query: string, corpus: Corpus, limit: number): AskResult {
-  const q = counts(tokenize(query));
-  const scored: AskHit[] = [];
+/** How much a node's graph-centrality (0..1) can lift its blended score. A
+ * lexically-perfect node scores 1.0 on the lexical axis; a graph weight of 0.5
+ * lets connectivity reorder near-ties and separate a connected hit from an
+ * isolated same-word collision, without letting structure override a clear
+ * lexical winner. */
+const GRAPH_WEIGHT = 0.5;
 
-  for (const c of corpus.concepts) {
-    const nameScore = score(q, counts(tokenize(c.name))) * 3;
-    const bodyScore = score(q, counts(tokenize(c.text)));
-    const total = nameScore + bodyScore;
+/** A node the query never word-matched is pulled into the results only if the
+ * walk gives it at least this share of the top node's mass — i.e. it is
+ * genuinely central to the matched cluster, not incidentally reachable. This is
+ * what surfaces the config/helper a task depends on but didn't name. */
+const RESCUE_FLOOR = 0.15;
+
+function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean): AskResult {
+  // Binary query terms: a word repeated in a pasted issue body counts once, so a
+  // ranty description can't linearly amplify an incidental word.
+  const q = new Map([...counts(tokenize(query)).keys()].map((t) => [t, 1]));
+  const graph = corpus.graph;
+
+  // ── Pass 1: tokenize every scored field once, and collect per-document token
+  // bags so IDF can down-weight words that occur across the whole corpus. ──
+  const conceptDocs = corpus.concepts.map((c) => ({
+    c,
+    name: counts(tokenize(c.name)),
+    body: counts(tokenize(c.text)),
+  }));
+  // Symbols AND file nodes are scored: a symbol's body_text is its definition;
+  // a file's body_text is the module-level residual (imports/constants not in
+  // any symbol). Including files closes the recall gap where a gold file's only
+  // query-relevant text lives outside every function/class.
+  const symbolDocs = (graph?.nodes ?? []).map((n) => ({
+    n,
+    name: counts(tokenize(n.name)),
+    path: counts(tokenize(n.path)),
+    // The body (indexed at build) joins the signature + summary as the low-weight
+    // body field, so a term that appears only in the code — not the name/signature
+    // — still makes the node findable. IDF (from these same bags) keeps a word
+    // common across many bodies from dominating.
+    body: counts(tokenize(`${n.signature ?? ""} ${n.summary ?? ""} ${n.body_text ?? ""}`)),
+  }));
+  const docBags: Array<Set<string>> = [];
+  for (const d of conceptDocs) docBags.push(new Set([...d.name.keys(), ...d.body.keys()]));
+  for (const d of symbolDocs)
+    docBags.push(new Set([...d.name.keys(), ...d.path.keys(), ...d.body.keys()]));
+  const idf = computeIdf(docBags);
+
+  // ── Concepts (prose nodes; not in the wiring graph) ──
+  const conceptHits: AskHit[] = [];
+  let maxConcept = 0;
+  for (const { c, name, body } of conceptDocs) {
+    const total = score(q, name, idf) * 3 + score(q, body, idf);
     if (total > 0) {
-      scored.push({
+      maxConcept = Math.max(maxConcept, total);
+      conceptHits.push({
         kind: "concept",
         title: c.name || c.slug,
         pointer: c.sources.join(", ") || c.slug,
@@ -219,23 +311,65 @@ function lexical(query: string, corpus: Corpus, limit: number): AskResult {
     }
   }
 
-  for (const n of corpus.graph?.nodes ?? []) {
-    if (n.kind === "file") continue;
-    const nameScore = score(q, counts(tokenize(n.name))) * 3;
-    const pathScore = score(q, counts(tokenize(n.path))) * 2;
-    const bodyScore = score(q, counts(tokenize(`${n.signature ?? ""} ${n.summary ?? ""}`)));
-    const total = nameScore + pathScore + bodyScore;
+  // ── Symbols (wiring graph): lexical score per node, keyed by id ──
+  const byId = new Map((graph?.nodes ?? []).map((n) => [n.id, n]));
+  const bodyLen = (m: Map<string, number>) => {
+    let s = 0;
+    for (const v of m.values()) s += v;
+    return s;
+  };
+  const avgBodyLen = symbolDocs.length
+    ? symbolDocs.reduce((a, d) => a + bodyLen(d.body), 0) / symbolDocs.length
+    : 0;
+  const lex = new Map<string, number>(); // node id → lexical score (>0 only)
+  let maxLex = 0;
+  for (const { n, name, path, body } of symbolDocs) {
+    // Name and path are short identifiers → plain idf-weighted overlap; the body
+    // is length-normalized via BM25 so long definitions don't win on bulk.
+    const total =
+      score(q, name, idf) * 3 +
+      score(q, path, idf) * 2 +
+      bm25(q, body, idf, bodyLen(body), avgBodyLen);
     if (total > 0) {
-      scored.push({
-        kind: "symbol",
-        title: `${n.name} · ${n.kind}`,
-        pointer: `${n.path}:${n.span}`,
-        snippet: n.summary?.split("\n")[0].trim() ?? n.signature ?? "",
-        score: total,
-      });
+      lex.set(n.id, total);
+      maxLex = Math.max(maxLex, total);
     }
   }
 
+  // ── Graph-rank: let connectivity to the matched set reorder and rescue ──
+  const pr = graphRank && graph && lex.size > 0
+    ? personalizedPageRank(graph, lex)
+    : new Map<string, number>();
+
+  // Candidate symbols = everything the query word-matched, plus nodes the walk
+  // found strongly central even without a word match (RESCUE_FLOOR).
+  const candidates = new Set<string>(lex.keys());
+  for (const [id, p] of pr) if (p >= RESCUE_FLOOR) candidates.add(id);
+
+  const symbolHits: AskHit[] = [];
+  for (const id of candidates) {
+    const n = byId.get(id);
+    if (!n) continue;
+    const lexN = maxLex > 0 ? (lex.get(id) ?? 0) / maxLex : 0;
+    const blended = lexN + GRAPH_WEIGHT * (pr.get(id) ?? 0);
+    if (blended <= 0) continue;
+    symbolHits.push({
+      kind: "symbol",
+      title: `${n.name} · ${n.kind}`,
+      // A file node points at the whole file (locator, no span) so `--source`
+      // never inlines an entire file; symbol nodes keep their exact span.
+      pointer: n.kind === "file" ? n.path : `${n.path}:${n.span}`,
+      snippet: n.summary?.split("\n")[0].trim() ?? n.signature ?? "",
+      score: blended,
+    });
+  }
+
+  // Concepts and symbols live on comparable 0..~1.5 scales so they merge fairly:
+  // concept scores are normalized to their own max, symbol scores are the
+  // lexical-normalized + graph-weighted blend.
+  for (const h of conceptHits) h.score = maxConcept > 0 ? h.score / maxConcept : 0;
+
+  const scored = [...conceptHits, ...symbolHits];
   scored.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
   return {
     query,
@@ -251,6 +385,10 @@ export interface AskOptions {
   /** Inline the source at each `path:Lx-Ly` hit, sliced from `dir`. Turns the
    * pack from a locator into a retriever so the agent needn't re-open the file. */
   source?: boolean;
+  /** Re-rank lexical hits by graph connectivity (personalized PageRank over the
+   * wiring edges), demoting same-word collisions and rescuing strongly-connected
+   * neighbours the query didn't name. On by default; set false for pure lexical. */
+  graphRank?: boolean;
 }
 
 /** Parse a `path:Lx-Ly` pointer into its parts, or null if it isn't one
@@ -329,13 +467,14 @@ export function ask(dir: string, query: string, opts: AskOptions = {}): AskResul
   const outDir = contextDirFor(root, opts.contextDir);
   const limit = opts.limit ?? 8;
   const corpus = loadCorpus(outDir);
+  const graphRank = opts.graphRank ?? true;
 
   let result: AskResult;
   if (corpus.graph) {
     const s = structural(query, corpus.graph, limit);
-    result = s ?? lexical(query, corpus, limit);
+    result = s ?? lexical(query, corpus, limit, graphRank);
   } else {
-    result = lexical(query, corpus, limit);
+    result = lexical(query, corpus, limit, graphRank);
   }
   if (opts.source) {
     inlineSource(root, result.hits);
