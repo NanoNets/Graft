@@ -133,6 +133,24 @@ export function calleesOf(graph: GraphV1, symbol: NodeV1): EdgeHit[] {
  * dependency graph counts its convergence node exactly once).
  */
 export function impactOf(graph: GraphV1, symbol: NodeV1, maxDepth = 2): EdgeHit[] {
+  return impactOfMany(graph, [symbol], maxDepth);
+}
+
+/**
+ * BFS over INCOMING walk-relation edges from *multiple* seed nodes at once —
+ * the multi-seed generalization of {@link impactOf} (`impactOf(g, n, d)` is
+ * exactly `impactOfMany(g, [n], d)`). Used when one logical unit spans several
+ * graph node ids — e.g. a file plus every symbol defined in it, since a
+ * `calls`/`references`/etc. edge from another file always targets the SYMBOL
+ * id, never the FILE id, so walking the file node alone misses dependents that
+ * call into it rather than merely importing it.
+ *
+ * Every seed is pre-marked visited (so a seed can never appear as its own
+ * hit, and an edge between two seeds is never reported), then the walk
+ * proceeds exactly like `impactOf`'s: each reached node deduped by id and
+ * reported once, at the depth it was first reached from *any* seed.
+ */
+export function impactOfMany(graph: GraphV1, seeds: NodeV1[], maxDepth = 2): EdgeHit[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
 
   // target id → incoming {source, relation} pairs, restricted to walk relations.
@@ -145,9 +163,9 @@ export function impactOf(graph: GraphV1, symbol: NodeV1, maxDepth = 2): EdgeHit[
     else incoming.set(e.target, [entry]);
   }
 
-  const visited = new Set<string>([symbol.id]);
+  const visited = new Set<string>(seeds.map((s) => s.id));
   const hits: EdgeHit[] = [];
-  let frontier = [symbol.id];
+  let frontier = [...visited];
 
   for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
     const next: string[] = [];
@@ -163,4 +181,23 @@ export function impactOf(graph: GraphV1, symbol: NodeV1, maxDepth = 2): EdgeHit[
   }
 
   return hits;
+}
+
+/** Every non-file node whose `path` equals `fileNode.path` — the symbols
+ * defined in that file. */
+function symbolsInFile(graph: GraphV1, fileNode: NodeV1): NodeV1[] {
+  return graph.nodes.filter((n) => n.kind !== "file" && n.path === fileNode.path);
+}
+
+/**
+ * `impactOf`, generalized for a `kind: 'file'` seed: aggregates the BFS over
+ * the file node AND every symbol node defined in that file (via
+ * {@link impactOfMany} — dedup by id, min depth, seeds excluded). Fixes a file
+ * query silently dropping dependents that `calls`/`references`/etc. into a
+ * symbol the file defines, rather than merely `imports`-ing the file itself —
+ * see this module's header and `impactOfMany`'s doc for why. Symbol-kind
+ * queries keep using plain `impactOf`; this is only for file-kind matches.
+ */
+export function impactOfFile(graph: GraphV1, fileNode: NodeV1, maxDepth = 2): EdgeHit[] {
+  return impactOfMany(graph, [fileNode, ...symbolsInFile(graph, fileNode)], maxDepth);
 }

@@ -8,7 +8,7 @@ import { formatCheckReport } from '../context/check.js';
 import { formatGraphCheckReport } from '../graph/check.js';
 import { loadGraphCached } from '../graph/load.js';
 import { contextDirFor } from '../context/node-file.js';
-import { resolveSymbol, callersOf, calleesOf, impactOf, type EdgeHit } from '../graph/traverse.js';
+import { resolveSymbol, callersOf, calleesOf, impactOf, impactOfFile, type EdgeHit } from '../graph/traverse.js';
 import { headerOf, hitLine, looseNoteFor, type TraverseKind } from '../graph/traverse-cli.js';
 import type { NodeV1 } from '../graph/types.js';
 
@@ -54,6 +54,7 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         file: { type: 'string', description: 'repo-relative file path, or a symbol name (bare, qualified, or package-qualified)' },
+        symbol: { type: 'string', description: 'alternative to `file` — a symbol name (bare, qualified, or package-qualified)' },
         depth: { type: 'number', description: 'max BFS depth (default 2)' },
       },
       required: ['file'],
@@ -135,7 +136,15 @@ export function callTool(
             ? args.depth
             : DEFAULT_BLAST_DEPTH;
         // impactOf's BFS is over incoming edges — same wording family as "callers".
-        const text = renderMatches('impact', matches, (m) => impactOf(w, m, depth));
+        // A file-kind match must aggregate impact over the file node AND every
+        // symbol it defines: a `calls`/`references`/etc. edge into a function
+        // defined in the file targets the SYMBOL id, never the FILE id, so
+        // walking the file node alone silently drops dependents that call
+        // into it rather than merely importing it. Symbol-kind matches keep
+        // the plain single-seed walk.
+        const text = renderMatches('impact', matches, (m) =>
+          m.kind === 'file' ? impactOfFile(w, m, depth) : impactOf(w, m, depth),
+        );
         return { text, isError: false };
       }
       case 'graft_callers':

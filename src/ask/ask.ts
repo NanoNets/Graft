@@ -560,11 +560,15 @@ export function formatAsk(r: AskResult): string {
   // The note prints as its own prominent line(s) right under the header —
   // above every hit — so a loud structural-fallthrough note (or the
   // no-structural-edges / no-lexical-match note) can never be missed by only
-  // being embedded inline in the header parenthetical.
+  // being embedded inline in the header parenthetical. Only a genuine
+  // fallthrough/warning line (from `fallthroughNoteFor`, always prefixed
+  // "structural index:") gets the ⚠ marker; the benign structural header note
+  // ("callers / references of X" / "outgoing edges from X") prints plain —
+  // it's informational, not a warning.
   const noteBlock = r.note
     ? r.note
         .split("\n")
-        .map((l) => `⚠ ${l}`)
+        .map((l) => (l.startsWith("structural index:") ? `⚠ ${l}` : l))
         .join("\n")
     : "";
   if (r.hits.length === 0) {

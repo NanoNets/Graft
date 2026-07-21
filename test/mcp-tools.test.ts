@@ -32,6 +32,21 @@ function chainRepo(): string {
   return d;
 }
 
+/** b.ts imports a.ts AND calls a function (`helper`) defined in a.ts. The
+ * `imports` edge targets a.ts's FILE id; the `calls` edge targets `helper`'s
+ * SYMBOL id — two different node ids, both "in" a.ts from a human's view. */
+function fileScopeRepo(): string {
+  const d = mkdtempSync(join(tmpdir(), 'graft-mcptools-filescope-'));
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(join(d, 'src', 'a.ts'), 'export function helper(): number {\n  return 42;\n}\n');
+  writeFileSync(
+    join(d, 'src', 'b.ts'),
+    "import { helper } from './a';\n\nexport function useB(): number {\n  return helper();\n}\n",
+  );
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d], { stdio: 'pipe' });
+  return d;
+}
+
 test('TOOLS lists all five tools with schemas', () => {
   assert.deepEqual(TOOLS.map((t) => t.name), [
     'graft_ask',
@@ -44,6 +59,11 @@ test('TOOLS lists all five tools with schemas', () => {
     assert.ok(t.description.length > 0);
     assert.equal((t.inputSchema as { type: string }).type, 'object');
   }
+  // graft_blast_radius accepts `symbol` as an alternative to `file` (callTool
+  // does `args.symbol ?? args.file`) — the schema must document it too.
+  const blastRadius = TOOLS.find((t) => t.name === 'graft_blast_radius')!;
+  const props = (blastRadius.inputSchema as { properties: Record<string, unknown> }).properties;
+  assert.ok('symbol' in props, 'graft_blast_radius schema should document `symbol`');
 });
 
 test('graft_ask returns ranked hits for a built repo', () => {
@@ -134,6 +154,17 @@ test('graft_blast_radius: depth param is honored (default 2 reaches further than
   assert.match(deeper.text, /\[depth 1\]/);
   assert.match(deeper.text, /← compute \(/);
   assert.match(deeper.text, /\[depth 2\]/);
+});
+
+test('graft_blast_radius: file-scope match aggregates dependents that call into a symbol the file defines, not just file-level imports', () => {
+  const d = fileScopeRepo();
+  const r = callTool(d, 'graft_blast_radius', { file: 'src/a.ts' });
+  assert.equal(r.isError, false);
+  // Old behavior (walking only the FILE node's incoming edges) found b.ts via
+  // `imports` but silently dropped it via `calls`, since a `calls` edge
+  // targets the SYMBOL id (`src/a.ts#helper`), never the FILE id.
+  assert.match(r.text, /imports ← b\.ts \(src\/b\.ts/);
+  assert.match(r.text, /calls ← useB \(src\/b\.ts/);
 });
 
 test('graft_blast_radius: unknown symbol is a soft isError with the check-spelling message', () => {

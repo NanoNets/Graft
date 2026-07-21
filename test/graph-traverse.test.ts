@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveSymbol, callersOf, calleesOf, impactOf } from "../src/graph/traverse.js";
+import { resolveSymbol, callersOf, calleesOf, impactOf, impactOfMany, impactOfFile } from "../src/graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../src/graph/types.js";
 
 function nodeStub(partial: Partial<NodeV1> & { id: string }): NodeV1 {
@@ -210,4 +210,67 @@ test("impactOf: default maxDepth is 2", () => {
 test("impactOf: no incoming edges → empty array", () => {
   const g = baseGraph();
   assert.deepEqual(impactOf(g, hashFn), []);
+});
+
+// ── impactOfMany / impactOfFile ─────────────────────────────────────────────
+
+/** b.ts imports a.ts (file-level `imports` edge, target = the FILE id) AND
+ * calls `helper`, a function defined in a.ts (`calls` edge, target = the
+ * SYMBOL id) — the exact shape that regresses a file-scope blast radius that
+ * only walks the file node: the `calls` edge is invisible from there. */
+function fileAndSymbolGraph() {
+  const fileA = nodeStub({ id: "src/a.ts", name: "a.ts", kind: "file", path: "src/a.ts" });
+  const helper = nodeStub({ id: "src/a.ts#helper", name: "helper", kind: "function", path: "src/a.ts" });
+  const fileB = nodeStub({ id: "src/b.ts", name: "b.ts", kind: "file", path: "src/b.ts" });
+  const useB = nodeStub({ id: "src/b.ts#useB", name: "useB", kind: "function", path: "src/b.ts" });
+  const graph = graphOf(
+    [fileA, helper, fileB, useB],
+    [edge("src/b.ts", "src/a.ts", "imports"), edge("src/b.ts#useB", "src/a.ts#helper", "calls")],
+  );
+  return { fileA, helper, fileB, useB, graph };
+}
+
+test("impactOfMany: aggregating over [file, symbol] seeds finds both the importing file and the calling symbol", () => {
+  const { fileA, helper, graph } = fileAndSymbolGraph();
+
+  // Walking the file node alone (today's behavior for a file-kind match) sees
+  // only the file-level `imports` edge — the `calls` edge targets the symbol
+  // id, so it's invisible from here. This is the regression.
+  const fileOnly = impactOf(graph, fileA);
+  assert.deepEqual(fileOnly.map((h) => h.id), ["src/b.ts"]);
+
+  // impactOfMany over [file, symbol] recovers both dependents.
+  const hits = impactOfMany(graph, [fileA, helper], 2);
+  assert.deepEqual(hits.map((h) => h.id).sort(), ["src/b.ts", "src/b.ts#useB"]);
+  const byId = new Map(hits.map((h) => [h.id, h]));
+  assert.equal(byId.get("src/b.ts")?.relation, "imports");
+  assert.equal(byId.get("src/b.ts#useB")?.relation, "calls");
+});
+
+test("impactOfMany: seeds are excluded from their own results and cross-seed convergence dedups at the min depth", () => {
+  const A = nodeStub({ id: "A", name: "A" });
+  const B = nodeStub({ id: "B", name: "B" });
+  const C = nodeStub({ id: "C", name: "C" });
+  // C calls into both A and B — a hit reached from two different seeds at the
+  // same depth must still be reported once.
+  const g = graphOf([A, B, C], [edge("C", "A", "calls"), edge("C", "B", "calls")]);
+  const hits = impactOfMany(g, [A, B], 2);
+  assert.deepEqual(hits.map((h) => h.id), ["C"]);
+  assert.equal(hits[0].depth, 1);
+});
+
+test("impactOfMany: impactOf(g, n, d) is the single-seed special case", () => {
+  const { node: X, graph } = diamondGraph();
+  assert.deepEqual(impactOfMany(graph, [X], 2), impactOf(graph, X, 2));
+});
+
+test("impactOfFile: aggregates over the file node and every symbol node it defines", () => {
+  const { fileA, graph } = fileAndSymbolGraph();
+  const hits = impactOfFile(graph, fileA, 2);
+  assert.deepEqual(hits.map((h) => h.id).sort(), ["src/b.ts", "src/b.ts#useB"]);
+});
+
+test("impactOfFile: with no symbol nodes in the file, behaves exactly like impactOf on the file node", () => {
+  const g = baseGraph();
+  assert.deepEqual(impactOfFile(g, fileNode, 2), impactOf(g, fileNode, 2));
 });
