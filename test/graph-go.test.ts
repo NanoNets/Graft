@@ -129,3 +129,39 @@ test("Go extraction: call and import edges", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Go extraction: go.mod in a subdirectory resolves intra-module imports", async () => {
+  // Monorepo shape: the module lives under backend/, not the repo root.
+  const dir = mkdtempSync(join(tmpdir(), "graft-go-sub-"));
+  try {
+    mkdirSync(join(dir, "backend", "store"), { recursive: true });
+    writeFileSync(join(dir, "backend", "go.mod"), "module example.com/app\n\ngo 1.21\n");
+    writeFileSync(
+      join(dir, "backend", "main.go"),
+      `package main\n\nimport (\n\t"fmt"\n\t"example.com/app/store"\n)\n\nfunc main() {\n\tfmt.Println(store.New())\n}\n`,
+    );
+    writeFileSync(join(dir, "backend", "store", "store.go"), "package store\n\nfunc New() int { return 0 }\n");
+
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    // `example.com/app/store` → backend/store (module dir `backend` + subpath `store`)
+    const internal = graph.edges.find(
+      (e) =>
+        e.relation === "imports" &&
+        e.source === "backend/main.go" &&
+        e.target === "backend/store/store.go",
+    );
+    assert.ok(internal, "subdir-module import should resolve to backend/store/store.go");
+
+    // stdlib still stays external
+    assert.ok(
+      graph.edges.some(
+        (e) => e.relation === "imports" && e.source === "backend/main.go" && e.target === "fmt",
+      ),
+      "fmt should remain an external package string",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

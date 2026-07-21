@@ -8,11 +8,11 @@
  * Edges (M2) and LLM summary/crux (M3) layer onto this without changing it.
  */
 import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contextDirFor } from "../context/node-file.js";
 import { extractFile, languageOf, type Language, type RawEdge } from "./extract.js";
-import { resolveEdges } from "./resolve.js";
+import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers } from "./cards.js";
@@ -54,15 +54,24 @@ export function listSourceFiles(root: string, outDir: string): string[] {
   return walkDir(root).filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
 }
 
-/** The module path from `<root>/go.mod` (`module github.com/x/y`), or undefined if the
- * repo isn't a Go module. Lets edge resolution map Go import paths to in-repo files. */
-function readGoModule(root: string): string | undefined {
-  try {
-    const m = readFileSync(resolve(root, "go.mod"), "utf8").match(/^\s*module\s+(\S+)/m);
-    return m?.[1];
-  } catch {
-    return undefined;
+/** Every Go module in the repo: each `go.mod`'s declared `module` path and the repo
+ * directory it lives in (posix, `.` for the root). Found anywhere in the tree, so a
+ * monorepo whose module is in a subdir (e.g. `backend/go.mod`) resolves too. Lets edge
+ * resolution map Go import paths to in-repo files. */
+function readGoModules(root: string): GoModule[] {
+  const mods: GoModule[] = [];
+  for (const f of walkDir(root)) {
+    if (basename(f) !== "go.mod") continue;
+    try {
+      const m = readFileSync(f, "utf8").match(/^\s*module\s+(\S+)/m);
+      if (!m) continue;
+      const rel = relative(root, dirname(f)).split(sep).join("/");
+      mods.push({ module: m[1], dir: rel === "" ? "." : rel });
+    } catch {
+      /* unreadable go.mod — skip this module */
+    }
   }
+  return mods;
 }
 
 export async function buildGraph(
@@ -101,7 +110,7 @@ export async function buildGraph(
     }
   });
 
-  const edges = resolveEdges(nodes, rawEdges, { goModule: readGoModule(root) });
+  const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root) });
 
   // graph.json is its own Tier-2 cache: fold in the prior meaning layer so an
   // unchanged body is never re-summarized (and a Tier-1-only run never wipes it).
