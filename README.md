@@ -22,39 +22,35 @@
 
 </div>
 
-<!-- placeholder: swap this diagram for a produced hero gif/screenshot (assets/hero.gif) when ready -->
-
-```mermaid
-flowchart LR
-    A["Your code"] -->|"graft build --deep"| B["graft/<br/>a graph of linked<br/>markdown nodes"]
-    B -->|"git commit"| C[("your repo")]
-    C -->|"git clone"| D["teammate + their agent"]
-    D -->|"reads the graph first"| E["starts already knowing<br/>how the repo fits together"]
-```
+<p align="center">
+  <img src="assets/graft-terminal.png" alt="Two commands — npm install and graft init — then Graft rides along in a Claude Code session, statusline synced" width="820"/>
+</p>
 
 ---
 
 ## Quick start
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
-# the summaries are LLM-written — get a key at https://openrouter.ai/keys
-
-npx @nanonets/graft build --deep
-# builds graft/ from your code, one node per system, API, or concept
-
-git add graft && git commit -m "add context graph"
-# commit it so everyone who clones the repo (and their agents) gets the graph
+npm install -g @nanonets/graft   # install the CLI, once
+graft init                       # build the graph + wire it into Claude Code
 ```
 
-Or install it once and get the `graft` command everywhere:
+That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no MCP server, no re-indexing to remember, and nothing else to run.
+
+Commit `graft/` so everyone who clones the repo (and their agents) gets the map:
 
 ```bash
-npm install -g @nanonets/graft
+git add graft && git commit -m "add context graph"
+```
+
+Want richer, LLM-written summaries on top of the structural graph? Point Graft at an OpenRouter key and run the deep pass whenever you like:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...   # https://openrouter.ai/keys
 graft build --deep
 ```
 
-That is it. Point your agent at `graft/` and it reads the graph before it starts working.
+Prefer not to install globally? `npx @nanonets/graft init` works the same way.
 
 ---
 
