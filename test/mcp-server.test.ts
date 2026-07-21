@@ -45,7 +45,13 @@ test('initialize → tools/list → tools/call round-trip', async () => {
   assert.ok(init.result.capabilities.tools);
   assert.equal(init.result.serverInfo.name, 'graft');
   const list = rs.find((r) => r.id === 2);
-  assert.deepEqual(list.result.tools.map((t: any) => t.name), ['graft_ask', 'graft_check', 'graft_blast_radius']);
+  assert.deepEqual(list.result.tools.map((t: any) => t.name), [
+    'graft_ask',
+    'graft_check',
+    'graft_blast_radius',
+    'graft_callers',
+    'graft_callees',
+  ]);
   const call = rs.find((r) => r.id === 3);
   assert.equal(call.result.isError, true); // unbuilt repo → soft error content
   assert.match(call.result.content[0].text, /graft build/);

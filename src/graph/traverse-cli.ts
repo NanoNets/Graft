@@ -34,11 +34,15 @@ function edgesFor(kind: TraverseKind, graph: GraphV1, node: NodeV1, depth: numbe
   return impactOf(graph, node, depth);
 }
 
-function headerOf(n: NodeV1): string {
+/** Exported so the MCP tools (`graft_callers`/`graft_callees`/`graft_blast_radius`
+ * in `src/mcp/tools.ts`) can render the same human report format as the CLI,
+ * rather than re-implementing it — both surfaces walk the same edges via the
+ * same `resolveSymbol`/`callersOf`/`calleesOf`/`impactOf` core. */
+export function headerOf(n: NodeV1): string {
   return `${n.name} · ${n.kind} · ${n.path}:${n.span}`;
 }
 
-function hitLine(kind: TraverseKind, hit: EdgeHit): string {
+export function hitLine(kind: TraverseKind, hit: EdgeHit): string {
   const arrow = ARROW[kind];
   const depthTag = kind === "impact" ? ` [depth ${hit.depth}]` : "";
   const label = hit.node ? `${hit.node.name} (${hit.node.path}:${hit.node.span})` : `${hit.id} (unresolved import)`;
@@ -47,7 +51,7 @@ function hitLine(kind: TraverseKind, hit: EdgeHit): string {
 
 /** Loud, actionable empty-result note — never a bare empty list. `callers` and
  * `impact` both walk incoming edges, so they share the "callers" wording. */
-function looseNoteFor(kind: TraverseKind, name: string): string {
+export function looseNoteFor(kind: TraverseKind, name: string): string {
   const label = kind === "callees" ? "callees" : "callers";
   const direction = kind === "callees" ? "outgoing" : "incoming";
   return `  no indexed ${label} — the graph has no ${direction} call/reference edges for this symbol; try grep -rn "${name}"`;
