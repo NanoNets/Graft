@@ -31,8 +31,11 @@ function mergeJsonKey(id: string, path: string, topKey: string, entry: object): 
     }
   }
   const bucket = (root[topKey] ??= {});
+  if (typeof bucket !== 'object' || bucket === null || Array.isArray(bucket)) {
+    return { id, path, action: 'skipped-unparseable' };
+  }
   if (JSON.stringify(bucket.graft) === JSON.stringify(entry)) return { id, path, action: 'unchanged' };
-  const action = bucket.graft === undefined && !existed ? 'created' : existed ? 'updated' : 'created';
+  const action = existed ? 'updated' : 'created';
   bucket.graft = entry;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(root, null, 2)}\n`);
