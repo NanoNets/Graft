@@ -206,7 +206,8 @@ program
   .option("--all-agents", "write instruction files for every known agent, detected or not")
   .option("--no-agents", "Claude Code wiring only; skip other agents")
   .option("--list-agents", "list known agent ids and exit")
-  .action((dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean }) => {
+  .option("--no-mcp", "skip MCP server registration for other agents")
+  .action((dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean }) => {
     if (opts.listAgents) {
       for (const id of [...hostIds(), "claude"]) console.log(id);
       return;
@@ -240,11 +241,13 @@ program
       const r = runHostsInit(repo, {
         agents: explicit?.filter((id) => id !== "claude"),
         all: opts.allAgents,
+        mcp: opts.mcp,
       });
       for (const w of r.written) console.error(`✓ ${w.id}: ${w.path} (${w.action})`);
       if (!explicit && !opts.allAgents && r.written.length === 0)
         console.error("· no other agents detected (see --list-agents / --all-agents)");
       // r.unknown is always empty here — ids are validated above, before any writes.
+      for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
     }
     console.error("\nDone. Claude Code gets live hooks + statusline; other agents read their instruction files.");
     console.error("For LLM summaries: set OPENROUTER_API_KEY and run `graft build --deep`.");

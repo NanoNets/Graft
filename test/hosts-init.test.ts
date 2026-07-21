@@ -97,3 +97,26 @@ test('CLI: --agents claude gemini nope exits non-zero and leaves repo untouched 
   assert.ok(!existsSync(join(repo, 'GEMINI.md')));
   assert.ok(!existsSync(join(repo, 'AGENTS.md')));
 });
+
+test('runHostsInit registers MCP configs for selected hosts', () => {
+  const home = fresh(); const repo = fresh();
+  const r = runHostsInit(repo, { home, agents: ['cursor'] });
+  assert.equal(r.mcp.length, 1);
+  assert.match(r.mcp[0].path, /\.cursor\/mcp\.json$/);
+  const cfg = JSON.parse(readFileSync(join(repo, '.cursor', 'mcp.json'), 'utf8'));
+  assert.equal(cfg.mcpServers.graft.command, 'npx');
+});
+
+test('mcp: false skips MCP registration', () => {
+  const home = fresh(); const repo = fresh();
+  const r = runHostsInit(repo, { home, agents: ['cursor'], mcp: false });
+  assert.deepEqual(r.mcp, []);
+  assert.ok(!existsSync(join(repo, '.cursor', 'mcp.json')));
+});
+
+test('CLI: --no-mcp writes the rule file but no MCP config', () => {
+  const repo = fresh();
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'init', repo, '--no-build', '--agents', 'cursor', '--no-mcp'], { encoding: 'utf8' });
+  assert.ok(existsSync(join(repo, '.cursor', 'rules', 'graft.mdc')));
+  assert.ok(!existsSync(join(repo, '.cursor', 'mcp.json')));
+});

@@ -73,6 +73,17 @@ npx @nanonets/graft init
 | `--no-agents` | Claude Code wiring only; skip other agents |
 | `--list-agents` | print the known agent ids and exit |
 
+### MCP server
+
+`graft init` also registers Graft's MCP server with agents that support it, so
+`graft_ask`, `graft_check`, and `graft_blast_radius` appear as native tools —
+no shell required. Skip with `--no-mcp`. Run it manually with `graft mcp [dir]`,
+or register it by hand:
+
+```json
+{ "mcpServers": { "graft": { "command": "npx", "args": ["-y", "@nanonets/graft", "mcp"] } } }
+```
+
 ### Claude Code (deep integration)
 
 `graft init` always wires up Claude Code, and Claude Code gets more than an instruction file. From then on, any Claude Code session opened in the repo gets:

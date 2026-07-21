@@ -8,11 +8,13 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { HOSTS, detectHosts, type DetectProbe, type HostTarget } from './registry.js';
 import { upsertSection } from './sections.js';
+import { registerMcpConfigs, type McpWrite } from './mcp-config.js';
 
 export interface HostsInitResult {
   written: { id: string; path: string; action: string }[];
   skipped: string[];
   unknown: string[];
+  mcp: McpWrite[];
 }
 
 function probeFor(home: string, repo: string): DetectProbe {
@@ -32,7 +34,7 @@ function writeOwned(path: string, content: string): string {
 
 export function runHostsInit(
   repo: string,
-  opts: { agents?: string[]; all?: boolean; home?: string } = {},
+  opts: { agents?: string[]; all?: boolean; home?: string; mcp?: boolean } = {},
 ): HostsInitResult {
   const home = opts.home ?? homedir();
   const probe = probeFor(home, repo);
@@ -59,5 +61,6 @@ export function runHostsInit(
     written.push({ id: host.id, path, action });
   }
   const skipped = HOSTS.filter((h) => !selected.includes(h)).map((h) => h.id);
-  return { written, skipped, unknown };
+  const mcp = opts.mcp === false ? [] : registerMcpConfigs(repo, selected.map((h) => h.id), { home });
+  return { written, skipped, unknown, mcp };
 }
