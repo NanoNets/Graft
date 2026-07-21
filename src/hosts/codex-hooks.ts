@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { hooksShim } from '../claude/shim-template.js';
+import { claudeDistDir } from '../claude/paths.js';
 
 export interface HookWrite {
   id: string;
@@ -38,7 +39,7 @@ export function installCodexHooks(home: string): HookWrite[] {
   if (!dirExists(base)) return [];
 
   const shimPath = join(base, 'hooks', 'graft', 'graft-hooks.cjs');
-  const shimWrite = writeOwned('codex-hook-shim', shimPath, hooksShim(), 0o755);
+  const shimWrite = writeOwned('codex-hook-shim', shimPath, hooksShim(claudeDistDir()), 0o755);
 
   const cfgPath = join(base, 'hooks.json');
   let root: Record<string, any> = {};
