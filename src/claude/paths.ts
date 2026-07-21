@@ -12,6 +12,13 @@ export function graftCliPath(): string {
   return join(CLAUDE_DIR, '..', 'cli.js');
 }
 
+/** Absolute path to this package's `dist/claude` dir. Baked into the generated shims at
+ * init time as their primary resolution candidate, so the statusline/hooks find graft
+ * without runtime guesswork — correct regardless of how Node was installed. */
+export function claudeDistDir(): string {
+  return CLAUDE_DIR;
+}
+
 /** Absolute path to a sibling script in the claude dir (e.g. `sync-run.js`). */
 export function claudeScriptPath(name: string): string {
   return join(CLAUDE_DIR, name);

@@ -3,19 +3,31 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { statuslineShim, hooksShim } from '../src/claude/shim-template.js';
 
-for (const [name, src] of [['statusline', statuslineShim()], ['hooks', hooksShim()]] as const) {
-  test(`${name} shim parses and resolves local + global, with local fallback`, () => {
+const BAKED = '/opt/graft/dist/claude';
+
+for (const [name, src] of [['statusline', statuslineShim(BAKED)], ['hooks', hooksShim(BAKED)]] as const) {
+  test(`${name} shim parses and resolves via baked → node_modules → lib → npm root -g`, () => {
     const body = src.replace(/^#!.*\n/, ''); // strip shebang for vm
     assert.doesNotThrow(() => new vm.Script(body), 'valid JS');
+
+    // 1. baked dir is present as the first candidate
+    assert.match(src, new RegExp(`const BAKED = "${BAKED}"`));
+    // 2. repo node_modules via require.resolve from the project dir
     assert.match(src, /require\.resolve\('@nanonets\/graft\/package\.json', \{ paths: \[base\] \}\)/);
-    assert.match(src, /const globalBase = path\.join\(path\.dirname\(process\.execPath\), '\.\.', 'lib'\)/);
-    assert.match(src, /for \(const base of \[dir, globalBase\]\)/);
-    assert.match(src, /path\.join\(dir, 'dist', 'claude'/);
-    assert.match(src, /\.catch\(\(\) => \{/); // best-effort
+    assert.match(src, /fromPkg\(dir\)/);
+    // 3. legacy execPath/../lib guess retained
+    assert.match(src, /path\.join\(path\.dirname\(process\.execPath\), '\.\.', 'lib'\)/);
+    // 4. npm root -g catch-all, queried on demand (no on-disk cache)
+    assert.match(src, /execFileSync\('npm', \['root', '-g'\]/);
+    assert.doesNotMatch(src, /tmpdir/); // no predictable temp cache path
+
+    // Windows-safe dynamic import + best-effort catch
+    assert.match(src, /pathToFileURL\(entry\(/);
+    assert.match(src, /\.catch\(\(\) => \{/);
   });
 }
 
 test('statusline calls main(); hooks passes the event arg', () => {
-  assert.match(statuslineShim(), /m\.main\(\)/);
-  assert.match(hooksShim(), /m\.main\(process\.argv\[2\]\)/);
+  assert.match(statuslineShim(BAKED), /m\.main\(\)/);
+  assert.match(hooksShim(BAKED), /m\.main\(process\.argv\[2\]\)/);
 });

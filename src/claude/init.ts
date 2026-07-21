@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mergeGraftSettings } from './settings-merge.js';
 import { statuslineShim, hooksShim } from './shim-template.js';
 import { skillTemplate } from './skill-template.js';
+import { claudeDistDir } from './paths.js';
 
 export interface InitResult {
   settingsPath: string;
@@ -25,8 +26,9 @@ export function runInit(dir: string, opts: { build?: boolean; cliPath?: string }
 
   const sl = join(helpersDir, 'graft-statusline.cjs');
   const hk = join(helpersDir, 'graft-hooks.cjs');
-  writeFileSync(sl, statuslineShim()); chmodSync(sl, 0o755);
-  writeFileSync(hk, hooksShim()); chmodSync(hk, 0o755);
+  const bakedDir = claudeDistDir(); // absolute <pkg>/dist/claude — the shims' primary resolution path
+  writeFileSync(sl, statuslineShim(bakedDir)); chmodSync(sl, 0o755);
+  writeFileSync(hk, hooksShim(bakedDir)); chmodSync(hk, 0o755);
 
   // Install the graft skill — the piece that redirects the agent to graft/ before it
   // greps source. Overwritten each run (graft owns this file), like the shims above.
