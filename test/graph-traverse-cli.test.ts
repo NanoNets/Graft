@@ -85,6 +85,21 @@ test('graft callees: zero-edge symbol prints a loud note and still exits 0', () 
   assert.match(r.stdout, /grep -rn "add"/);
 });
 
+test('graft callees --json: zero-edge symbol includes a note field', () => {
+  const d = builtRepo();
+  // `add` calls nothing, so its callees are empty — JSON must include the note.
+  const r = runCli(['callees', 'add', d, '--json']);
+  assert.equal(r.status, 0);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.query, 'add');
+  assert.equal(parsed.matches.length, 1);
+  const m = parsed.matches[0];
+  assert.equal(m.symbol.name, 'add');
+  assert.equal(m.hits.length, 0);
+  assert.ok(m.note, 'zero-edge match must have a note field');
+  assert.match(m.note, /try grep -rn/);
+});
+
 test('graft impact -d: depth flag limits the BFS, default reaches further', () => {
   const d = builtRepo();
   // compute -> sub -> add: impact of `add` at depth 1 is just `sub`;

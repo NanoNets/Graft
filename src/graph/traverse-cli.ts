@@ -61,6 +61,12 @@ interface SymbolJson {
   span: string;
 }
 
+interface MatchJson {
+  symbol: SymbolJson;
+  hits: HitJson[];
+  note?: string;
+}
+
 interface HitJson {
   id: string;
   name?: string;
@@ -122,7 +128,13 @@ export function runTraverseCommand(kind: TraverseKind, query: string, dir: strin
   if (opts.json) {
     const payload = {
       query,
-      matches: results.map((r) => ({ symbol: symbolJson(r.symbol), hits: r.hits.map(hitJson) })),
+      matches: results.map((r): MatchJson => {
+        const m: MatchJson = { symbol: symbolJson(r.symbol), hits: r.hits.map(hitJson) };
+        if (r.hits.length === 0) {
+          m.note = looseNoteFor(kind, r.symbol.name);
+        }
+        return m;
+      }),
     };
     console.log(JSON.stringify(payload, null, 2));
     return;
