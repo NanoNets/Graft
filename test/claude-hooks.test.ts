@@ -1,13 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { underGraft, main } from '../src/claude/hooks.js';
 import { readStats } from '../src/claude/state.js';
 import { runSync } from '../src/claude/sync-run.js';
 import { writeStats, emptyStats, acquireLock } from '../src/claude/state.js';
-import { claudeScriptPath } from '../src/claude/paths.js';
 
 test('underGraft detects edits inside graft/', () => {
   assert.equal(underGraft('/repo', '/repo/graft/x.md'), true);
@@ -47,13 +46,13 @@ test('post-edit-sync marks dirty and kicks off the background sync', async () =>
   writeFileSync(join(d, 'graft', '.graph', 'wiring.json'),
     JSON.stringify({ meta: { nodeCount: 0, edgeCount: 0, languages: [] }, nodes: [], edges: [] }));
   process.env.CLAUDE_PROJECT_DIR = d;
-  // handleStop's spawn path is gated on claudeScriptPath('sync-run.js') existing next to this
-  // module. Under `tsx` test runs that resolves to src/claude/sync-run.js (no compiled sibling
-  // ships there — only sync-run.ts does), so stub the sibling in for this test to exercise the
-  // real spawn/lock behavior, then remove it again.
-  const syncRun = claudeScriptPath('sync-run.js');
-  const syncRunExisted = existsSync(syncRun);
-  if (!syncRunExisted) writeFileSync(syncRun, '// test stub: spawned as a detached no-op child\n');
+  // handleStop's spawn path is gated on the sync-run script existing (real installs resolve it
+  // via claudeScriptPath('sync-run.js') next to this module). GRAFT_TEST_SYNC_RUN is a test seam
+  // (mirrors GRAFT_TEST_STDIN) that lets us point handleStop at a no-op stub inside this test's
+  // own sandbox dir, so nothing is written into src/claude/.
+  const syncRun = join(d, 'sync-run-stub.js');
+  writeFileSync(syncRun, '// test stub: spawned as a detached no-op child\n');
+  process.env.GRAFT_TEST_SYNC_RUN = syncRun;
   try {
     const stdin = JSON.stringify({ tool_input: { file_path: join(d, 'src', 'auth.ts') } });
     await runWithStdin(stdin, () => main('post-edit-sync'));
@@ -62,7 +61,7 @@ test('post-edit-sync marks dirty and kicks off the background sync', async () =>
     assert.equal(s.syncing, true, 'stop half ran');
     assert.equal(existsSync(join(d, 'graft', '.cache', '.sync.lock')), true, 'sync lock file exists');
   } finally {
-    if (!syncRunExisted) rmSync(syncRun, { force: true });
+    delete process.env.GRAFT_TEST_SYNC_RUN;
   }
 });
 
@@ -70,9 +69,8 @@ test('post-edit-sync on a file under graft/ does not mark dirty', async () => {
   const d = mkdtempSync(join(tmpdir(), 'graft-hooks-'));
   process.env.CLAUDE_PROJECT_DIR = d;
   await runWithStdin(JSON.stringify({ tool_input: { file_path: join(d, 'graft', 'a.md') } }), () => main('post-edit-sync'));
-  // The under-graft guard means handlePostEdit never marks dirty. handleStop still runs after
-  // it, but the sync half may still run if stats were already dirty from a prior call — assert
-  // only that dirty was not newly set by this call.
+  // The under-graft guard means handlePostEdit never marks dirty, and this is a fresh mkdtemp
+  // dir so there is no prior state to inherit — stats are either absent or dirty: false.
   const s = readStats(d);
   assert.equal(s === null || s.dirty === false, true, 'dirty not newly set by this call');
 });
