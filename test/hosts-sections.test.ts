@@ -54,3 +54,26 @@ test('ignores inline marker mentions (marker must be alone on its line)', () => 
   assert.equal(r.action, 'appended');
   assert.equal(readFileSync(f, 'utf8').match(/^<!-- graft:start -->$/gm)!.length, 1);
 });
+
+test('CRLF file: no-op run reports unchanged and preserves bytes exactly', () => {
+  const f = join(fresh(), 'AGENTS.md');
+  const block = fencedBlock('same body', '\r\n');
+  const original = `above\r\n\r\n${block}\r\nbelow\r\n`;
+  writeFileSync(f, original);
+  const r = upsertSection(f, 'same body');
+  assert.equal(r.action, 'unchanged');
+  const after = readFileSync(f, 'utf8');
+  assert.equal(after, original, 'file must be byte-identical after a no-op run');
+});
+
+test('CRLF file: appending produces a block using CRLF line endings throughout', () => {
+  const f = join(fresh(), 'AGENTS.md');
+  writeFileSync(f, '# My rules\r\n\r\nBe nice.\r\n');
+  const r = upsertSection(f, 'graft body');
+  assert.equal(r.action, 'appended');
+  const text = readFileSync(f, 'utf8');
+  assert.ok(text.startsWith('# My rules\r\n\r\nBe nice.\r\n'));
+  assert.ok(text.includes('graft body'));
+  // No bare '\n' without a preceding '\r' anywhere in the result.
+  assert.equal(/(?<!\r)\n/.test(text), false, 'result must not mix LF into a CRLF file');
+});
