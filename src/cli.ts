@@ -141,15 +141,30 @@ program
     const r = engine.check(dir, { extensions: opts.extensions });
     const g = engine.checkGraph(dir); // graph.json is only judged when it exists
 
+    // Neither layer has ever been built → nothing to check.
+    const bothMissing = r.missing && g.missing;
+    // A layer that IS present must be in sync; a layer that was never built
+    // (keyless `graft build` skips the markdown/concept layer) is informational,
+    // not a failure — the wiring graph stands on its own.
+    const markdownFail = !r.missing && !r.ok;
+    const wiringFail = !g.missing && !g.ok;
+
     if (opts.json) {
       console.log(JSON.stringify({ context: r, graph: g.missing ? null : g }, null, 2));
+    } else if (bothMissing) {
+      console.log("graft check: NO GRAPH\n\nNo graft/ graph found. Run `graft build` first.");
     } else {
-      console.log(formatCheckReport(r));
+      if (r.missing) {
+        console.log(
+          "deep layer: not built (run `graft build --deep` for concept nodes) — wiring graph is the source of truth",
+        );
+      } else {
+        console.log(formatCheckReport(r));
+      }
       if (!g.missing) console.log("\n" + formatGraphCheckReport(g));
     }
 
-    // A missing graph.json is not a failure — the markdown graph stands alone.
-    if (!r.ok || (!g.missing && !g.ok)) process.exit(1);
+    if (bothMissing || markdownFail || wiringFail) process.exit(1);
   });
 
 program
