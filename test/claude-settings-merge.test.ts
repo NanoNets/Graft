@@ -43,5 +43,41 @@ test('re-running is idempotent (no duplicate Graft entries or footer)', () => {
 test('foreign top-level keys survive', () => {
   const { merged } = mergeGraftSettings({ model: 'claude-sonnet-5', permissions: { allow: ['Bash(ls)'] } });
   assert.equal(merged.model, 'claude-sonnet-5');
-  assert.deepEqual(merged.permissions.allow, ['Bash(ls)']);
+  assert.deepEqual(merged.permissions.allow, ['Bash(ls)', 'Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('fresh init adds the graft CLI allowlist', () => {
+  const { merged } = mergeGraftSettings({});
+  assert.deepEqual(merged.permissions.allow, ['Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('re-init does not duplicate allowlist entries', () => {
+  const once = mergeGraftSettings({}).merged;
+  const twice = mergeGraftSettings(once).merged;
+  assert.deepEqual(twice.permissions.allow, ['Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('pre-existing unrelated allow entries are preserved and ours appended', () => {
+  const existing = { permissions: { allow: ['Bash(ls)', 'Bash(git:*)'] } };
+  const { merged } = mergeGraftSettings(existing);
+  assert.deepEqual(merged.permissions.allow, ['Bash(ls)', 'Bash(git:*)', 'Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('pre-existing allow list already containing Bash(graft:*) is left unchanged aside from the missing entry', () => {
+  const existing = { permissions: { allow: ['Bash(graft:*)'] } };
+  const { merged } = mergeGraftSettings(existing);
+  assert.deepEqual(merged.permissions.allow, ['Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('pre-existing allow list already containing both entries is unchanged', () => {
+  const existing = { permissions: { allow: ['Bash(graft:*)', 'Bash(npx graft:*)'] } };
+  const { merged } = mergeGraftSettings(existing);
+  assert.deepEqual(merged.permissions.allow, ['Bash(graft:*)', 'Bash(npx graft:*)']);
+});
+
+test('permissions object with no allow key gets one added; other keys preserved', () => {
+  const existing = { permissions: { deny: ['Bash(rm:*)'] } };
+  const { merged } = mergeGraftSettings(existing);
+  assert.deepEqual(merged.permissions.deny, ['Bash(rm:*)']);
+  assert.deepEqual(merged.permissions.allow, ['Bash(graft:*)', 'Bash(npx graft:*)']);
 });

@@ -2,6 +2,7 @@ type Json = Record<string, any>;
 
 const SL_CMD = 'node "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-statusline.cjs"';
 const FOOTER = 'graft/[\\w./-]+\\.md';
+const ALLOW_ENTRIES = ['Bash(graft:*)', 'Bash(npx graft:*)'];
 
 function hookCmd(arg: string): string {
   return `node "\${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs" ${arg}`;
@@ -40,6 +41,15 @@ export function mergeGraftSettings(existing: Json): { merged: Json; warnings: st
   const footer = Array.isArray(merged.footerLinksRegexes) ? [...merged.footerLinksRegexes] : [];
   if (!footer.includes(FOOTER)) footer.push(FOOTER);
   merged.footerLinksRegexes = footer;
+
+  // headless/subagent runs hard-deny Bash by default; without an allowlist entry
+  // `graft ask`'s own Bash calls (and the skill it installs) can't run out-of-box.
+  merged.permissions = { ...(merged.permissions ?? {}) };
+  const allow = Array.isArray(merged.permissions.allow) ? [...merged.permissions.allow] : [];
+  for (const entry of ALLOW_ENTRIES) {
+    if (!allow.includes(entry)) allow.push(entry);
+  }
+  merged.permissions.allow = allow;
 
   return { merged, warnings };
 }
