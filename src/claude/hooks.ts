@@ -43,6 +43,30 @@ function emit(eventName: string, additionalContext: string): void {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } }));
 }
 
+async function handlePostEdit(input: any, dir: string): Promise<void> {
+  const file: string | undefined = input?.tool_input?.file_path;
+  if (!file || underGraft(dir, file)) return;
+  patchStats(dir, { dirty: true, staleCount: checkStaleCount(dir), lastFile: basename(file) });
+  const w = readWiring(dir);
+  if (w) { const br = formatBlastRadius(w, file); if (br) emit('PostToolUse', br); }
+}
+
+function handleStop(dir: string): void {
+  // sync-run.js ships next to this module inside the package, so it resolves in
+  // any repo that installs graft (not just graft's own). Defensive existsSync:
+  // if the package is somehow incomplete, skip rather than wedge on syncing:true.
+  // GRAFT_TEST_SYNC_RUN is a test seam (mirrors GRAFT_TEST_STDIN) so tests can point
+  // this at a stub file inside their own sandbox instead of writing into src/claude/.
+  const syncRun = process.env.GRAFT_TEST_SYNC_RUN ?? claudeScriptPath('sync-run.js');
+  if (!existsSync(syncRun)) return;
+  const stats = readStats(dir);
+  if (stats?.dirty && acquireLock(dir)) {
+    patchStats(dir, { syncing: true });
+    const child = spawn(process.execPath, [syncRun, dir], { detached: true, stdio: 'ignore' });
+    child.unref();
+  }
+}
+
 export async function main(event: string): Promise<void> {
   const input = readStdin();
   const dir = projectDir(input);
@@ -55,29 +79,11 @@ export async function main(event: string): Promise<void> {
     return;
   }
 
-  if (event === 'post-edit') {
-    const file: string | undefined = input?.tool_input?.file_path;
-    if (!file || underGraft(dir, file)) return;
-    patchStats(dir, { dirty: true, staleCount: checkStaleCount(dir), lastFile: basename(file) });
-    const w = readWiring(dir);
-    if (w) { const br = formatBlastRadius(w, file); if (br) emit('PostToolUse', br); }
-    return;
-  }
+  if (event === 'post-edit') { await handlePostEdit(input, dir); return; }
 
-  if (event === 'stop') {
-    // sync-run.js ships next to this module inside the package, so it resolves in
-    // any repo that installs graft (not just graft's own). Defensive existsSync:
-    // if the package is somehow incomplete, skip rather than wedge on syncing:true.
-    const syncRun = claudeScriptPath('sync-run.js');
-    if (!existsSync(syncRun)) return;
-    const stats = readStats(dir);
-    if (stats?.dirty && acquireLock(dir)) {
-      patchStats(dir, { syncing: true });
-      const child = spawn(process.execPath, [syncRun, dir], { detached: true, stdio: 'ignore' });
-      child.unref();
-    }
-    return;
-  }
+  if (event === 'stop') { handleStop(dir); return; }
+
+  if (event === 'post-edit-sync') { await handlePostEdit(input, dir); handleStop(dir); return; }
 
   if (event === 'prompt') {
     const prompt = String(input?.prompt ?? '').trim();

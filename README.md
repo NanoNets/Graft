@@ -35,7 +35,7 @@ npm install -g @nanonets/graft   # install the CLI, once
 graft init                       # build the graph + wire it into Claude Code
 ```
 
-That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no MCP server, no re-indexing to remember, and nothing else to run.
+That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no re-indexing to remember, nothing to run or maintain by default — the graph is just files.
 
 Commit `graft/` so everyone who clones the repo (and their agents) gets the map:
 
@@ -54,16 +54,43 @@ Prefer not to install globally? `npx @nanonets/graft init` works the same way.
 
 ---
 
-## Claude Code integration
+## Agent integration
 
-If you use [Claude Code](https://claude.com/claude-code), one command wires Graft into every session in the repo:
+One command wires Graft into the coding agents you use:
 
 ```bash
 npx @nanonets/graft init
-# writes .claude/ (statusline + hooks) and builds the graph if it's missing
+# detects your agents and writes each one's native instruction file;
+# Claude Code additionally gets the live statusline + hooks below
 ```
 
-From then on, any Claude Code session opened in the repo gets:
+`init` auto-detects which agents are present (via their config directories) and writes a marker-fenced Graft section into each one's shared instruction file — `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` — or a wholly-owned rule file for the agents that use one — `.cursor/rules/graft.mdc`, `.kiro/steering/graft.md`, `.windsurf/rules/graft.md`. Re-running only updates Graft's own section (or replaces the owned file) and never touches the rest of your content.
+
+| Flag | Effect |
+|---|---|
+| `--agents <ids...>` | wire only these — ids: `agents`, `cursor`, `gemini`, `copilot`, `kiro`, `windsurf`, `claude` |
+| `--all-agents` | write instruction files for every known agent, detected or not |
+| `--no-agents` | Claude Code wiring only; skip other agents |
+| `--list-agents` | print the known agent ids and exit |
+| `--no-mcp` | skip MCP server registration |
+| `--no-hooks` | skip hook installation |
+
+### MCP server
+
+`graft init` also registers Graft's MCP server with agents that support it, so
+`graft_ask`, `graft_check`, and `graft_blast_radius` appear as native tools —
+no shell required. Skip with `--no-mcp`. Run it manually with `graft mcp [dir]`,
+or register it by hand:
+
+```json
+{ "mcpServers": { "graft": { "command": "npx", "args": ["-y", "@nanonets/graft", "mcp"] } } }
+```
+
+Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's post-edit hook — blast-radius warnings and automatic `$0` graph re-sync after edits (skip with `--no-hooks`).
+
+### Claude Code (deep integration)
+
+`graft init` always wires up Claude Code, and Claude Code gets more than an instruction file. From then on, any Claude Code session opened in the repo gets:
 
 - **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph
 - **auto-sync** — after you edit code, Graft rebuilds the graph in the background at the end of the turn (structural, `$0` — it never calls the LLM on its own)
@@ -174,8 +201,11 @@ graft check --json                   # print the drift report as JSON
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
 
-graft init [dir]                     # set up the Claude Code integration (.claude/ statusline + hooks) in this repo
+graft init [dir]                     # wire Graft into the coding agents detected in this repo (Claude Code always gets full hooks + statusline)
 graft init --no-build                # wire the files only; don't build the graph
+graft init --agents cursor kiro      # wire only these agents (ids: agents, cursor, gemini, copilot, kiro, windsurf, claude)
+graft init --all-agents              # wire every known agent, detected or not
+graft init --list-agents             # list known agent ids and exit
 
 # global
 graft --dir <path>                   # use a context dir other than <repo>/graft

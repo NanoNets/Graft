@@ -6,6 +6,7 @@
  *   ask     query the graph ($0, no LLM).
  *   check   fail if graft/ has drifted from the code — for CI.
  *   viz     serve the interactive graph viewer.
+ *   mcp     serve the graph over MCP (stdio) for coding agents.
  *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
@@ -20,6 +21,8 @@ import { resolveConfig } from "./ai/providers.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
 import { runInit } from "./claude/init.js";
+import { runHostsInit } from "./hosts/init.js";
+import { hostIds } from "./hosts/registry.js";
 
 const program = new Command();
 
@@ -185,19 +188,71 @@ program
   });
 
 program
+  .command("mcp")
+  .description("Serve the graph over MCP (stdio) — exposes graft_ask / graft_check / graft_blast_radius as tools")
+  .argument("[dir]", "repository root", ".")
+  .action(async (dir: string) => {
+    const { resolve } = await import("node:path");
+    const { startMcpServer } = await import("./mcp/server.js");
+    startMcpServer(resolve(dir));
+  });
+
+program
   .command("init")
-  .description("Set up the Claude Code integration (.claude/ statusline + hooks) in this repo")
+  .description("Wire Graft into the AI coding agents used with this repo (instruction files; full hooks + statusline for Claude Code)")
   .argument("[dir]", "target repo directory", ".")
   .option("--no-build", "skip building the graph (wire files only)")
-  .action((dir: string, opts: { build?: boolean }) => {
-    const cliPath = fileURLToPath(import.meta.url);
-    const res = runInit(resolve(dir), { build: opts.build, cliPath });
-    console.error(`✓ wrote ${res.settingsPath}`);
-    for (const s of res.shims) console.error(`✓ wrote ${s}`);
-    console.error(`✓ wrote ${res.skill}`);
-    console.error(res.built ? "✓ built the graph (graft build)" : "· skipped graph build");
-    for (const w of res.warnings) console.error(`⚠ ${w}`);
-    console.error("\nDone. The statusline + hooks activate in Claude Code sessions in this repo.");
+  .option("--agents <ids...>", `only these agents (${hostIds().join(", ")}, claude)`)
+  .option("--all-agents", "write instruction files for every known agent, detected or not")
+  .option("--no-agents", "Claude Code wiring only; skip other agents")
+  .option("--list-agents", "list known agent ids and exit")
+  .option("--no-mcp", "skip MCP server registration for other agents")
+  .option("--no-hooks", "skip hook installation for other agents")
+  .action((dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean; hooks?: boolean }) => {
+    if (opts.listAgents) {
+      for (const id of [...hostIds(), "claude"]) console.log(id);
+      return;
+    }
+    const repo = resolve(dir);
+    const explicit = Array.isArray(opts.agents) ? opts.agents : undefined;
+
+    if (explicit) {
+      const validIds = [...hostIds(), "claude"];
+      const unknown = explicit.filter((id) => !validIds.includes(id));
+      if (unknown.length) {
+        console.error(`✗ unknown agent id(s): ${unknown.join(", ")} — valid: ${validIds.join(", ")}`);
+        process.exit(1);
+      }
+    }
+
+    const wantClaude = !explicit || explicit.includes("claude");
+
+    if (wantClaude) {
+      const cliPath = fileURLToPath(import.meta.url);
+      const res = runInit(repo, { build: opts.build, cliPath });
+      console.error(`✓ wrote ${res.settingsPath}`);
+      for (const s of res.shims) console.error(`✓ wrote ${s}`);
+      console.error(`✓ wrote ${res.skill}`);
+      console.error(res.built ? "✓ built the graph (graft build)" : "· skipped graph build");
+      for (const w of res.warnings) console.error(`⚠ ${w}`);
+    }
+
+    const skipOthers = (opts as { agents?: unknown }).agents === false;
+    if (!skipOthers) {
+      const r = runHostsInit(repo, {
+        agents: explicit?.filter((id) => id !== "claude"),
+        all: opts.allAgents,
+        mcp: opts.mcp,
+        hooks: opts.hooks,
+      });
+      for (const w of r.written) console.error(`✓ ${w.id}: ${w.path} (${w.action})`);
+      if (!explicit && !opts.allAgents && r.written.length === 0)
+        console.error("· no other agents detected (see --list-agents / --all-agents)");
+      // r.unknown is always empty here — ids are validated above, before any writes.
+      for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
+      for (const h of r.hooks) console.error(`✓ hook ${h.id}: ${h.path} (${h.action})`);
+    }
+    console.error("\nDone. Claude Code gets live hooks + statusline; other agents read their instruction files.");
     console.error("For LLM summaries: set OPENROUTER_API_KEY and run `graft build --deep`.");
   });
 

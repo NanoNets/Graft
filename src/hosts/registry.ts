@@ -1,0 +1,88 @@
+/**
+ * Registry of AI coding hosts Graft can write instructions for.
+ * Adding a host = adding one entry here (plus a renderer if it needs
+ * a new file format).
+ *
+ * kind: 'section' → upsert the fenced block into a shared file the user owns.
+ * kind: 'owned'   → graft owns the whole file; overwrite it each run.
+ */
+import { join } from 'node:path';
+import { instructionBody, cursorRule, kiroSteering, windsurfRule } from './instructions.js';
+
+export interface DetectProbe {
+  home: string;
+  repo: string;
+  dirExists(path: string): boolean;
+}
+
+export interface HostTarget {
+  id: string;
+  name: string;
+  kind: 'section' | 'owned';
+  /** Target file, relative to the repo root. */
+  relPath: string;
+  content(): string;
+  detect(probe: DetectProbe): boolean;
+}
+
+export const HOSTS: HostTarget[] = [
+  {
+    id: 'agents',
+    name: 'AGENTS.md hosts (Codex-style CLIs, editors that read AGENTS.md)',
+    kind: 'section',
+    relPath: 'AGENTS.md',
+    content: instructionBody,
+    detect: (p) =>
+      p.dirExists(join(p.home, '.codex')) ||
+      p.dirExists(join(p.home, '.config', 'opencode')) ||
+      p.dirExists(join(p.home, '.config', 'agents')),
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    kind: 'owned',
+    relPath: join('.cursor', 'rules', 'graft.mdc'),
+    content: cursorRule,
+    detect: (p) => p.dirExists(join(p.home, '.cursor')) || p.dirExists(join(p.repo, '.cursor')),
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    kind: 'section',
+    relPath: 'GEMINI.md',
+    content: instructionBody,
+    detect: (p) => p.dirExists(join(p.home, '.gemini')),
+  },
+  {
+    id: 'copilot',
+    name: 'GitHub Copilot',
+    kind: 'section',
+    relPath: join('.github', 'copilot-instructions.md'),
+    content: instructionBody,
+    detect: (p) => p.dirExists(join(p.repo, '.github')),
+  },
+  {
+    id: 'kiro',
+    name: 'Kiro',
+    kind: 'owned',
+    relPath: join('.kiro', 'steering', 'graft.md'),
+    content: kiroSteering,
+    detect: (p) => p.dirExists(join(p.home, '.kiro')) || p.dirExists(join(p.repo, '.kiro')),
+  },
+  {
+    id: 'windsurf',
+    name: 'Windsurf',
+    kind: 'owned',
+    relPath: join('.windsurf', 'rules', 'graft.md'),
+    content: windsurfRule,
+    detect: (p) => p.dirExists(join(p.home, '.codeium', 'windsurf')) || p.dirExists(join(p.repo, '.windsurf')),
+  },
+];
+
+export function hostIds(): string[] {
+  return HOSTS.map((h) => h.id);
+}
+
+export function detectHosts(probe: DetectProbe): HostTarget[] {
+  return HOSTS.filter((h) => h.detect(probe));
+}

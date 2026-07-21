@@ -40,6 +40,41 @@ async function runWithStdin(text: string, fn: () => Promise<void>): Promise<void
   try { await fn(); } finally { delete process.env.GRAFT_TEST_STDIN; }
 }
 
+test('post-edit-sync marks dirty and kicks off the background sync', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-hooks-'));
+  mkdirSync(join(d, 'graft', '.graph'), { recursive: true });
+  writeFileSync(join(d, 'graft', '.graph', 'wiring.json'),
+    JSON.stringify({ meta: { nodeCount: 0, edgeCount: 0, languages: [] }, nodes: [], edges: [] }));
+  process.env.CLAUDE_PROJECT_DIR = d;
+  // handleStop's spawn path is gated on the sync-run script existing (real installs resolve it
+  // via claudeScriptPath('sync-run.js') next to this module). GRAFT_TEST_SYNC_RUN is a test seam
+  // (mirrors GRAFT_TEST_STDIN) that lets us point handleStop at a no-op stub inside this test's
+  // own sandbox dir, so nothing is written into src/claude/.
+  const syncRun = join(d, 'sync-run-stub.js');
+  writeFileSync(syncRun, '// test stub: spawned as a detached no-op child\n');
+  process.env.GRAFT_TEST_SYNC_RUN = syncRun;
+  try {
+    const stdin = JSON.stringify({ tool_input: { file_path: join(d, 'src', 'auth.ts') } });
+    await runWithStdin(stdin, () => main('post-edit-sync'));
+    const s = readStats(d)!;
+    assert.equal(s.dirty, true, 'post-edit half ran');
+    assert.equal(s.syncing, true, 'stop half ran');
+    assert.equal(existsSync(join(d, 'graft', '.cache', '.sync.lock')), true, 'sync lock file exists');
+  } finally {
+    delete process.env.GRAFT_TEST_SYNC_RUN;
+  }
+});
+
+test('post-edit-sync on a file under graft/ does not mark dirty', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-hooks-'));
+  process.env.CLAUDE_PROJECT_DIR = d;
+  await runWithStdin(JSON.stringify({ tool_input: { file_path: join(d, 'graft', 'a.md') } }), () => main('post-edit-sync'));
+  // The under-graft guard means handlePostEdit never marks dirty, and this is a fresh mkdtemp
+  // dir so there is no prior state to inherit — stats are either absent or dirty: false.
+  const s = readStats(d);
+  assert.equal(s === null || s.dirty === false, true, 'dirty not newly set by this call');
+});
+
 test('runSync clears dirty/syncing, recomputes stats, releases lock', () => {
   const d = mkdtempSync(join(tmpdir(), 'graft-sync-'));
   mkdirSync(join(d, 'graft', '.graph'), { recursive: true });
