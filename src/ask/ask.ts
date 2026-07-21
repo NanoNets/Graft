@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
 import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
+import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
@@ -181,34 +182,52 @@ const OUTGOING = /\b(callee|callees|what\s+does\s+\w+\s+call|calls\s+what|import
 const INCOMING_RELS: Relation[] = ["calls", "references", "implements", "extends"];
 const OUTGOING_RELS: Relation[] = ["calls", "references", "imports", "implements", "extends"];
 
-/** Pick the query word that names a real symbol (longest exact name match wins). */
-function findSubject(query: string, graph: GraphV1): NodeV1[] {
-  const byName = new Map<string, NodeV1[]>();
-  for (const n of graph.nodes) {
-    if (n.kind === "file") continue;
-    const key = n.name.toLowerCase();
-    byName.set(key, [...(byName.get(key) ?? []), n]);
-  }
-  const words = query.split(/[^A-Za-z0-9_.]+/).filter(Boolean);
-  let best: NodeV1[] = [];
-  let bestLen = 0;
-  for (const w of words) {
-    const hit = byName.get(w.toLowerCase());
-    if (hit && w.length > bestLen) {
-      best = hit;
-      bestLen = w.length;
-    }
-  }
-  return best;
+/** Split a prose query into word-like tokens, keeping dots so a qualified name
+ * ("Cache.get") or package-qualified name ("pkg.Fn") survives as one token —
+ * `resolveSymbol`'s own suffix/last-segment matching handles the rest. */
+function subjectWords(query: string): string[] {
+  return [...new Set(query.split(/[^A-Za-z0-9_.]+/).filter(Boolean))];
 }
 
-function structural(query: string, graph: GraphV1, limit: number): AskResult | null {
+/** Resolve the query's structural subject via {@link resolveSymbol}, trying
+ * each word longest-first — the intended subject of a structural query is
+ * usually the most specific (longest) identifier-shaped word, never a short
+ * verb like "calls" — until one resolves. `tried` is the word that was tried
+ * last regardless of outcome, so a caller can name *something* in a fallthrough
+ * note even when nothing resolved (e.g. `subjects.length === 0`). This is what
+ * makes a qualified/dotted subject like `Cache.get` resolve, where the old
+ * plain name-equality lookup (`findSubject`) never matched it. */
+function findSubjectNodes(query: string, graph: GraphV1): { nodes: NodeV1[]; tried: string } {
+  const words = subjectWords(query).sort((a, b) => b.length - a.length);
+  for (const w of words) {
+    const nodes = resolveSymbol(graph, w);
+    if (nodes.length > 0) return { nodes, tried: w };
+  }
+  return { nodes: [], tried: words[0] ?? query };
+}
+
+/** `structural()`'s result: either a genuine structural `AskResult`, a signal
+ * to fall through to `lexical()` with a loud note prepended (subject resolved
+ * to zero nodes, or resolved but the walk found zero edges — never a bare
+ * empty structural result), or `null` when the query has no structural intent
+ * at all (not a "who calls"/"what does X import" shape), in which case the
+ * caller falls through to `lexical()` silently, same as before this fix. */
+type StructuralOutcome = { result: AskResult } | { fallthroughNote: string } | null;
+
+function fallthroughNoteFor(subject: string): string {
+  return (
+    `structural index: no entries for '${subject}' — showing lexical matches; ` +
+    `for exhaustive callers use grep -rn '${subject}'`
+  );
+}
+
+function structural(query: string, graph: GraphV1, limit: number): StructuralOutcome {
   const wantsIn = INCOMING.test(query);
   const wantsOut = OUTGOING.test(query);
   if (!wantsIn && !wantsOut) return null;
 
-  const subjects = findSubject(query, graph);
-  if (subjects.length === 0) return null;
+  const { nodes: subjects, tried } = findSubjectNodes(query, graph);
+  if (subjects.length === 0) return { fallthroughNote: fallthroughNoteFor(tried) };
 
   const ids = new Set(subjects.map((n) => n.id));
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -233,15 +252,23 @@ function structural(query: string, graph: GraphV1, limit: number): AskResult | n
       score: 1,
     });
   }
+
+  // Subject resolved but the graph has no indexed edges for it — same "loud,
+  // never a bare empty" contract as `graft callers`/`callees` — fall through
+  // to lexical rather than returning a structural result with zero hits.
+  if (hits.length === 0) return { fallthroughNote: fallthroughNoteFor(subjects[0].name) };
+
   hits.sort((a, b) => a.pointer.localeCompare(b.pointer));
   return {
-    query,
-    mode: "structural",
-    subject: subjects[0].name,
-    hits: hits.slice(0, limit),
-    note: outgoing
-      ? `outgoing edges from ${subjects[0].name}`
-      : `callers / references of ${subjects[0].name}`,
+    result: {
+      query,
+      mode: "structural",
+      subject: subjects[0].name,
+      hits: hits.slice(0, limit),
+      note: outgoing
+        ? `outgoing edges from ${subjects[0].name}`
+        : `callers / references of ${subjects[0].name}`,
+    },
   };
 }
 
@@ -499,8 +526,17 @@ export function ask(dir: string, query: string, opts: AskOptions = {}): AskResul
 
   let result: AskResult;
   if (corpus.graph) {
-    const s = structural(query, corpus.graph, limit);
-    result = s ?? lexical(query, corpus, limit, graphRank);
+    const outcome = structural(query, corpus.graph, limit);
+    if (outcome && "result" in outcome) {
+      result = outcome.result;
+    } else {
+      result = lexical(query, corpus, limit, graphRank);
+      // A structural-intent query that couldn't be answered structurally still
+      // gets a prominent note on the lexical fallback result — never silent.
+      if (outcome && "fallthroughNote" in outcome) {
+        result.note = result.note ? `${outcome.fallthroughNote}\n${result.note}` : outcome.fallthroughNote;
+      }
+    }
   } else {
     result = lexical(query, corpus, limit, graphRank);
   }
@@ -520,11 +556,25 @@ function toTokens(chars: number): number {
 
 /** Render an {@link AskResult} as a compact markdown context pack. */
 export function formatAsk(r: AskResult): string {
-  const head = `graft ask — "${r.query}"  (${r.mode}${r.note ? `: ${r.note}` : ""})`;
+  const head = `graft ask — "${r.query}"  (${r.mode})`;
+  // The note prints as its own prominent line(s) right under the header —
+  // above every hit — so a loud structural-fallthrough note (or the
+  // no-structural-edges / no-lexical-match note) can never be missed by only
+  // being embedded inline in the header parenthetical. Only a genuine
+  // fallthrough/warning line (from `fallthroughNoteFor`, always prefixed
+  // "structural index:") gets the ⚠ marker; the benign structural header note
+  // ("callers / references of X" / "outgoing edges from X") prints plain —
+  // it's informational, not a warning.
+  const noteBlock = r.note
+    ? r.note
+        .split("\n")
+        .map((l) => (l.startsWith("structural index:") ? `⚠ ${l}` : l))
+        .join("\n")
+    : "";
   if (r.hits.length === 0) {
-    return `${head}\n\n${r.note ?? "no matches."}`;
+    return `${head}\n\n${noteBlock || "no matches."}`;
   }
-  const lines = [head, ""];
+  const lines = noteBlock ? [head, "", noteBlock, ""] : [head, ""];
   if (r.mode === "structural") {
     for (const h of r.hits) {
       const tail = h.snippet ? ` — ${h.snippet}` : "";

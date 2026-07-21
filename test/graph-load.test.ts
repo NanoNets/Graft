@@ -124,7 +124,14 @@ test("callTool: graft_blast_radius on the same dir twice doesn't reparse the gra
   writeFileSync(join(dir, "src", "math.ts"), "export function add() { return 1; }\n");
   const graph: GraphV1 = {
     version: 1,
-    nodes: [{ ...node("src/math.ts#add"), path: "src/math.ts" }],
+    // A real `buildGraph` always emits a `kind: "file"` node per source file;
+    // include one here too so `graft_blast_radius` (now a `resolveSymbol` +
+    // `impactOf` walk, same as `graft impact`) can resolve the filename-shaped
+    // query the way it would against a real build.
+    nodes: [
+      { ...node("src/math.ts#add"), path: "src/math.ts" },
+      { ...node("src/math.ts"), kind: "file", path: "src/math.ts", name: "math.ts", signature: null },
+    ],
     edges: [],
   } as GraphV1;
   // graft_blast_radius reads through `contextDirFor(root)`, i.e. `<root>/graft`

@@ -99,6 +99,92 @@ test("ask indexes a symbol past the 32KB tree-sitter boundary (chunked parse)", 
   }
 });
 
+// ── Structural intent: resolveSymbol fix + loud fallthrough ────────────────
+
+/** `Cache.get` is called (via `c.get(key)`) from `loadItem`; `unusedHelper` is
+ * never called by anything, so structural resolves the subject but finds zero
+ * edges. Same shapes the traversal-core fixture (test/graph-traverse.test.ts)
+ * uses for the qualified-name bug class. */
+function qualifiedFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-qualified-"));
+  writeFileSync(
+    join(dir, "cache.ts"),
+    `export class Cache {\n` +
+      `  get(key: string): string {\n` +
+      `    return key;\n` +
+      `  }\n` +
+      `}\n\n` +
+      `export function loadItem(key: string): string {\n` +
+      `  const c = new Cache();\n` +
+      `  return c.get(key);\n` +
+      `}\n\n` +
+      `export function unusedHelper(): number {\n` +
+      `  return 42;\n` +
+      `}\n`,
+  );
+  return dir;
+}
+
+test("ask: 'who calls Cache.get' resolves via qualified id-suffix (the previously-broken case)", async () => {
+  const dir = qualifiedFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "who calls Cache.get");
+    assert.equal(r.mode, "structural");
+    assert.equal(r.subject, "get");
+    assert.ok(
+      r.hits.some((h) => h.title === "loadItem"),
+      "loadItem calls Cache.get, and must show up as a caller",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask: structural subject resolves but has zero edges — falls through to lexical with a loud note", async () => {
+  const dir = qualifiedFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "who calls unusedHelper");
+    assert.equal(r.mode, "lexical", "never a bare empty structural result");
+    assert.ok(r.note, "a fallthrough note must be set");
+    assert.match(r.note!, /structural index: no entries for 'unusedHelper'/);
+    assert.match(r.note!, /grep -rn 'unusedHelper'/);
+    assert.ok(r.hits.length > 0, "lexical fallback still finds the function by name");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask: structural intent for an unresolvable subject also falls through with a note, never a silent null", async () => {
+  const dir = qualifiedFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "who calls NoSuchSymbolXyz");
+    assert.notEqual(r.mode, "structural");
+    assert.ok(r.note, "a fallthrough note must be set even when nothing resolved");
+    assert.match(r.note!, /structural index: no entries for 'NoSuchSymbolXyz'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("formatAsk: the structural fallthrough note prints prominently, before any hit line", async () => {
+  const dir = qualifiedFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "who calls unusedHelper");
+    const out = formatAsk(r);
+    assert.ok(out.startsWith("graft ask —"), "header is the first line");
+    const noteIdx = out.indexOf("⚠ structural index: no entries");
+    assert.ok(noteIdx > 0, "the note is rendered");
+    const firstHitIdx = out.search(/\n1\.\s/); // lexical hit numbering starts at "1. "
+    assert.ok(firstHitIdx === -1 || noteIdx < firstHitIdx, "the note prints before any hit");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ask with source inlines the actual span from disk", async () => {
   const dir = makeFixture();
   try {

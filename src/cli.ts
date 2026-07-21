@@ -7,6 +7,7 @@
  *   check   fail if graft/ has drifted from the code — for CI.
  *   viz     serve the interactive graph viewer.
  *   mcp     serve the graph over MCP (stdio) for coding agents.
+ *   callers / callees / impact   precise graph traversal for a symbol ($0, no LLM).
  *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
@@ -196,6 +197,42 @@ program
     const { startMcpServer } = await import("./mcp/server.js");
     startMcpServer(resolve(dir));
   });
+
+function traverseAction(kind: import("./graph/traverse-cli.js").TraverseKind) {
+  return async (symbol: string, dir: string, opts: { in?: string; json?: boolean; depth?: string }) => {
+    const { runTraverseCommand } = await import("./graph/traverse-cli.js");
+    const globalOpts = program.opts<{ dir?: string }>();
+    runTraverseCommand(kind, symbol, dir, { in: opts.in, json: opts.json, depth: opts.depth, globalDir: globalOpts.dir });
+  };
+}
+
+program
+  .command("callers")
+  .description("Who calls/references/imports/implements/extends a symbol ($0, no LLM)")
+  .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
+  .argument("[dir]", "repository root", ".")
+  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
+  .option("--json", "output as JSON")
+  .action(traverseAction("callers"));
+
+program
+  .command("callees")
+  .description("What a symbol calls/references/imports/implements/extends ($0, no LLM)")
+  .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
+  .argument("[dir]", "repository root", ".")
+  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
+  .option("--json", "output as JSON")
+  .action(traverseAction("callees"));
+
+program
+  .command("impact")
+  .description("BFS over incoming edges — who breaks if this symbol changes ($0, no LLM)")
+  .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
+  .argument("[dir]", "repository root", ".")
+  .option("-d, --depth <n>", "max BFS depth (default 2)")
+  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
+  .option("--json", "output as JSON")
+  .action(traverseAction("impact"));
 
 program
   .command("init")
