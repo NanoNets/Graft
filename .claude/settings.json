@@ -56,5 +56,11 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(graft:*)",
+      "Bash(npx graft:*)"
+    ]
   }
 }

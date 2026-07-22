@@ -17,7 +17,7 @@ function fromPkg(base) {
 // The global node_modules dir per npm (handles Homebrew/Windows/volta). Queried on demand.
 function globalRoot() {
   try {
-    const root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: true }).trim();
+    const root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' }).trim();
     return root || null;
   } catch { return null; /* npm unavailable */ }
 }

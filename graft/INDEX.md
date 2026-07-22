@@ -21,5 +21,5 @@ filename here, or run `graft ask "<task>"`. Each node carries prose plus exact
 
 ## Files
 
-54 per-file wiring cards mirror the source tree under `graft/` (51 carry extracted symbols). They are deliberately not enumerated here —
+105 per-file wiring cards mirror the source tree under `graft/` (94 carry extracted symbols). They are deliberately not enumerated here —
 `grep` a symbol or `find`/`ls` a filename under `graft/` to land on the card for that file.

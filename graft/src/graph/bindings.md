@@ -1,0 +1,21 @@
+# src/graph/bindings.ts
+
+- FileBindings · class · L18-L33 — class FileBindings
+- set · method · L21-L23 — set(scopePath: string, name: string, type: string): void
+- lookup · method · L26-L32 — lookup(scope: string[], name: string): string | null
+- defName · function · L45-L77 — function defName(node: Parser.SyntaxNode, lang: Language): string | null
+- goReceiverVarOf · function · L81-L85 — function goReceiverVarOf(node: Parser.SyntaxNode): string | null
+- goReceiverTypeOf · function · L91-L97 — function goReceiverTypeOf(node: Parser.SyntaxNode): string | null
+- resolveRecvType · function · L103-L121 — function resolveRecvType( receiver: string | undefined, ctx: Pick<WalkCtx, "scope" | "enclosingClass" | "goReceiverVar" | "lang" | "bindings">, ): string | undefined
+- isClassNode · function · L123-L129 — function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean
+- collectBindings · function · L132-L138 — function collectBindings(root: Parser.SyntaxNode, lang: Language): FileBindings
+- collectAliases · function · L142-L156 — function collectAliases(node: Parser.SyntaxNode, lang: Language, aliases: Map<string, string>): void
+- visit · function · L162-L182 — function visit( node: Parser.SyntaxNode, lang: Language, scope: string[], classScope: string | null, bindings: FileBindings, aliases: Map<string, string>, ): void
+- resolveAlias · function · L188-L190 — function resolveAlias(name: string, aliases: Map<string, string>): string
+- pyTypeName · function · L192-L200 — function pyTypeName(node: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>): string | null
+- callTypeName · function · L202-L207 — function callTypeName(node: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>): string | null
+- handlePy · function · L209-L239 — function handlePy( node: Parser.SyntaxNode, scope: string[], classScope: string | null, bindings: FileBindings, aliases: Map<string, string>, ): void
+- tsAnnotationTypeName · function · L241-L248 — function tsAnnotationTypeName( typeAnn: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>, ): string | null
+- tsNewTypeName · function · L250-L255 — function tsNewTypeName(value: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>): string | null
+- handleTs · function · L257-L285 — function handleTs( node: Parser.SyntaxNode, scope: string[], classScope: string | null, bindings: FileBindings, aliases: Map<string, string>, ): void
+- handleGo · function · L287-L322 — function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void

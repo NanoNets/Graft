@@ -22,9 +22,12 @@ covers:
   - symbol: writeGraph
     kind: function
     at: 'src/graph/write.ts:L36-L46'
+  - symbol: stripBodyText
+    kind: function
+    at: 'src/graph/write.ts:L57-L61'
   - symbol: edgeOrder
     kind: function
-    at: 'src/graph/write.ts:L48-L54'
+    at: 'src/graph/write.ts:L63-L69'
 ---
 <!-- context:generated:start -->
 ## Summary

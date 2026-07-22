@@ -87,16 +87,19 @@ covers:
     at: 'src/context/check.ts:L137-L139'
   - symbol: GraphBuildOptions
     kind: interface
-    at: 'src/graph/build.ts:L22-L35'
+    at: 'src/graph/build.ts:L23-L36'
   - symbol: GraphBuildResult
     kind: interface
-    at: 'src/graph/build.ts:L37-L50'
+    at: 'src/graph/build.ts:L38-L51'
   - symbol: listSourceFiles
     kind: function
-    at: 'src/graph/build.ts:L53-L55'
+    at: 'src/graph/build.ts:L54-L56'
+  - symbol: readGoModules
+    kind: function
+    at: 'src/graph/build.ts:L62-L76'
   - symbol: buildGraph
     kind: function
-    at: 'src/graph/build.ts:L57-L146'
+    at: 'src/graph/build.ts:L78-L183'
   - symbol: GraphCheckResult
     kind: interface
     at: 'src/graph/check.ts:L27-L37'
