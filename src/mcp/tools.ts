@@ -10,6 +10,8 @@ import { loadGraphCached } from '../graph/load.js';
 import { contextDirFor } from '../context/node-file.js';
 import { resolveSymbol, callersOf, calleesOf, impactOf, impactOfFile, type EdgeHit } from '../graph/traverse.js';
 import { headerOf, hitLine, looseNoteFor, type TraverseKind } from '../graph/traverse-cli.js';
+import { grepGraph } from '../search/grep.js';
+import { formatGrepResult, zeroHitNote } from '../search/grep-cli.js';
 import type { NodeV1 } from '../graph/types.js';
 
 export interface ToolDef {
@@ -82,6 +84,21 @@ export const TOOLS: ToolDef[] = [
         in: { type: 'string', description: 'narrow matches to nodes whose path contains this substring' },
       },
       required: ['symbol'],
+    },
+  },
+  {
+    name: 'graft_grep',
+    description:
+      'Regex search over the graph\'s indexed files, hits grouped by innermost enclosing symbol and ranked by incoming-edge count (coupling) — which hit matters, not just where it is.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'regex pattern (or literal string with fixed: true)' },
+        in: { type: 'string', description: 'narrow to files whose path contains this substring' },
+        ignore_case: { type: 'boolean', description: 'case-insensitive match' },
+        fixed: { type: 'boolean', description: 'treat pattern as a literal string, not a regex' },
+      },
+      required: ['pattern'],
     },
   },
 ];
@@ -161,6 +178,19 @@ export function callTool(
         const walk = kind === 'callers' ? callersOf : calleesOf;
         const text = renderMatches(kind, matches, (m) => walk(w, m));
         return { text, isError: false };
+      }
+      case 'graft_grep': {
+        const pattern = String(args.pattern ?? '');
+        if (!pattern) return { text: 'graft_grep requires a pattern', isError: true };
+        const w = loadGraphCached(contextDirFor(root, dirOverride));
+        if (!w) return { text: NO_GRAPH, isError: true };
+        const result = grepGraph(w, root, pattern, {
+          ignoreCase: typeof args.ignore_case === 'boolean' ? args.ignore_case : undefined,
+          fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
+          in: typeof args.in === 'string' && args.in ? args.in : undefined,
+        });
+        if (result.totalHits === 0) return { text: zeroHitNote(result), isError: false };
+        return { text: formatGrepResult(result), isError: false };
       }
       default:
         return { text: `unknown tool: ${name}`, isError: true };

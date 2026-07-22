@@ -14,21 +14,8 @@
  * graph disposes." Deterministic, $0, no embeddings — a lexical-seed →
  * graph-rank pipeline, the established alternative to vector search for code.
  */
-import type { GraphV1, Relation } from "../graph/types.js";
-
-/**
- * Edges that carry meaning-flow for the walk. `contains` is deliberately
- * excluded: a file node contains every symbol defined in it, so walking it
- * would make every same-file symbol a neighbour and let a file act as a hub
- * that connects otherwise-unrelated code — the flooding a graph walk must avoid.
- */
-const WALK_RELATIONS = new Set<Relation>([
-  "calls",
-  "references",
-  "imports",
-  "implements",
-  "extends",
-]);
+import type { GraphV1 } from "../graph/types.js";
+import { WALK_RELATIONS } from "../graph/relations.js";
 
 export interface PageRankOptions {
   /** Restart probability — the mass that teleports back to the seed set each

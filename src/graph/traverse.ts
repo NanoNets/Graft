@@ -12,6 +12,7 @@
  * hand-built fixture graphs.
  */
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "./types.js";
+import { WALK_RELATIONS } from "./relations.js";
 
 /** A resolved symbol-search hit. Reserved for future disambiguation metadata
  * (e.g. why a query matched); today it wraps the node 1:1. */
@@ -23,19 +24,6 @@ export interface ResolveSymbolOptions {
   /** Narrow candidates to nodes whose `path` contains this substring. */
   in?: string;
 }
-
-/**
- * Edges that carry meaning-flow for a walk. `contains` is deliberately
- * excluded — see graphrank.ts's identical WALK_RELATIONS for why (a file
- * "contains" every symbol in it, which would make the file a false hub).
- */
-const WALK_RELATIONS = new Set<Relation>([
-  "calls",
-  "references",
-  "imports",
-  "implements",
-  "extends",
-]);
 
 /**
  * Resolve a query string to every matching node in the graph.

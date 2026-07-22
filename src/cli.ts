@@ -8,6 +8,7 @@
  *   viz     serve the interactive graph viewer.
  *   mcp     serve the graph over MCP (stdio) for coding agents.
  *   callers / callees / impact   precise graph traversal for a symbol ($0, no LLM).
+ *   grep    regex search over indexed files, grouped by enclosing symbol, ranked by coupling ($0, no LLM).
  *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
@@ -272,6 +273,33 @@ program
   .option("--in <path>", "narrow matches to nodes whose path contains this substring")
   .option("--json", "output as JSON")
   .action(traverseAction("impact"));
+
+program
+  .command("grep")
+  .description("Regex search over indexed files, hits grouped by enclosing symbol and ranked by coupling ($0, no LLM)")
+  .argument("<pattern>", "regex pattern (or literal string with --fixed)")
+  .argument("[dir]", "repository root", ".")
+  .option("-i, --ignore-case", "case-insensitive match")
+  .option("--fixed", "treat pattern as a literal string, not a regex")
+  .option("--in <path>", "narrow to files whose path contains this substring")
+  .option("--json", "output as JSON")
+  .action(
+    async (
+      pattern: string,
+      dir: string,
+      opts: { ignoreCase?: boolean; fixed?: boolean; in?: string; json?: boolean },
+    ) => {
+      const { runGrepCommand } = await import("./search/grep-cli.js");
+      const globalOpts = program.opts<{ dir?: string }>();
+      runGrepCommand(pattern, dir, {
+        ignoreCase: opts.ignoreCase,
+        fixed: opts.fixed,
+        in: opts.in,
+        json: opts.json,
+        globalDir: globalOpts.dir,
+      });
+    },
+  );
 
 program
   .command("init")

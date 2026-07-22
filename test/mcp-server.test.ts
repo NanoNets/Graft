@@ -51,6 +51,7 @@ test('initialize → tools/list → tools/call round-trip', async () => {
     'graft_blast_radius',
     'graft_callers',
     'graft_callees',
+    'graft_grep',
   ]);
   const call = rs.find((r) => r.id === 3);
   assert.equal(call.result.isError, true); // unbuilt repo → soft error content

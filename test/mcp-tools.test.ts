@@ -59,13 +59,14 @@ function fileScopeRepo(): string {
   return d;
 }
 
-test('TOOLS lists all five tools with schemas', () => {
+test('TOOLS lists all six tools with schemas', () => {
   assert.deepEqual(TOOLS.map((t) => t.name), [
     'graft_ask',
     'graft_check',
     'graft_blast_radius',
     'graft_callers',
     'graft_callees',
+    'graft_grep',
   ]);
   for (const t of TOOLS) {
     assert.ok(t.description.length > 0);
@@ -185,6 +186,34 @@ test('graft_blast_radius: unknown symbol is a soft isError with the check-spelli
   assert.equal(r.isError, true);
   assert.match(r.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r.text, /check spelling/);
+});
+
+test('graft_grep round-trips a hit on the built fixture, grouped by enclosing symbol', () => {
+  const d = builtRepo();
+  const r = callTool(d, 'graft_grep', { pattern: 'add' });
+  assert.equal(r.isError, false);
+  assert.match(r.text, /"add" — \d+ hits? in \d+ symbols? across \d+ files? \(searched \d+ indexed files\)/);
+  assert.match(r.text, /src\/math\.ts/);
+});
+
+test('graft_grep: no hits is a soft (non-error) result with the loud fallback note', () => {
+  const d = builtRepo();
+  const r = callTool(d, 'graft_grep', { pattern: 'noSuchPatternAnywhere' });
+  assert.equal(r.isError, false);
+  assert.match(r.text, /no hits for "noSuchPatternAnywhere"/);
+  assert.match(r.text, /grep -rn "noSuchPatternAnywhere"/);
+});
+
+test('graft_grep: missing pattern and unbuilt repo are soft errors', () => {
+  const d = builtRepo();
+  const r1 = callTool(d, 'graft_grep', {});
+  assert.equal(r1.isError, true);
+  assert.match(r1.text, /requires a pattern/);
+
+  const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-grep-bare-'));
+  const r2 = callTool(bare, 'graft_grep', { pattern: 'add' });
+  assert.equal(r2.isError, true);
+  assert.match(r2.text, /graft build/);
 });
 
 test('callTool honors a dirOverride for a graph built in a non-default dir', () => {
