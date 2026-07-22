@@ -29,6 +29,10 @@ same understanding costs thousands.
   symbol, or filename hits the node that covers it; \`graft/INDEX.md\` lists them
   all.
 
+**First contact with an unfamiliar repo:** run \`graft map\` before exploring —
+a token-budgeted orientation (dir clusters, hubs, hotspots) built straight from
+the wiring graph, no LLM, no key.
+
 **Match the tool to the task shape:**
 
 - **Understanding, explaining, locating where a change goes** — the node IS the
@@ -41,10 +45,12 @@ same understanding costs thousands.
   change at the named \`file:line\` — never read the whole file to get oriented;
   the pack already oriented you.
 - **Exhaustive tasks — "every occurrence / every provider / every caller of
-  this pattern":** ranked results are top-N, not a complete list. Use graft to
-  orient (what is the pattern, where does it live), then ENUMERATE with grep
-  over the source and verify each hit. Ask alone will miss instances; that is
-  expected, not a graft failure.
+  this pattern":** ranked results are top-N, not a complete list. Run
+  \`graft grep "<literal>"\` instead — it's exhaustive over every indexed file,
+  grouped by enclosing symbol, and tells you what it couldn't see (unreadable
+  or unindexed files). Fall back to raw \`grep -rn\` only for files graft
+  doesn't index (docs, configs, new files). Ask alone will miss instances;
+  that is expected, not a graft failure.
 
 **Precise graph modes** — for structural questions, skip ranking and go
 straight to precomputed edges:

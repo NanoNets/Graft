@@ -192,6 +192,13 @@ graft callers <symbol> [dir]         # who calls/references/imports/implements/e
 graft callees <symbol> [dir]         # what a symbol calls/references/imports/implements/extends (no LLM, no key)
 graft impact <symbol> [dir] -d N     # BFS over incoming edges — who breaks if this symbol changes (no LLM, no key)
 
+graft grep "<regex>" [dir]           # exhaustive regex search over indexed files, grouped by enclosing symbol (no LLM, no key)
+graft grep "<regex>" --in <symbol>   # narrow to one symbol/module group
+graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a literal string, not a regex
+
+graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)
+graft map --max-dirs N               # raise/lower the number of directories shown
+
 graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code
 graft check --json                   # print the drift report as JSON
 
@@ -210,6 +217,44 @@ graft upgrade                        # npm install -g the latest published versi
 # global
 graft --dir <path>                   # use a context dir other than <repo>/graft
 graft --version, -v                  # print the installed version and exit
+```
+
+Method calls resolve through the receiver's type — constructor assignments
+(`self.router = APIRouter()`) and type annotations, not just the call-site
+name — so `callers`/`impact`/`grep --in` return calls bound to the right
+type on method-heavy code, not every method anywhere with that name.
+
+## Search & orient (`graft grep` / `graft map`)
+
+`graft grep "<regex>"` is exhaustive over every indexed file and groups hits
+by enclosing symbol, ranked by the same in-edge coupling `graft map` uses —
+built for "every occurrence of this pattern" tasks where `graft ask`'s
+ranked top-N isn't enough:
+
+```
+"NEEDLE" — 2 hits in 2 symbols across 1 files (searched 1 indexed files)
+
+heavilyCalled · function · src/a.ts:L1-L3 · 3 in-edges
+  L2: console.log("NEEDLE hit in heavilyCalled");
+
+rarelyCalled · function · src/a.ts:L4-L6 · 0 in-edges
+  L5: console.log("NEEDLE hit in rarelyCalled");
+```
+
+`graft map` is a token-budgeted first look at a repo — directory clusters
+with file/symbol counts, each dir's local hubs, and the global hotspots —
+all ranked by in-degree, no LLM, no key:
+
+```
+repo map — 105 files · 582 symbols · 1815 edges · typescript
+
+src/                54 files · 414 symbols   hubs: set (bindings.ts, 38←), contextDirFor (node-file.ts, 11←), wiringPath (write.ts, 10←)
+test/               36 files · 68 symbols   hubs: edge (graph-traverse.test.ts, 4←), graphOf (graph-traverse.test.ts, 4←), nodeStub (graph-traverse.test.ts, 3←)
+viewer/             5 files · 58 symbols   hubs: $ (main.ts, 9←), activeGraph (main.ts, 5←), cvar (data.ts, 5←)
+bench/              8 files · 42 symbols   hubs: makeClient (llm.ts, 3←), buildMarkdown (report.ts, 2←), judge (judge.ts, 2←)
+scripts/            2 files · 0 symbols
+
+hotspots: set · method · src/graph/bindings.ts:L21-L23 · 38←  contextDirFor · function · src/context/node-file.ts:L100-L103 · 11←  wiringPath · function · src/graph/write.ts:L20-L22 · 10←  ...
 ```
 
 ## Visualize it (`graft viz`)
