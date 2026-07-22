@@ -57,3 +57,25 @@ test("scope shadowing: inner binding wins", () => {
   const edges = callEdges(src, "python");
   assert.equal(edges.find((e) => e.name === "m")?.recvType, "B");
 });
+
+test("go: binding inside a method body resolves (scope parity with extract)", () => {
+  const src = "package m\nfunc (w *Worker) run() {\n  u := User{}\n  u.Save()\n}\n";
+  const edges = callEdges(src, "go", "x.go");
+  assert.equal(edges.find((e) => e.name === "Save")?.recvType, "User");
+});
+
+test("go: local binding shadows package-level var (never the wrong type)", () => {
+  const src = "package m\nvar u *Logger\nfunc (w *Worker) run() {\n  u := User{}\n  u.Save()\n}\n";
+  const edges = callEdges(src, "go", "x.go");
+  assert.equal(edges.find((e) => e.name === "Save")?.recvType, "User");
+});
+
+test("ts: aliased type annotation resolves to original name", () => {
+  const edges = callEdges("import { Router as R } from './r';\nfunction f(r: R) { r.use(); }\n", "typescript");
+  assert.equal(edges.find((e) => e.name === "use")?.recvType, "Router");
+});
+
+test("py: aliased annotation resolves to original name", () => {
+  const edges = callEdges("from r import APIRouter as AR\ndef f(r: AR):\n    r.get()\n", "python");
+  assert.equal(edges.find((e) => e.name === "get")?.recvType, "APIRouter");
+});

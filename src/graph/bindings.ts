@@ -37,10 +37,20 @@ const FN_VALUE_TYPES = new Set(["arrow_function", "function", "function_expressi
 /** Definition-node types that push a new scope segment, mirroring extract.ts's
  * `describe()` closely enough to keep the two scope stacks in lockstep — but
  * duplicated here (not imported) to keep bindings.ts free of a value import on
- * extract.ts. Returns the bare def name, or null if `node` isn't a definition. */
+ * extract.ts. Returns the def's scope segment (bare name, except a Go method
+ * which is receiver-qualified — `Receiver.method` — exactly like extract.ts's
+ * `idName`, so a binding recorded inside a Go method body is stored under the
+ * same scope key extract.ts's walk will look it up with), or null if `node`
+ * isn't a definition. */
 export function defName(node: Parser.SyntaxNode, lang: Language): string | null {
   if (lang === "go") {
-    if (node.type === "function_declaration" || node.type === "method_declaration" || node.type === "type_spec") {
+    if (node.type === "method_declaration") {
+      const name = node.childForFieldName("name")?.text;
+      if (!name) return null;
+      const recv = goReceiverTypeOf(node);
+      return recv ? `${recv}.${name}` : name;
+    }
+    if (node.type === "function_declaration" || node.type === "type_spec") {
       return node.childForFieldName("name")?.text ?? null;
     }
     return null;
@@ -72,6 +82,18 @@ export function goReceiverVarOf(node: Parser.SyntaxNode): string | null {
   const recv = node.childForFieldName("receiver");
   const param = recv?.namedChildren.find((c) => c.type === "parameter_declaration");
   return param?.childForFieldName("name")?.text ?? null;
+}
+
+/** The receiver's base type name for a Go method, unwrapping a pointer receiver
+ * (`func (w *Worker) …` → `Worker`). Mirrors extract.ts's own `goReceiverType`
+ * (duplicated, not imported, per this file's no-value-import-of-extract rule).
+ * Null if it can't be read. */
+function goReceiverTypeOf(node: Parser.SyntaxNode): string | null {
+  const recv = node.childForFieldName("receiver");
+  const param = recv?.namedChildren.find((c) => c.type === "parameter_declaration");
+  let type = param?.childForFieldName("type");
+  if (type?.type === "pointer_type") type = type.namedChildren.at(-1) ?? null;
+  return type?.type === "type_identifier" ? type.text : null;
 }
 
 /** Resolves a call site's receiver text (from `calleeName`) to a bound type
@@ -159,12 +181,20 @@ function visit(
   for (const child of node.namedChildren) visit(child, lang, childScope, childClassScope, bindings, aliases);
 }
 
-function pyTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+/** Resolves a bare type name through `aliases` — every annotation path must
+ * consult it, so an aliased import (`import Foo as Bar`) still binds to the
+ * original name callers actually search for. See the "aliases already
+ * resolved" contract above. */
+function resolveAlias(name: string, aliases: Map<string, string>): string {
+  return aliases.get(name) ?? name;
+}
+
+function pyTypeName(node: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>): string | null {
   if (!node) return null;
-  if (node.type === "identifier") return node.text;
+  if (node.type === "identifier") return resolveAlias(node.text, aliases);
   if (node.type === "type") {
     const inner = node.namedChildren[0];
-    return inner?.type === "identifier" ? inner.text : null;
+    return inner?.type === "identifier" ? resolveAlias(inner.text, aliases) : null;
   }
   return null;
 }
@@ -186,7 +216,7 @@ function handlePy(
   const scopePath = scope.join(".");
   if (node.type === "typed_parameter") {
     const nameNode = node.namedChildren.find((c) => c.type === "identifier");
-    const typeName = pyTypeName(node.childForFieldName("type"));
+    const typeName = pyTypeName(node.childForFieldName("type"), aliases);
     if (nameNode && typeName) bindings.set(scopePath, nameNode.text, typeName);
     return;
   }
@@ -196,7 +226,7 @@ function handlePy(
   if (!left) return;
   if (left.type === "identifier") {
     const typeField = node.childForFieldName("type");
-    const typeName = typeField ? pyTypeName(typeField) : callTypeName(right, aliases);
+    const typeName = typeField ? pyTypeName(typeField, aliases) : callTypeName(right, aliases);
     if (typeName) bindings.set(scopePath, left.text, typeName);
   } else if (left.type === "attribute") {
     const obj = left.childForFieldName("object");
@@ -208,10 +238,13 @@ function handlePy(
   }
 }
 
-function tsAnnotationTypeName(typeAnn: Parser.SyntaxNode | null | undefined): string | null {
+function tsAnnotationTypeName(
+  typeAnn: Parser.SyntaxNode | null | undefined,
+  aliases: Map<string, string>,
+): string | null {
   if (!typeAnn || typeAnn.type !== "type_annotation") return null;
   const t = typeAnn.namedChildren[0];
-  return t?.type === "type_identifier" ? t.text : null;
+  return t?.type === "type_identifier" ? resolveAlias(t.text, aliases) : null;
 }
 
 function tsNewTypeName(value: Parser.SyntaxNode | null | undefined, aliases: Map<string, string>): string | null {
@@ -234,18 +267,19 @@ function handleTs(
     if (value && FN_VALUE_TYPES.has(value.type)) return; // a function def, not a type binding
     const name = node.childForFieldName("name");
     if (name?.type !== "identifier") return;
-    const typeName = tsNewTypeName(value, aliases) ?? tsAnnotationTypeName(node.childForFieldName("type"));
+    const typeName = tsNewTypeName(value, aliases) ?? tsAnnotationTypeName(node.childForFieldName("type"), aliases);
     if (typeName) bindings.set(scopePath, name.text, typeName);
   } else if (node.type === "public_field_definition") {
     const name = node.childForFieldName("name");
     if (!name) return;
     const typeName =
-      tsAnnotationTypeName(node.childForFieldName("type")) ?? tsNewTypeName(node.childForFieldName("value"), aliases);
+      tsAnnotationTypeName(node.childForFieldName("type"), aliases) ??
+      tsNewTypeName(node.childForFieldName("value"), aliases);
     if (typeName) bindings.set(classScope ?? scopePath, `this.${name.text}`, typeName);
   } else if (node.type === "required_parameter") {
     const pattern = node.childForFieldName("pattern");
     if (pattern?.type !== "identifier") return;
-    const typeName = tsAnnotationTypeName(node.childForFieldName("type"));
+    const typeName = tsAnnotationTypeName(node.childForFieldName("type"), aliases);
     if (typeName) bindings.set(scopePath, pattern.text, typeName);
   }
 }
