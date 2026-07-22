@@ -12,6 +12,7 @@ import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
+import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
 export type Language = "typescript" | "tsx" | "python" | "go";
@@ -38,6 +39,9 @@ export interface RawEdge {
   specifier?: string; // module path to resolve (imports)
   name?: string; // symbol name to resolve (extends/implements/calls)
   viaMember?: boolean; // calls: was it `obj.foo()` (→ prefer method targets)?
+  /** calls with viaMember: the receiver's resolved type name (from bindings /
+   * self / this / Go receiver), when a confident local clue exists. */
+  recvType?: string;
 }
 
 export interface ExtractResult {
@@ -129,7 +133,7 @@ const GRAMMARS: Record<Language, unknown> = {
   go: Go,
 };
 
-interface WalkCtx {
+export interface WalkCtx {
   rel: string;
   source: string;
   lang: Language;
@@ -137,6 +141,9 @@ interface WalkCtx {
   scope: string[]; // enclosing definition names, for id scoping
   enclosingKind: Kind | null; // kind of the nearest enclosing definition
   parentId: string; // nearest enclosing definition id, or the file id
+  bindings: FileBindings; // variable/field -> type, for receiver-type lookups
+  enclosingClass: string | null; // nearest enclosing class (py/ts `self`/`this`)
+  goReceiverVar: string | null; // Go receiver var, e.g. `w` in `func (w *Worker)`
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -161,6 +168,7 @@ function parseSource(source: string): Parser.SyntaxNode {
 export function extractFile(rel: string, source: string, lang: Language): ExtractResult {
   parser.setLanguage(GRAMMARS[lang] as never);
   const root = parseSource(source);
+  const bindings = collectBindings(root, lang);
 
   const nodes: NodeV1[] = [
     {
@@ -189,6 +197,9 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     scope: [],
     enclosingKind: null,
     parentId: rel,
+    bindings,
+    enclosingClass: null,
+    goReceiverVar: null,
   };
   for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges);
   // nodes[0] is the file node; the rest are its symbols. Index the module-level
@@ -229,11 +240,15 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class heritage
     if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
 
+    const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
+    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
       enclosingKind: desc.kind,
       parentId: id,
+      enclosingClass,
+      goReceiverVar: isGoMethod ? goReceiverVarOf(node) : ctx.goReceiverVar,
     };
     for (const child of node.namedChildren) walk(child, childCtx, out, edges);
     return;
@@ -244,13 +259,15 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   if (node.type === callType) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
-      edges.push({
+      const callEdge: RawEdge = {
         source: ctx.parentId,
         relation: "calls",
         name: callee.name,
         viaMember: callee.viaMember,
         file: ctx.rel,
-      });
+      };
+      const recvType = resolveRecvType(callee.receiver, ctx);
+      edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
   } else if (isImport(node, ctx.lang)) {
     const spec = importSpecifier(node, ctx.lang);
@@ -388,24 +405,52 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
-): { name: string; viaMember: boolean } | null {
+): { name: string; viaMember: boolean; receiver?: string } | null {
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
   if (lang === "python" && fn.type === "attribute") {
     const a = fn.childForFieldName("attribute") ?? fn.namedChildren.at(-1);
-    return a ? { name: a.text, viaMember: true } : null;
+    return a ? { name: a.text, viaMember: true, receiver: pyReceiver(fn) } : null;
   }
   if (lang === "go" && fn.type === "selector_expression") {
     // `pkg.Fn()` / `recv.Method()` — the called name is the trailing field.
     const p = fn.childForFieldName("field") ?? fn.namedChildren.at(-1);
-    return p ? { name: p.text, viaMember: true } : null;
+    const operand = fn.childForFieldName("operand");
+    const receiver = operand?.type === "identifier" ? operand.text : undefined;
+    return p ? { name: p.text, viaMember: true, receiver } : null;
   }
   if ((lang === "typescript" || lang === "tsx") && fn.type === "member_expression") {
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
-    return p ? { name: p.text, viaMember: true } : null;
+    return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
   return null;
+}
+
+/** py `attribute` node's receiver text: bare identifier, or `self.x` for a
+ * chained `self.x.y()`. Anything else (e.g. a chained call `f().g()`) → none. */
+function pyReceiver(fn: Parser.SyntaxNode): string | undefined {
+  const obj = fn.childForFieldName("object");
+  if (obj?.type === "identifier") return obj.text;
+  if (obj?.type === "attribute") {
+    const innerObj = obj.childForFieldName("object");
+    const innerAttr = obj.childForFieldName("attribute");
+    if (innerObj?.type === "identifier" && innerObj.text === "self" && innerAttr) return `self.${innerAttr.text}`;
+  }
+  return undefined;
+}
+
+/** ts `member_expression` node's receiver text: `this`, `this.x`, or a bare identifier. */
+function tsReceiver(fn: Parser.SyntaxNode): string | undefined {
+  const obj = fn.childForFieldName("object");
+  if (obj?.type === "this") return "this";
+  if (obj?.type === "identifier") return obj.text;
+  if (obj?.type === "member_expression") {
+    const innerObj = obj.childForFieldName("object");
+    const innerProp = obj.childForFieldName("property");
+    if (innerObj?.type === "this" && innerProp) return `this.${innerProp.text}`;
+  }
+  return undefined;
 }
 
 function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
