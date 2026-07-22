@@ -66,3 +66,27 @@ test("unknown recvType falls back to unique bare-name path", () => {
   ]);
   assert.equal(edges.find((e) => e.relation === "calls")?.target, "a.py#Only.solo");
 });
+
+test("builtin-container receiver drops instead of bare-name fallback", () => {
+  const nodes = [n("b.py", "file"), n("b.py#FileBindings", "class"), n("b.py#FileBindings.set", "method"), n("c.py", "file"), n("c.py#f", "function")];
+  const edges = resolveEdges(nodes, [
+    { source: "c.py#f", relation: "calls", name: "set", viaMember: true, recvType: "dict", file: "c.py" },
+  ]);
+  assert.equal(edges.filter((e) => e.relation === "calls").length, 0);
+});
+
+test("builtin-container receiver (TS Map) drops instead of bare-name fallback", () => {
+  const nodes = [n("b.ts", "file"), n("b.ts#FileBindings", "class"), n("b.ts#FileBindings.set", "method"), n("c.ts", "file"), n("c.ts#f", "function")];
+  const edges = resolveEdges(nodes, [
+    { source: "c.ts#f", relation: "calls", name: "set", viaMember: true, recvType: "Map", file: "c.ts" },
+  ]);
+  assert.equal(edges.filter((e) => e.relation === "calls").length, 0);
+});
+
+test("Go NewServer()→Server recall still resolves (regression guard, non-builtin recvType)", () => {
+  const nodes = [n("srv.go", "file"), n("srv.go#Server", "class"), n("srv.go#Server.Start", "method"), n("m.go", "file"), n("m.go#f", "function")];
+  const edges = resolveEdges(nodes, [
+    { source: "m.go#f", relation: "calls", name: "Start", viaMember: true, recvType: "Server", file: "m.go" },
+  ]);
+  assert.equal(edges.find((e) => e.relation === "calls")?.target, "srv.go#Server.Start");
+});
