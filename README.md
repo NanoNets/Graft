@@ -43,13 +43,6 @@ Commit `graft/` so everyone who clones the repo (and their agents) gets the map:
 git add graft && git commit -m "add context graph"
 ```
 
-Want richer, LLM-written summaries on top of the structural graph? Point Graft at an OpenRouter key and run the deep pass whenever you like:
-
-```bash
-export OPENROUTER_API_KEY=sk-or-...   # https://openrouter.ai/keys
-graft build --deep
-```
-
 Prefer not to install globally? `npx @nanonets/graft init` works the same way.
 
 ---

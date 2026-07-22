@@ -24,6 +24,9 @@ import { formatGraphCheckReport } from "./graph/check.js";
 import { runInit } from "./claude/init.js";
 import { runHostsInit } from "./hosts/init.js";
 import { hostIds } from "./hosts/registry.js";
+import { contextDirFor } from "./context/node-file.js";
+import { loadGraphCached } from "./graph/load.js";
+import { formatInitEpilogue } from "./cli-epilogue.js";
 
 const program = new Command();
 
@@ -304,8 +307,18 @@ program
       for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
       for (const h of r.hooks) console.error(`✓ hook ${h.id}: ${h.path} (${h.action})`);
     }
-    console.error("\nDone. Claude Code gets live hooks + statusline; other agents read their instruction files.");
-    console.error("For LLM summaries: set OPENROUTER_API_KEY and run `graft build --deep`.");
+
+    const globalOpts = program.opts<{ dir?: string }>();
+    const outDir = contextDirFor(repo, globalOpts.dir);
+    const graph = loadGraphCached(outDir);
+    console.error(
+      "\n" +
+        formatInitEpilogue({
+          graphBuilt: graph !== null,
+          nodes: graph?.meta.nodeCount,
+          edges: graph?.meta.edgeCount,
+        }),
+    );
   });
 
 program.parseAsync().catch((err) => {
