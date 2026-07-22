@@ -193,7 +193,7 @@ graft callees <symbol> [dir]         # what a symbol calls/references/imports/im
 graft impact <symbol> [dir] -d N     # BFS over incoming edges — who breaks if this symbol changes (no LLM, no key)
 
 graft grep "<regex>" [dir]           # exhaustive regex search over indexed files, grouped by enclosing symbol (no LLM, no key)
-graft grep "<regex>" --in <symbol>   # narrow to one symbol/module group
+graft grep "<regex>" --in <path>     # narrow to files whose path contains this substring
 graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a literal string, not a regex
 
 graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)
