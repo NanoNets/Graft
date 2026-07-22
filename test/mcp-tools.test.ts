@@ -59,7 +59,7 @@ function fileScopeRepo(): string {
   return d;
 }
 
-test('TOOLS lists all six tools with schemas', () => {
+test('TOOLS lists all seven tools with schemas', () => {
   assert.deepEqual(TOOLS.map((t) => t.name), [
     'graft_ask',
     'graft_check',
@@ -67,6 +67,7 @@ test('TOOLS lists all six tools with schemas', () => {
     'graft_callers',
     'graft_callees',
     'graft_grep',
+    'graft_map',
   ]);
   for (const t of TOOLS) {
     assert.ok(t.description.length > 0);
@@ -214,6 +215,22 @@ test('graft_grep: missing pattern and unbuilt repo are soft errors', () => {
   const r2 = callTool(bare, 'graft_grep', { pattern: 'add' });
   assert.equal(r2.isError, true);
   assert.match(r2.text, /graft build/);
+});
+
+test('graft_map round-trips a repo orientation on the built fixture', () => {
+  const d = builtRepo();
+  const r = callTool(d, 'graft_map', {});
+  assert.equal(r.isError, false);
+  assert.match(r.text, /^repo map — \d+ files · \d+ symbols · \d+ edges/);
+  assert.match(r.text, /src/);
+  assert.match(r.text, /hotspots:/);
+});
+
+test('graft_map: unbuilt repo is a soft isError with the no-graph message', () => {
+  const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-map-bare-'));
+  const r = callTool(bare, 'graft_map', {});
+  assert.equal(r.isError, true);
+  assert.match(r.text, /graft build/);
 });
 
 test('callTool honors a dirOverride for a graph built in a non-default dir', () => {

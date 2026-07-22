@@ -9,6 +9,7 @@
  *   mcp     serve the graph over MCP (stdio) for coding agents.
  *   callers / callees / impact   precise graph traversal for a symbol ($0, no LLM).
  *   grep    regex search over indexed files, grouped by enclosing symbol, ranked by coupling ($0, no LLM).
+ *   map     token-budgeted repo orientation — dir clusters, hubs, hotspots ($0, no LLM).
  *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
@@ -300,6 +301,32 @@ program
       });
     },
   );
+
+program
+  .command("map")
+  .description(
+    "Token-budgeted repo orientation — directory clusters, per-directory hubs, and global hotspots from the wiring graph ($0, no LLM)",
+  )
+  .argument("[dir]", "repository root", ".")
+  .option("--json", "output as JSON")
+  .action(async (dir: string, opts: { json?: boolean }) => {
+    const { buildRepoMap, formatRepoMap } = await import("./graph/map.js");
+    const root = resolve(dir);
+    const globalOpts = program.opts<{ dir?: string }>();
+    const contextDir = contextDirFor(root, globalOpts.dir);
+    const graph = loadGraphCached(contextDir);
+    if (!graph) {
+      console.error("✗ no graph — run graft build first");
+      process.exit(1);
+      return;
+    }
+    const map = buildRepoMap(graph);
+    if (opts.json) {
+      console.log(JSON.stringify(map, null, 2));
+      return;
+    }
+    process.stdout.write(formatRepoMap(map));
+  });
 
 program
   .command("init")

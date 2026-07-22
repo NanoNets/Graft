@@ -12,6 +12,7 @@ import { resolveSymbol, callersOf, calleesOf, impactOf, impactOfFile, type EdgeH
 import { headerOf, hitLine, looseNoteFor, type TraverseKind } from '../graph/traverse-cli.js';
 import { grepGraph } from '../search/grep.js';
 import { formatGrepResult, zeroHitNote } from '../search/grep-cli.js';
+import { buildRepoMap, formatRepoMap } from '../graph/map.js';
 import type { NodeV1 } from '../graph/types.js';
 
 export interface ToolDef {
@@ -100,6 +101,12 @@ export const TOOLS: ToolDef[] = [
       },
       required: ['pattern'],
     },
+  },
+  {
+    name: 'graft_map',
+    description:
+      'Token-budgeted repo orientation — directory clusters, per-directory hubs, and global hotspots computed purely from the wiring graph ($0, no LLM). Use this to get oriented in an unfamiliar repo before diving into files.',
+    inputSchema: { type: 'object', properties: {} },
   },
 ];
 
@@ -191,6 +198,12 @@ export function callTool(
         });
         if (result.totalHits === 0) return { text: zeroHitNote(result), isError: false };
         return { text: formatGrepResult(result), isError: false };
+      }
+      case 'graft_map': {
+        const w = loadGraphCached(contextDirFor(root, dirOverride));
+        if (!w) return { text: NO_GRAPH, isError: true };
+        const map = buildRepoMap(w);
+        return { text: formatRepoMap(map), isError: false };
       }
       default:
         return { text: `unknown tool: ${name}`, isError: true };
