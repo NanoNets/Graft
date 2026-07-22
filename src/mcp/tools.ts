@@ -105,6 +105,7 @@ export function callTool(
   root: string,
   name: string,
   args: Record<string, unknown>,
+  dirOverride?: string,
 ): { text: string; isError: boolean } {
   try {
     switch (name) {
@@ -112,12 +113,12 @@ export function callTool(
         const query = String(args.query ?? '');
         if (!query) return { text: 'graft_ask requires a query', isError: true };
         const limit = typeof args.limit === 'number' ? args.limit : 5;
-        const engine = new Graft();
+        const engine = new Graft({ contextDir: dirOverride });
         const r = engine.ask(root, query, { limit, source: true });
         return { text: formatAsk(r), isError: false };
       }
       case 'graft_check': {
-        const engine = new Graft();
+        const engine = new Graft({ contextDir: dirOverride });
         const r = engine.check(root);
         const g = engine.checkGraph(root);
         const parts = [formatCheckReport(r)];
@@ -127,7 +128,7 @@ export function callTool(
       case 'graft_blast_radius': {
         const query = String(args.symbol ?? args.file ?? '');
         if (!query) return { text: 'graft_blast_radius requires a file or symbol', isError: true };
-        const w = loadGraphCached(contextDirFor(root));
+        const w = loadGraphCached(contextDirFor(root, dirOverride));
         if (!w) return { text: NO_GRAPH, isError: true };
         const matches = resolveSymbol(w, query);
         if (matches.length === 0) return { text: unknownSymbolText(query), isError: true };
@@ -151,7 +152,7 @@ export function callTool(
       case 'graft_callees': {
         const symbol = String(args.symbol ?? '');
         if (!symbol) return { text: `${name} requires a symbol`, isError: true };
-        const w = loadGraphCached(contextDirFor(root));
+        const w = loadGraphCached(contextDirFor(root, dirOverride));
         if (!w) return { text: NO_GRAPH, isError: true };
         const inOpt = typeof args.in === 'string' && args.in ? { in: args.in } : {};
         const matches = resolveSymbol(w, symbol, inOpt);

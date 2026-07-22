@@ -32,6 +32,18 @@ function chainRepo(): string {
   return d;
 }
 
+/** Graph lives in a NON-default dir (`<repo>/customgraph`, not `<repo>/graft`)
+ * — exercises the `--dir` override threaded through to `contextDirFor`. */
+function customDirRepo(): { repo: string; graphDir: string } {
+  const d = mkdtempSync(join(tmpdir(), 'graft-mcptools-customdir-'));
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(join(d, 'src', 'math.ts'),
+    'export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function sub(a: number, b: number): number {\n  return add(a, -b);\n}\n');
+  const graphDir = join(d, 'customgraph');
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d, '--dir', graphDir], { stdio: 'pipe' });
+  return { repo: d, graphDir };
+}
+
 /** b.ts imports a.ts AND calls a function (`helper`) defined in a.ts. The
  * `imports` edge targets a.ts's FILE id; the `calls` edge targets `helper`'s
  * SYMBOL id — two different node ids, both "in" a.ts from a human's view. */
@@ -173,4 +185,23 @@ test('graft_blast_radius: unknown symbol is a soft isError with the check-spelli
   assert.equal(r.isError, true);
   assert.match(r.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r.text, /check spelling/);
+});
+
+test('callTool honors a dirOverride for a graph built in a non-default dir', () => {
+  const { repo, graphDir } = customDirRepo();
+
+  // With the override pointing at the actual graph location, tools find it.
+  const check = callTool(repo, 'graft_check', {}, graphDir);
+  assert.equal(check.isError, false);
+  assert.match(check.text, /graph check: OK/);
+
+  const callers = callTool(repo, 'graft_callers', { symbol: 'add' }, graphDir);
+  assert.equal(callers.isError, false);
+  assert.match(callers.text, /calls ← sub \(src\/math\.ts:/);
+
+  // Without the override, tools fall back to the default `<repo>/graft`,
+  // which doesn't exist here — must report no graph, not silently succeed.
+  const noOverride = callTool(repo, 'graft_callers', { symbol: 'add' });
+  assert.equal(noOverride.isError, true);
+  assert.match(noOverride.text, /graft build/);
 });

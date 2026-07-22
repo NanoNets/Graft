@@ -233,7 +233,8 @@ program
   .action(async (dir: string) => {
     const { resolve } = await import("node:path");
     const { startMcpServer } = await import("./mcp/server.js");
-    startMcpServer(resolve(dir));
+    const globalOpts = program.opts<{ dir?: string }>();
+    startMcpServer(resolve(dir), globalOpts.dir);
   });
 
 function traverseAction(kind: import("./graph/traverse-cli.js").TraverseKind) {

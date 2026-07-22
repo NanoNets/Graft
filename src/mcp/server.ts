@@ -17,7 +17,7 @@ function replyError(id: unknown, code: number, message: string): void {
   send({ jsonrpc: '2.0', id, error: { code, message } });
 }
 
-export function startMcpServer(root: string): void {
+export function startMcpServer(root: string, dirOverride?: string): void {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on('line', (line) => {
     const text = line.trim();
@@ -54,7 +54,7 @@ export function startMcpServer(root: string): void {
         if (isNotification) return;
         const name = String(params?.name ?? '');
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
-        const r = callTool(root, name, args);
+        const r = callTool(root, name, args, dirOverride);
         reply(id, { content: [{ type: 'text', text: r.text }], isError: r.isError });
         return;
       }
