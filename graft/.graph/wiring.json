@@ -2,7 +2,7 @@
   "meta": {
     "version": 1,
     "nodeCount": 687,
-    "edgeCount": 1815,
+    "edgeCount": 1786,
     "languages": [
       "typescript"
     ]
@@ -5841,12 +5841,12 @@
       "name": "resolve.ts",
       "kind": "file",
       "path": "src/graph/resolve.ts",
-      "span": "L1-L240",
+      "span": "L1-L259",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "68bf1a6ab368e315f5c99fa86666a1886dde88c64800b8e1e9cf632427986c0d",
-      "chars": 10512,
+      "body_hash": "23e2e29f6e907f079f0d214ac6ce24b6105c403a51da30c2f4d39494f4b6b110",
+      "chars": 11721,
       "summary_state": "stale",
       "summary": "This file resolves raw edge intents into concrete edges by matching names against a node index, ensuring accurate relationships between nodes.",
       "crux": {
@@ -5859,7 +5859,7 @@
       "name": "GoModule",
       "kind": "interface",
       "path": "src/graph/resolve.ts",
-      "span": "L23-L26",
+      "span": "L39-L42",
       "signature": "interface GoModule",
       "exported": true,
       "origin": "ast",
@@ -5873,7 +5873,7 @@
       "name": "push",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L123-L127",
+      "span": "L142-L146",
       "signature": "function push<T>(map: Map<string, T[]>, key: string, val: T): void",
       "exported": false,
       "origin": "ast",
@@ -5887,11 +5887,11 @@
       "name": "resolveEdges",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L35-L121",
+      "span": "L51-L140",
       "signature": "function resolveEdges( nodes: NodeV1[], rawEdges: RawEdge[], opts: ResolveOptions = {}, ): EdgeV1[]",
       "exported": true,
       "origin": "ast",
-      "body_hash": "52004dfe84be5b2752ec5c337c7bcdb05b5ce0bbda6c21bc4d20d7720f16e527",
+      "body_hash": "0faf60f3424e744ecbd1e58dfe31e4afc1760c28211d27754f87cc308984b472",
       "summary_state": "stale",
       "summary": "This function processes raw edges and establishes relationships between nodes based on their types and specified relations.",
       "crux": {
@@ -5904,12 +5904,12 @@
       "name": "add",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L81-L86",
+      "span": "L97-L102",
       "signature": "add = (source: string, target: string, relation: Relation, confidence: EdgeV1[\"confidence\"])",
       "exported": true,
       "origin": "ast",
-      "body_hash": "7f8c2ba06670d38fd33b508c463d4c8e08ae614f7559b3571c8b7db1d51fd380",
-      "summary_state": "ready",
+      "body_hash": "d56a5f75ce46c0a907240751e35c16d07beec97e4a61a83cf77cccfc9fea0d03",
+      "summary_state": "stale",
       "summary": "This function adds a new edge to the output if it hasn't been seen before, preventing duplicate edges in the result.",
       "crux": {
         "code": "  const add = (source: string, target: string, relation: Relation, confidence: EdgeV1[\"confidence\"]) => {\n    const key = `${source}\u0000${relation}\u0000${target}`;\n    if (seen.has(key)) return;\n    seen.add(key);\n    out.push({ source, target, relation, confidence });\n  };",
@@ -5921,7 +5921,7 @@
       "name": "resolveGoImport",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L224-L239",
+      "span": "L243-L258",
       "signature": "function resolveGoImport(spec: string, modules: GoModule[], filesByDir: Map<string, string[]>): string",
       "exported": false,
       "origin": "ast",
@@ -5935,7 +5935,7 @@
       "name": "resolveImport",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L200-L212",
+      "span": "L219-L231",
       "signature": "function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): string",
       "exported": false,
       "origin": "ast",
@@ -5952,7 +5952,7 @@
       "name": "resolveName",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L133-L145",
+      "span": "L152-L164",
       "signature": "function resolveName( name: string, file: string, kinds: Kind[], perFileName: Map<string, Map<string, NodeV1[]>>, globalName: Map<string, NodeV1[]>, ): { id: string; confidence: EdgeV1[\"confidence\"] } | null",
       "exported": false,
       "origin": "ast",
@@ -5969,7 +5969,7 @@
       "name": "ResolveOptions",
       "kind": "interface",
       "path": "src/graph/resolve.ts",
-      "span": "L28-L33",
+      "span": "L44-L49",
       "signature": "interface ResolveOptions",
       "exported": true,
       "origin": "ast",
@@ -5983,7 +5983,7 @@
       "name": "resolveTypedMember",
       "kind": "function",
       "path": "src/graph/resolve.ts",
-      "span": "L161-L194",
+      "span": "L180-L213",
       "signature": "function resolveTypedMember( recvType: string, name: string, file: string, ownerMethod: Map<string, NodeV1[]>, classParents: Map<string, string[]>, ): { id: string; confidence: EdgeV1[\"confidence\"] } | \"ambiguous\" | null",
       "exported": false,
       "origin": "ast",
@@ -8612,12 +8612,12 @@
       "name": "graph-resolve-typed.test.ts",
       "kind": "file",
       "path": "test/graph-resolve-typed.test.ts",
-      "span": "L1-L69",
+      "span": "L1-L93",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "74411e76ca13a8d0b10f7053be4d71b208c7cce25334fdd33250b4f1edbea9eb",
-      "chars": 3485,
+      "body_hash": "0c3760525cc61ee97de448fa26b4a5b9a3bb07c03b4acfbdf3608541b189cf81",
+      "chars": 4908,
       "summary_state": "pending",
       "summary": null,
       "crux": null
@@ -10893,12 +10893,6 @@
     },
     {
       "source": "bench/run.ts#main",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "bench/run.ts#main",
       "target": "src/viz/serve.ts#startVizServer.close",
       "relation": "calls",
       "confidence": "inferred"
@@ -11696,34 +11690,16 @@
       "confidence": "extracted"
     },
     {
-      "source": "src/ask/ask.ts#baselineFor",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "src/ask/ask.ts#computeIdf",
       "target": "src/ask/ask.ts#idfFromDf",
       "relation": "calls",
       "confidence": "extracted"
     },
     {
-      "source": "src/ask/ask.ts#computeIdf",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "src/ask/ask.ts#computeIdfFromIndex",
       "target": "src/ask/ask.ts#idfFromDf",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/ask/ask.ts#computeIdfFromIndex",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/ask/ask.ts#findSubjectNodes",
@@ -11748,12 +11724,6 @@
       "target": "src/ask/ask.ts#parseSpan",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/ask/ask.ts#idfFromDf",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/ask/ask.ts#inlineSource",
@@ -11812,12 +11782,6 @@
     {
       "source": "src/ask/ask.ts#lexical",
       "target": "src/ask/index-file.ts#tokenize",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/ask/ask.ts#lexical",
-      "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -11895,21 +11859,9 @@
     },
     {
       "source": "src/ask/graphrank.ts#personalizedPageRank",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/ask/graphrank.ts#personalizedPageRank",
       "target": "src/ask/graphrank.ts#personalizedPageRank.link",
       "relation": "contains",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/ask/graphrank.ts#personalizedPageRank.link",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/ask/index-file.ts",
@@ -11990,12 +11942,6 @@
       "confidence": "extracted"
     },
     {
-      "source": "src/ask/index-file.ts#counts",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "src/ask/index-file.ts#readAskIndex",
       "target": "src/ask/index-file.ts#askIndexPath",
       "relation": "calls",
@@ -12030,12 +11976,6 @@
       "target": "src/ask/index-file.ts#tokenize",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/ask/index-file.ts#writeAskIndex",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/claude/format.ts",
@@ -13875,12 +13815,6 @@
     },
     {
       "source": "src/context/check.ts#checkContext",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/context/check.ts#checkContext",
       "target": "src/ingest/fs.ts#walkDir",
       "relation": "calls",
       "confidence": "inferred"
@@ -14444,12 +14378,6 @@
       "confidence": "extracted"
     },
     {
-      "source": "src/graph/bindings.ts#FileBindings.set",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "extracted"
-    },
-    {
       "source": "src/graph/bindings.ts#handleGo",
       "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
@@ -14656,12 +14584,6 @@
     {
       "source": "src/graph/build.ts#buildGraph",
       "target": "src/context/node-file.ts#contextDirFor",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/build.ts#buildGraph",
-      "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -14876,12 +14798,6 @@
       "confidence": "inferred"
     },
     {
-      "source": "src/graph/cards.ts#conceptsByPath",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "src/graph/cards.ts#listExistingCards",
       "target": "src/graph/cards.ts#listExistingCards.walk",
       "relation": "calls",
@@ -14931,12 +14847,6 @@
     },
     {
       "source": "src/graph/cards.ts#writeCards",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/cards.ts#writeCards",
       "target": "src/graph/cards.ts#cardPathFor",
       "relation": "calls",
       "confidence": "extracted"
@@ -14964,12 +14874,6 @@
       "target": "src/graph/cards.ts#renderCard",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/graph/cards.ts#writeCovers",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/graph/cards.ts#writeCovers",
@@ -15046,12 +14950,6 @@
     {
       "source": "src/graph/check.ts#checkGraph",
       "target": "src/context/node-file.ts#contextDirFor",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/check.ts#checkGraph",
-      "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -15148,18 +15046,6 @@
     {
       "source": "src/graph/enrich.ts#collectFileCrux",
       "target": "src/ai/crux.ts#OpenRouterCruxSummarizer.describeFile",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/enrich.ts#collectFileCrux",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/enrich.ts#enrichGraph",
-      "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -15729,12 +15615,6 @@
     },
     {
       "source": "src/graph/map.ts#buildRepoMap",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/map.ts#buildRepoMap",
       "target": "src/graph/map.ts#buildRepoMap.depthFor",
       "relation": "calls",
       "confidence": "extracted"
@@ -15774,12 +15654,6 @@
       "target": "src/graph/map.ts#dirKey",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/graph/map.ts#computeInDegree",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/graph/map.ts#formatDirHub",
@@ -15873,12 +15747,6 @@
     },
     {
       "source": "src/graph/resolve.ts#push",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/graph/resolve.ts#resolveEdges",
       "target": "src/graph/bindings.ts#FileBindings.set",
       "relation": "calls",
       "confidence": "inferred"
@@ -16188,12 +16056,6 @@
       "target": "src/graph/traverse.ts#symbolsInFile",
       "relation": "calls",
       "confidence": "extracted"
-    },
-    {
-      "source": "src/graph/traverse.ts#impactOfMany",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "src/graph/traverse.ts#resolveSymbol",
@@ -17240,18 +17102,6 @@
       "confidence": "extracted"
     },
     {
-      "source": "src/search/grep.ts#computeInDegree",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "src/search/grep.ts#grepGraph",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "src/search/grep.ts#grepGraph",
       "target": "src/search/grep.ts#computeInDegree",
       "relation": "calls",
@@ -17646,12 +17496,6 @@
       "target": "src/graph/write.ts",
       "relation": "imports",
       "confidence": "extracted"
-    },
-    {
-      "source": "test/ask-index.test.ts#reinjectBodyText",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "test/ask-index.test.ts#reinjectBodyText",
@@ -19580,12 +19424,6 @@
       "confidence": "extracted"
     },
     {
-      "source": "test/helpers.ts#BracketSynthesizer.synthesize.ensure",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
       "source": "test/helpers.ts#PassthroughSummarizer",
       "target": "test/helpers.ts#PassthroughSummarizer.summarize",
       "relation": "contains",
@@ -21021,12 +20859,6 @@
     },
     {
       "source": "viewer/main.ts#renderChips",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
-    },
-    {
-      "source": "viewer/main.ts#renderChips",
       "target": "viewer/data.ts#chipKey",
       "relation": "calls",
       "confidence": "inferred"
@@ -21078,12 +20910,6 @@
       "target": "viewer/main.ts#renderChips.rank",
       "relation": "contains",
       "confidence": "extracted"
-    },
-    {
-      "source": "viewer/main.ts#renderLegend",
-      "target": "src/graph/bindings.ts#FileBindings.set",
-      "relation": "calls",
-      "confidence": "inferred"
     },
     {
       "source": "viewer/main.ts#renderLegend",
