@@ -17,8 +17,34 @@ import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers } from "./cards.js";
 import { writeAskIndex } from "../ask/index-file.js";
-import type { GraphV1, Kind, NodeV1, Relation } from "./types.js";
+import { discoverScopes, scopeOf } from "./scopes.js";
+import type { GraphV1, Kind, NodeV1, Relation, ScopeV1 } from "./types.js";
 import type { CruxSummarizer } from "../ai/crux.js";
+
+/** Minimum non-file node count for a discovered sub-scope to stand on its own
+ * (over-split guard 3). A scope with fewer nodes than this is folded into the
+ * root scope — node counts aren't known until after the graph is assembled,
+ * so this runs here rather than in `discoverScopes`. */
+const MIN_SCOPE_NODES = 5;
+
+/** Guard 5: merge scopes with too few non-file nodes into the root scope, then
+ * re-apply the canonical single-scope collapse (rule 6) if only root is left. */
+function applyMinSubstanceGuard(scopes: ScopeV1[], nodes: NodeV1[]): ScopeV1[] {
+  if (scopes.length <= 1) return scopes;
+  const counts = new Map<string, number>();
+  for (const scope of scopes) counts.set(scope.prefix, 0);
+  for (const node of nodes) {
+    if (node.kind === "file") continue;
+    const scope = scopeOf(node.path, scopes);
+    counts.set(scope.prefix, (counts.get(scope.prefix) ?? 0) + 1);
+  }
+  const kept = scopes.filter((s) => s.prefix === "" || (counts.get(s.prefix) ?? 0) >= MIN_SCOPE_NODES);
+  if (kept.length === 0) return [{ prefix: "", label: "", markers: [] }];
+  if (kept.length === 1 && kept[0].prefix === "") {
+    return [{ prefix: "", label: "", markers: kept[0].markers }];
+  }
+  return kept;
+}
 
 export interface GraphBuildOptions {
   /** Override the output dir (default: `<root>/.context`). */
@@ -82,6 +108,7 @@ export async function buildGraph(
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
   const files = listSourceFiles(root, outDir);
+  const discoveredScopes = discoverScopes(root);
 
   const nodes: NodeV1[] = [];
   const rawEdges: RawEdge[] = [];
@@ -125,12 +152,17 @@ export async function buildGraph(
   });
   errors.push(...meaning.errors);
 
+  // Guard 5 (minimum-substance): node counts aren't known until nodes are
+  // assembled, so the merge-tiny-scopes-into-root guard runs here.
+  const scopes = applyMinSubstanceGuard(discoveredScopes, nodes);
+
   const graph: GraphV1 = {
     meta: {
       version: 1,
       nodeCount: nodes.length,
       edgeCount: edges.length,
       languages: [...langs].sort(),
+      scopes,
     },
     nodes,
     edges,

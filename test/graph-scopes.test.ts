@@ -1,0 +1,125 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  discoverScopes,
+  scopeOf,
+  discoverWorkspaceChildren,
+  scopesOfGraph,
+} from "../src/graph/scopes.js";
+import { buildGraph } from "../src/graph/build.js";
+import { readGraph, wiringPath, writeGraph } from "../src/graph/write.js";
+import { loadGraphCached } from "../src/graph/load.js";
+import type { GraphV1 } from "../src/graph/types.js";
+
+function fx(layout: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), "scopes-"));
+  for (const [p, content] of Object.entries(layout)) {
+    mkdirSync(join(dir, p, ".."), { recursive: true });
+    writeFileSync(join(dir, p), content);
+  }
+  return dir;
+}
+
+test("frontend/backend markers under one git root -> two scopes", () => {
+  const d = fx({
+    "frontend/package.json": "{}", "frontend/src/app.ts": "export const a = 1;",
+    "backend/go.mod": "module m", "backend/main.go": "package main",
+  });
+  const scopes = discoverScopes(d);
+  assert.deepEqual(scopes.map((s) => s.prefix).sort(), ["backend", "frontend"]);
+  assert.equal(scopeOf("frontend/src/app.ts", scopes).label, "frontend");
+  assert.equal(scopeOf("README.md", scopes).prefix, "");  // root scope always exists as fallback
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("workspace globs are intent: packages/* honored, deeper ignored", () => {
+  const d = fx({
+    "package.json": JSON.stringify({ workspaces: ["packages/*"] }),
+    "packages/core/package.json": "{}", "packages/core/i.ts": "1",
+    "packages/cli/package.json": "{}", "packages/cli/i.ts": "1",
+    "packages/cli/nested/package.json": "{}",  // deeper than glob -> ignored
+  });
+  const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
+  assert.deepEqual(prefixes, ["packages/cli", "packages/core"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("root-only marker -> canonical single scope", () => {
+  const d = fx({ "package.json": "{}", "src/a.ts": "1" });
+  const scopes = discoverScopes(d);
+  assert.deepEqual(scopes, [{ prefix: "", label: "", markers: ["package.json"] }]);
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("depth guard: markers 3 levels down ignored without workspace glob", () => {
+  const d = fx({ "a/b/c/package.json": "{}", "src/x.ts": "1" });
+  assert.equal(discoverScopes(d).length, 1); // root only
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("nesting collapse keeps shallower candidate", () => {
+  const d = fx({ "svc/package.json": "{}", "svc/sub/package.json": "{}", "svc/i.ts": "1" });
+  assert.deepEqual(discoverScopes(d).filter((s) => s.prefix).map((s) => s.prefix), ["svc"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("discoverWorkspaceChildren finds immediate git children only", () => {
+  const d = fx({ "repoA/x.ts": "1", "repoB/y.py": "1", "plain/z.go": "1" });
+  mkdirSync(join(d, "repoA/.git"), { recursive: true });
+  mkdirSync(join(d, "repoB/.git"), { recursive: true });
+  mkdirSync(join(d, "repoB/vendored/.git"), { recursive: true }); // nested: not a child of d
+  assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["repoA", "repoB"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
+function tsFns(n: number): string {
+  return Array.from({ length: n }, (_, i) => `export function fn${i}() { return ${i}; }`).join("\n");
+}
+
+function pyFns(n: number): string {
+  return Array.from({ length: n }, (_, i) => `def fn${i}():\n    return ${i}\n`).join("\n");
+}
+
+test("buildGraph wires meta.scopes: substantial scopes survive, tiny scopes merge into root", async () => {
+  const d = fx({
+    "frontend/package.json": "{}",
+    "frontend/app.ts": tsFns(6),
+    "backend/pyproject.toml": '[project]\nname = "backend"\n',
+    "backend/app.py": pyFns(6),
+    "tiny/package.json": "{}",
+    "tiny/app.ts": tsFns(1),
+  });
+  try {
+    await buildGraph(d);
+    const graph = readGraph(wiringPath(join(d, "graft")));
+    assert.ok(graph, "wiring graph should be written");
+    const prefixes = (graph!.meta.scopes ?? []).map((s) => s.prefix).sort();
+    assert.deepEqual(prefixes, ["backend", "frontend"]); // tiny (1 symbol) merged into root
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("old graphs without meta.scopes fall back to the canonical root scope via scopesOfGraph", () => {
+  const d = mkdtempSync(join(tmpdir(), "scopes-oldgraph-"));
+  try {
+    const graph: GraphV1 = {
+      meta: { version: 1, nodeCount: 0, edgeCount: 0, languages: [] }, // no `scopes` field
+      nodes: [],
+      edges: [],
+    };
+    const outDir = join(d, "graft");
+    writeGraph(graph, outDir);
+
+    const loaded = loadGraphCached(outDir);
+    assert.ok(loaded);
+    const scopes = scopesOfGraph(loaded!);
+    assert.deepEqual(scopes, [{ prefix: "", label: "", markers: [] }]);
+    assert.equal(scopeOf("anything/at/all.ts", scopes).prefix, "");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});

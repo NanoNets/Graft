@@ -77,12 +77,25 @@ export interface EdgeV1 {
   confidence: Confidence;
 }
 
+/** A ranking scope: a sub-project discovered by project-marker files (`package.json`,
+ * `go.mod`, ...). `prefix` is a posix path relative to the graph root ("" = root scope);
+ * `label` is the same value without a trailing slash (also "" for root); `markers` lists
+ * which marker file(s) were found in that directory. See `src/graph/scopes.ts`. */
+export interface ScopeV1 {
+  prefix: string;
+  label: string;
+  markers: string[];
+}
+
 export interface GraphV1 {
   meta: {
     version: 1;
     nodeCount: number;
     edgeCount: number;
     languages: string[];
+    /** Ranking scopes: posix path prefixes relative to the graph root, "" = root scope.
+     * Absent (old graphs) ≡ [{ prefix: "", label: "" }]. Sorted by prefix length desc. */
+    scopes?: ScopeV1[];
   };
   nodes: NodeV1[];
   edges: EdgeV1[];
