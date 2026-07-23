@@ -66,6 +66,50 @@ test("nesting collapse keeps shallower candidate", () => {
   rmSync(d, { recursive: true, force: true });
 });
 
+test("nesting collapse is layout-deterministic regardless of sibling readdir order (P10)", () => {
+  // pnpm-workspace.yaml: packages: ['a/b/*'] + a/go.mod (candidate) + a/b/w/package.json
+  // (workspace match, wins over its parent "a") + a sibling of "b" under "a" that is
+  // ALSO a bare marker candidate. Whether the sibling is named "c" or "aa" changes
+  // readdirSync's return order for "a"'s children — that must not change which
+  // candidates survive Rule 4's nesting collapse.
+  const run = (siblingName: string): string[] => {
+    const d = fx({
+      "pnpm-workspace.yaml": "packages:\n  - 'a/b/*'\n",
+      "a/go.mod": "module a\n",
+      "a/b/w/package.json": "{}",
+      [`a/${siblingName}/go.mod`]: `module ${siblingName}\n`,
+    });
+    try {
+      return discoverScopes(d)
+        .map((s) => s.prefix)
+        .sort();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+  // Normalize the sibling's own name away so the two runs compare structurally:
+  // both must resolve to "the sibling scope" + the workspace-glob scope, with the
+  // collapsed parent "a" gone in both cases.
+  const normalize = (prefixes: string[], siblingName: string): string[] =>
+    prefixes.map((p) => (p === `a/${siblingName}` ? "a/<sibling>" : p)).sort();
+
+  const withC = run("c");
+  const withAa = run("aa");
+  assert.deepEqual(normalize(withC, "c"), normalize(withAa, "aa"));
+  assert.deepEqual(normalize(withC, "c"), ["a/<sibling>", "a/b/w"]);
+});
+
+test("literal (non-glob) workspace entry resolves as a workspace match", () => {
+  const d = fx({
+    "package.json": JSON.stringify({ workspaces: ["apps/*", "docs"] }),
+    "apps/web/package.json": "{}", "apps/web/i.ts": "1",
+    "docs/package.json": "{}", "docs/index.ts": "1",
+  });
+  const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
+  assert.deepEqual(prefixes, ["apps/web", "docs"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
 test("discoverWorkspaceChildren finds immediate git children only", () => {
   const d = fx({ "repoA/x.ts": "1", "repoB/y.py": "1", "plain/z.go": "1" });
   mkdirSync(join(d, "repoA/.git"), { recursive: true });

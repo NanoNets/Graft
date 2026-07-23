@@ -21,7 +21,7 @@
  *  7. `label` = `prefix` (both "" for root); ordering is prefix-length desc,
  *     then lexicographic.
  */
-import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
 import { SKIP_DIRS } from "../ingest/fs.js";
 import type { GraphV1, ScopeV1 } from "./types.js";
@@ -118,6 +118,20 @@ function resolveGlob(root: string, pattern: string): string[] {
   } else if (norm.endsWith("/*")) {
     base = norm.slice(0, -2);
     recursive = false;
+  } else if (!norm.includes("*")) {
+    // Literal entry (no glob chars), e.g. `packages: ['apps/*', 'docs']` — a plain
+    // workspace-list entry that names a real directory counts as a workspace match
+    // in its own right, same as a resolved glob would. Without this, a literal
+    // entry silently resolves to nothing while Rule 2 still strips its
+    // `package.json` marker (it's a JS-family dir that never matched the glob
+    // set), de-scoping a real workspace package.
+    try {
+      return existsSync(join(root, norm)) && statSync(join(root, norm)).isDirectory()
+        ? [norm]
+        : [];
+    } catch {
+      return [];
+    }
   } else {
     return []; // unsupported glob form
   }
@@ -202,23 +216,65 @@ export function discoverScopes(root: string): ScopeV1[] {
     else candidates.set(dir, { markers: markerMap.get(dir) ?? [], isWorkspace: true });
   }
 
-  // Rule 4: nesting collapse.
-  for (const prefix of [...candidates.keys()]) {
-    if (prefix === "" || !candidates.has(prefix)) continue;
-    const entry = candidates.get(prefix)!;
+  // Rule 4: nesting collapse — evaluated in two ordered passes against FROZEN
+  // snapshots (deletions are marked first, then applied), never against the
+  // live `candidates` map mid-iteration. That's what makes the outcome
+  // layout-determined instead of `readdirSync`/Map-iteration-order-determined:
+  // deciding "does ancestor X still exist" by checking a map you're
+  // simultaneously deleting from means the answer depends on which candidate
+  // happens to be visited first, which depends on directory read order.
+  //
+  //   Pass A — workspace override (uses the ORIGINAL frozen candidate set):
+  //     for every workspace-glob candidate, find its nearest candidate
+  //     ancestor in the original set; if that ancestor is not itself a
+  //     workspace match, queue it for deletion ("a workspace-glob match wins
+  //     over its parent"). All Pass-A deletions are collected first, then
+  //     applied together — so it doesn't matter which workspace candidate is
+  //     considered first, the ancestor lookups all read the same frozen set.
+  //     Applying them produces the "post-glob-resolution" stable set.
+  //
+  //   Pass B — plain nesting collapse (uses the POST-A set, NOT the original
+  //     frozen set): for every remaining NON-workspace candidate, find its
+  //     nearest ancestor in the post-A set; if one exists, queue the deeper
+  //     candidate for deletion (keep the shallower ancestor). Workspace
+  //     candidates are never deletion targets here — Pass A already resolved
+  //     a workspace match's relationship to its blocking parent, so it always
+  //     survives regardless of any remaining (grand)ancestor.
+  //
+  // Running Pass B against the post-A set (rather than the frozen one) is
+  // what makes a Pass-A deletion visible downstream: a candidate whose only
+  // nesting ancestor was itself removed by the workspace override is no
+  // longer "nested" and survives — regardless of whether that candidate or
+  // the workspace match happened to be discovered first on disk.
+  const findNearestAncestorCandidate = (
+    prefix: string,
+    set: ReadonlyMap<string, Candidate>,
+  ): string | null => {
     const segs = prefix.split("/");
     for (let i = segs.length - 1; i >= 1; i--) {
       const ancestor = segs.slice(0, i).join("/");
-      const ancestorEntry = candidates.get(ancestor);
-      if (!ancestorEntry) continue;
-      if (entry.isWorkspace && !ancestorEntry.isWorkspace) {
-        candidates.delete(ancestor); // workspace-glob match wins over its parent
-      } else {
-        candidates.delete(prefix); // keep the shallower ancestor
-      }
-      break; // only the nearest ancestor candidate matters
+      if (set.has(ancestor)) return ancestor;
     }
+    return null;
+  };
+
+  const frozen: ReadonlyMap<string, Candidate> = new Map(candidates);
+
+  const passADeletes = new Set<string>();
+  for (const [prefix, entry] of frozen) {
+    if (!entry.isWorkspace) continue;
+    const ancestor = findNearestAncestorCandidate(prefix, frozen);
+    if (ancestor && !frozen.get(ancestor)!.isWorkspace) passADeletes.add(ancestor);
   }
+  for (const prefix of passADeletes) candidates.delete(prefix);
+
+  const postA: ReadonlyMap<string, Candidate> = new Map(candidates);
+  const passBDeletes = new Set<string>();
+  for (const [prefix, entry] of postA) {
+    if (prefix === "" || entry.isWorkspace) continue;
+    if (findNearestAncestorCandidate(prefix, postA)) passBDeletes.add(prefix);
+  }
+  for (const prefix of passBDeletes) candidates.delete(prefix);
 
   const survivors = [...candidates.entries()].map(([prefix, c]) => ({ prefix, ...c }));
 
