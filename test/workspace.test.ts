@@ -241,6 +241,26 @@ test("federated ask: --in <child> narrows to that child; --in <unknown> errors l
   rmSync(p, { recursive: true, force: true });
 });
 
+test("federated ask: explicit --in <weak child> bypasses the cross-child gate (footer hint is reachable)", async () => {
+  // repoJunk matches `position` only in a body token — gated OUT of the fused
+  // ranking and reported in alsoMatched with a `narrow with --in repoJunk` hint.
+  // Following that hint (--in repoJunk) MUST return repoJunk's hits, not empty:
+  // an explicit single-child scope has no cross-child fairness concern.
+  const p = workspaceFx({
+    repoStrong: { "m.ts": "export function scrollbarOverlay() { return computeThumb(); }\nfunction computeThumb() { return 1; }\n" },
+    repoJunk: { "m.ts": "export function drawFrame() { const position = 0; return position; }\nfunction helper() { return 1; }\n" },
+  });
+  await buildWorkspace(p);
+  // Unscoped: repoJunk is gated to alsoMatched (documents the hint the user follows).
+  const unscoped = federateAsk(p, undefined, "scrollbar overlay position", { limit: 8 });
+  assert.ok(unscoped.scopes?.alsoMatched.some((m) => m.scope === "repoJunk"), "junk reported in alsoMatched");
+  // Following the hint: --in repoJunk returns repoJunk's own (weak) hits.
+  const scoped = federateAsk(p, undefined, "scrollbar overlay position", { limit: 8, in: "repoJunk" });
+  assert.ok(scoped.hits.length > 0, "explicit --in on a gate-weak child must not return empty");
+  assert.ok(scoped.hits.every((h) => h.scope!.startsWith("repoJunk")), "--in repoJunk stays in repoJunk");
+  rmSync(p, { recursive: true, force: true });
+});
+
 for (const padN of [0, 200]) {
   test(`strength gate: body-only junk (\`position\`) gated out at ${padN ? "~200" : "~30"}-node scale`, async () => {
     const strongPad = padN ? { "pad.ts": pad(padN) } : {};

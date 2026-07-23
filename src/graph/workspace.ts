@@ -265,10 +265,17 @@ export function federateAsk(
   // OR its overall coverage is broad enough to be real (≥ HIGH_FLOOR). A
   // body-only collision has coverageStrong 0 and coverage ~0.3 → gated to
   // alsoMatched. Both floors are absolute + scale-invariant (see their docs).
+  // The gate is a cross-child FAIRNESS mechanism: it stops a weak body-token
+  // collision in one repo from federating beside another repo's genuine hits.
+  // An explicit `--in <child>` removes all cross-child competition — the caller
+  // has already chosen the scope — so the gate must NOT apply there, or the
+  // `also matched: <child> — narrow with --in <child>` hint would lead to an
+  // empty result for exactly the weak child it points at. With `onlyChild` set,
+  // every run (there is at most one) survives, matching a standalone child ask.
   const gatedOut: { scope: string; bestId: string }[] = [];
   const survivors: ChildRun[] = [];
   for (const run of runs) {
-    if (run.coverageStrong >= STRONG_FLOOR || run.coverage >= HIGH_FLOOR) survivors.push(run);
+    if (onlyChild || run.coverageStrong >= STRONG_FLOOR || run.coverage >= HIGH_FLOOR) survivors.push(run);
     else gatedOut.push({ scope: run.child, bestId: prefixPointer(run.child, run.hits[0].pointer) });
   }
 
