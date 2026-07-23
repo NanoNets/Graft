@@ -169,7 +169,7 @@ export function formatOrientation(indexMd: string, budgetBytes = 1500): string {
   const directive =
     `[graft] This repo is indexed by graft. To find or understand code, reach for graft first — it cites exact file:line and is faster than grep/read:\n` +
     `  • graft ask "<task>" --source   — the relevant code, inline (skip the file read)\n` +
-    `  • graft callers <sym> · graft impact <sym>   — who/what breaks if it changes\n` +
+    `  • graft callers <sym> --depth 2   — who/what breaks if it changes\n` +
     `  • graft grep "<literal>"   — exhaustive search, grouped by enclosing symbol\n` +
     `  • graft skeleton <file> · graft map   — a file's API · whole-repo orientation\n`;
   return `${directive}\nrepo map (graft/INDEX.md):\n${indexMd.slice(0, budgetBytes)}`;

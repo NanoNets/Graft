@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildRepoMap, formatRepoMap } from "../src/graph/map.js";
-import type { GraphV1, NodeV1, EdgeV1, Kind, Relation } from "../src/graph/types.js";
+import type { GraphV1, NodeV1, EdgeV1, Kind, Relation, ScopeV1 } from "../src/graph/types.js";
 
 let counter = 0;
 
@@ -58,6 +58,15 @@ function graphOf(nodes: NodeV1[], edges: EdgeV1[]): GraphV1 {
     nodes,
     edges,
   };
+}
+
+/** Same as `graphOf`, plus `meta.scopes` — the same hand-set-scopes pattern
+ * `ask.test.ts`'s regression pin uses, so a multi-scope fixture doesn't need a
+ * real repo build just to exercise `buildRepoMap`'s scope-aware branch. */
+function graphOfWithScopes(nodes: NodeV1[], edges: EdgeV1[], scopes: ScopeV1[]): GraphV1 {
+  const g = graphOf(nodes, edges);
+  g.meta.scopes = scopes;
+  return g;
 }
 
 // ── totals ────────────────────────────────────────────────────────────────
@@ -231,6 +240,138 @@ test("buildRepoMap: dirs beyond maxDirs are capped and counted into dropped", ()
   const map = buildRepoMap(graphOf(nodes, []), { maxDirs: 2 });
   assert.equal(map.dirs.length, 2);
   assert.equal(map.dropped, 3);
+});
+
+// ── scope-aware grouping (multi-scope repos) ────────────────────────────
+
+/** frontend/ (ts) and backend/ (py) as sibling scopes, each with its own
+ * sub-dirs so the per-scope dir breakdown has something to group. */
+function twoScopeFixture(): GraphV1 {
+  const nodes = [
+    fileNode("frontend/src/a.ts"),
+    symNode("frontend/src/a.ts", "one"),
+    fileNode("frontend/lib/b.ts"),
+    symNode("frontend/lib/b.ts", "two"),
+    symNode("frontend/lib/b.ts", "three"),
+    fileNode("backend/app.py"),
+    symNode("backend/app.py", "four"),
+  ];
+  const scopes: ScopeV1[] = [
+    { prefix: "backend", label: "backend", markers: ["pyproject.toml"] },
+    { prefix: "frontend", label: "frontend", markers: ["package.json"] },
+  ];
+  return graphOfWithScopes(nodes, [], scopes);
+}
+
+test("buildRepoMap: single-scope output is byte-identical whether meta.scopes is absent or the canonical root form", () => {
+  const nodes = [fileNode("src/a.ts"), symNode("src/a.ts", "fn")];
+  const bare = buildRepoMap(graphOf(nodes, []));
+  const canonical = buildRepoMap(
+    graphOfWithScopes(nodes, [], [{ prefix: "", label: "", markers: [] }]),
+  );
+  assert.deepEqual(bare, canonical, "canonical single root scope must not change buildRepoMap's output");
+  assert.equal(bare.scopes, undefined, "single-scope RepoMap carries no `scopes` field");
+});
+
+test("buildRepoMap: multi-scope graph groups dirs by scope first, dirs within scope second", () => {
+  const map = buildRepoMap(twoScopeFixture());
+
+  assert.equal(map.dirs.length, 0, "multi-scope: the flat `dirs` field is empty, `scopes` carries the breakdown");
+  assert.ok(map.scopes, "multi-scope RepoMap carries a `scopes` field");
+  assert.deepEqual(map.scopes!.map((s) => s.scope), ["backend/", "frontend/"], "scope order follows meta.scopes");
+
+  const backend = map.scopes!.find((s) => s.scope === "backend/")!;
+  // backend has a single, root-level (within the scope) file — same rule a
+  // single-scope repo-root file follows: with nothing deeper to group by, the
+  // file's own path becomes its group (see `dirKey`'s module doc).
+  assert.deepEqual(backend.dirs.map((d) => d.path), ["backend/app.py"]);
+  assert.equal(backend.dirs[0].symbols, 1);
+
+  const frontend = map.scopes!.find((s) => s.scope === "frontend/")!;
+  // frontend has two sub-dirs (src, lib) — dirs within the scope, sorted by
+  // symbol count desc, same rule as single-scope dirs.
+  assert.deepEqual(
+    frontend.dirs.map((d) => d.path),
+    ["frontend/lib", "frontend/src"],
+    "frontend's own dirs are grouped and sorted independently of backend's",
+  );
+  assert.equal(frontend.dirs.find((d) => d.path === "frontend/lib")!.symbols, 2);
+  assert.equal(frontend.dirs.find((d) => d.path === "frontend/src")!.symbols, 1);
+});
+
+test("buildRepoMap: a root scope alongside named scopes gets its own '(root)' group for files outside any sub-project", () => {
+  const nodes = [
+    fileNode("README.md"),
+    fileNode("frontend/src/a.ts"),
+    symNode("frontend/src/a.ts", "one"),
+  ];
+  // An explicit "" (root) entry alongside "frontend" — two scopes, so this
+  // takes the multi-scope path (a lone non-root scope with no "" entry is
+  // the single-scope case: same `scopes.length <= 1` convention `ask.ts`
+  // uses, since `scopeOf` synthesizes a fallback root for it anyway).
+  const scopes: ScopeV1[] = [
+    { prefix: "", label: "", markers: [] },
+    { prefix: "frontend", label: "frontend", markers: ["package.json"] },
+  ];
+  const map = buildRepoMap(graphOfWithScopes(nodes, [], scopes));
+
+  assert.deepEqual(map.scopes!.map((s) => s.scope).sort(), ["(root)", "frontend/"]);
+  const root = map.scopes!.find((s) => s.scope === "(root)")!;
+  assert.deepEqual(root.dirs.map((d) => d.path), ["README.md"]);
+});
+
+test("buildRepoMap: the >60% split threshold is evaluated PER SCOPE, not pooled across scopes", () => {
+  // backend alone holds 4 files, 3 of which (75%) sit under backend/svc — that
+  // must split into backend/svc/a, backend/svc/b even though svc is nowhere
+  // near 60% of the WHOLE graph's files (it's 3 of 5 total, i.e. exactly at
+  // the single-scope-pooled threshold that wouldn't trip the split at all).
+  const nodes = [
+    fileNode("backend/svc/a/x.ts"),
+    fileNode("backend/svc/b/y.ts"),
+    fileNode("backend/svc/c/z.ts"),
+    fileNode("backend/other.ts"),
+    fileNode("frontend/main.ts"),
+  ];
+  const scopes: ScopeV1[] = [
+    { prefix: "backend", label: "backend", markers: ["go.mod"] },
+    { prefix: "frontend", label: "frontend", markers: ["package.json"] },
+  ];
+  const map = buildRepoMap(graphOfWithScopes(nodes, [], scopes));
+  const backend = map.scopes!.find((s) => s.scope === "backend/")!;
+  const paths = backend.dirs.map((d) => d.path);
+  assert.ok(!paths.includes("backend/svc"), "svc holds 75% of backend's own files — must split");
+  assert.ok(paths.includes("backend/svc/a"));
+  assert.ok(paths.includes("backend/svc/b"));
+  assert.ok(paths.includes("backend/svc/c"));
+  assert.ok(paths.includes("backend/other.ts"), "backend's non-svc file is its own group (root-level-in-scope file)");
+});
+
+test("buildRepoMap: maxDirs caps each scope's dirs independently, with per-scope dropped counts", () => {
+  const nodes: NodeV1[] = [];
+  for (const dir of ["backend/a", "backend/b", "backend/c"]) nodes.push(fileNode(`${dir}/x.ts`));
+  nodes.push(fileNode("frontend/x.ts"));
+  const scopes: ScopeV1[] = [
+    { prefix: "backend", label: "backend", markers: ["go.mod"] },
+    { prefix: "frontend", label: "frontend", markers: ["package.json"] },
+  ];
+  const map = buildRepoMap(graphOfWithScopes(nodes, [], scopes), { maxDirs: 1 });
+  const backend = map.scopes!.find((s) => s.scope === "backend/")!;
+  const frontend = map.scopes!.find((s) => s.scope === "frontend/")!;
+  assert.equal(backend.dirs.length, 1);
+  assert.equal(backend.dropped, 2, "backend alone has 3 dirs, capped to 1 → 2 dropped");
+  assert.equal(frontend.dirs.length, 1);
+  assert.equal(frontend.dropped, 0, "frontend only has 1 dir — nothing dropped");
+});
+
+test("formatRepoMap: multi-scope renders one '## scope/' heading per scope, dirs nested under it", () => {
+  const text = formatRepoMap(buildRepoMap(twoScopeFixture()));
+  assert.match(text, /^## backend\/$/m);
+  assert.match(text, /^## frontend\/$/m);
+  const backendIdx = text.indexOf("## backend/");
+  const frontendIdx = text.indexOf("## frontend/");
+  const frontendLibIdx = text.indexOf("frontend/lib/", frontendIdx);
+  assert.ok(backendIdx < frontendIdx, "scopes render in meta.scopes order");
+  assert.ok(frontendIdx < frontendLibIdx, "frontend's own dirs render under its own heading, not backend's");
 });
 
 // ── formatRepoMap ────────────────────────────────────────────────────────

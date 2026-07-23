@@ -32,6 +32,9 @@ hotspots), no LLM, no key.
   transitively for the full blast radius. For structural questions, skip
   ranking and use this directly.
 - Or browse: \`graft/INDEX.md\` lists every node; follow the links.
+- Monorepos and folders of multiple repos rank fairly across sub-projects —
+  hits carry \`[scope/]\` labels naming which one they're from. Narrow with
+  \`graft ask "<task>" --in <scope>/\` once you know where you're working.
 
 If a returned span is truncated ("+N more lines"), open the file at that exact
 range before finalizing. Only open source files when a node genuinely lacks a

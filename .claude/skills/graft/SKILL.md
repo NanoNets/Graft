@@ -32,6 +32,10 @@ same understanding costs thousands.
 - **First contact with an unfamiliar repo** → `graft map` — token-budgeted
   orientation (dir clusters, hubs, hotspots). Read the hub cards it names rather
   than asking per subsystem.
+- **Monorepos / a folder of multiple repos** → graft ranks fairly across
+  sub-projects instead of letting the biggest one drown the rest; hits carry
+  `[scope/]` labels naming which sub-project they're from. Know where you're
+  working? Narrow with `graft ask "<task>" --in <scope>/`.
 
 You can also grep / ls / cat inside `graft/` directly (the nodes are plain
 markdown; `graft/INDEX.md` lists them) — but the commands above are faster and

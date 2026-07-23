@@ -13,6 +13,8 @@ test('canonical body names the three essentials', () => {
   assert.match(b, /truncated/i, 'tells the agent to follow up on truncated spans');
   assert.match(b, /graft grep/, 'routes sweeps to graft grep');
   assert.match(b, /graft map/, 'tells the agent to orient with graft map before exploring');
+  assert.match(b, /\[scope\/\]/, 'teaches the [scope/] label on multi-scope/monorepo hits');
+  assert.match(b, /--in <scope>\//, 'teaches narrowing with ask --in <scope>/');
   assert.ok(!/\bhook|statusline\b/i.test(b), 'no host-specific machinery in the shared body');
 });
 
