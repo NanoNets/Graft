@@ -1,19 +1,19 @@
 ---
-name: Code Summarization and Synthesis
-slug: code-summarization-and-synthesis
-type: system
+name: Code Summarization
+slug: code-summarization
+type: concept
 sources:
   - path: src/ai/crux.ts
-    hash: e81750029e4c8641cdaf2b4894f595297839e07a73076e4cdac1522515f923a8
+    hash: 81323b622400aadae1fd584ea09c2016ccf1bf4f14654b648ee50b1b13bd4c68
   - path: src/ai/summarize.ts
-    hash: 6e67f3866c75d88a8b1d265e510578f3e3014d9cfd8b2469e6e4afbd67977f93
+    hash: 8dbec8d421f079ec67c81701d28ed1eb648b64e074b338538d03b9063941cffd
   - path: src/ai/synthesize.ts
-    hash: 982ab91da10ae51fdba64466cbb614db14a51f2e100bb12a72178961d8dd97d7
-sources_digest: 1916d34902c4bd664703e6c5da273beb26c2be5f55e971b3cc3f590f65cde3c7
+    hash: 7c6124323d5112abb15f0adea21962e083ea38234a8771832a71a59350fdc362
+sources_digest: 2df073fd00fbefc26907027a923c10609cf005d9cbb727ff2917374d03b251dc
 links:
-  - to: graph-construction
-    relation: produces
-    description: Generates structured nodes for the architecture graph.
+  - to: benchmarking-system
+    relation: validates
+    description: Summarization is validated through benchmarking results.
 generator:
   version: 1
 covers:
@@ -31,40 +31,40 @@ covers:
     at: 'src/ai/crux.ts:L42-L44'
   - symbol: numberLines
     kind: function
-    at: 'src/ai/crux.ts:L63-L70'
+    at: 'src/ai/crux.ts:L81-L88'
   - symbol: userContent
     kind: function
-    at: 'src/ai/crux.ts:L72-L81'
+    at: 'src/ai/crux.ts:L90-L99'
   - symbol: parseResults
     kind: function
-    at: 'src/ai/crux.ts:L84-L98'
+    at: 'src/ai/crux.ts:L102-L114'
   - symbol: num
     kind: function
-    at: 'src/ai/crux.ts:L88-L88'
-  - symbol: OpenRouterCruxSummarizer
+    at: 'src/ai/crux.ts:L104-L104'
+  - symbol: ChatCruxSummarizer
     kind: class
-    at: 'src/ai/crux.ts:L101-L127'
+    at: 'src/ai/crux.ts:L117-L140'
   - symbol: constructor
     kind: method
-    at: 'src/ai/crux.ts:L105-L112'
+    at: 'src/ai/crux.ts:L118-L118'
   - symbol: describeFile
     kind: method
-    at: 'src/ai/crux.ts:L114-L126'
+    at: 'src/ai/crux.ts:L120-L139'
   - symbol: Summarizer
     kind: interface
     at: 'src/ai/summarize.ts:L13-L15'
   - symbol: userContent
     kind: function
     at: 'src/ai/summarize.ts:L28-L34'
-  - symbol: OpenRouterSummarizer
+  - symbol: ChatSummarizer
     kind: class
-    at: 'src/ai/summarize.ts:L37-L61'
+    at: 'src/ai/summarize.ts:L37-L51'
   - symbol: constructor
     kind: method
-    at: 'src/ai/summarize.ts:L41-L48'
+    at: 'src/ai/summarize.ts:L38-L38'
   - symbol: summarize
     kind: method
-    at: 'src/ai/summarize.ts:L50-L60'
+    at: 'src/ai/summarize.ts:L40-L50'
   - symbol: SynthLink
     kind: interface
     at: 'src/ai/synthesize.ts:L12-L16'
@@ -83,24 +83,24 @@ covers:
   - symbol: clean
     kind: function
     at: 'src/ai/synthesize.ts:L101-L123'
-  - symbol: OpenRouterSynthesizer
+  - symbol: ChatSynthesizer
     kind: class
-    at: 'src/ai/synthesize.ts:L135-L164'
+    at: 'src/ai/synthesize.ts:L128-L154'
   - symbol: constructor
     kind: method
-    at: 'src/ai/synthesize.ts:L139-L142'
+    at: 'src/ai/synthesize.ts:L129-L129'
   - symbol: synthesize
     kind: method
-    at: 'src/ai/synthesize.ts:L144-L163'
+    at: 'src/ai/synthesize.ts:L131-L153'
 ---
 <!-- context:generated:start -->
 ## Summary
 
-This component focuses on summarizing code definitions and synthesizing a structured architecture graph from file summaries, enhancing the understanding of the codebase's architecture.
+This concept encompasses the methods and strategies used to summarize code definitions and generate meaningful insights from source files, enhancing code navigation and understanding for engineers.
 
 ## Related
 
-- produces [[graph-construction]] — Generates structured nodes for the architecture graph.
+- validates [[benchmarking-system]] — Summarization is validated through benchmarking results.
 <!-- context:generated:end -->
 
 ## Notes

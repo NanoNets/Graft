@@ -1,4 +1,4 @@
-# test/helpers.ts
+# test/helpers.ts · [[deterministic-testing]] [[test-helpers]]
 
 This file provides test doubles for offline, deterministic testing of components without external dependencies.
 

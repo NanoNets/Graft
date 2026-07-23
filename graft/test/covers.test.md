@@ -1,4 +1,4 @@
-# test/covers.test.ts
+# test/covers.test.ts · [[testing-and-validation]]
 
 This test suite verifies that the wiring build correctly populates the 'covers' field in concept nodes and maintains stability across builds.
 

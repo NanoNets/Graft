@@ -1,7 +1,9 @@
 # src/cli.ts
 
-This file implements the `graft` CLI tool for building and maintaining a context graph from code, ensuring it stays in sync with the repository.
+Defines the command-line interface for the graft tool, enabling various operations on the codebase's context graph.
 
-- engineFrom · function · L43-L46 — Creates an instance of the Graft engine configured with the specified context directory.
-- fmt · function · L82-L86 — Formats a record of counts into a human-readable string for console output.
-- traverseAction · function · L257-L263 — function traverseAction(kind: import("./graph/traverse-cli.js").TraverseKind)
+- GlobalOpts · interface · L48-L54 — Holds the global options for the CLI, allowing configuration of the context graph generation and LLM provider settings.
+- cliConfig · function · L57-L66 — Constructs the configuration object for the engine based on CLI options, ensuring the correct parameters are used for graph generation.
+- engineFrom · function · L68-L70 — Creates an instance of the Graft engine using the current CLI configuration, enabling graph operations.
+- fmt · function · L106-L110 — Formats a record of counts into a human-readable string for console output.
+- traverseAction · function · L287-L293 — Handles traversal commands for graph analysis, allowing users to query relationships between symbols in the codebase.

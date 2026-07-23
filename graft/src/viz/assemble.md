@@ -1,4 +1,4 @@
-# src/viz/assemble.ts
+# src/viz/assemble.ts · [[visualization-and-serving]]
 
 Assembles a comprehensive graph document from markdown files in a context directory, ensuring that only valid nodes and edges are included.
 

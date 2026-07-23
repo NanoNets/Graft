@@ -1,3 +1,5 @@
 # src/claude/skill-template.ts
 
-- skillTemplate · function · L6-L76 — function skillTemplate(): string
+Provides a structured template for the graft Claude Code skill, enabling efficient onboarding and understanding of the codebase.
+
+- skillTemplate · function · L6-L76 — Generates a markdown string that serves as a comprehensive guide for using the graft tool effectively within a code repository.

@@ -6,7 +6,7 @@
  * incidental identifier. Each node is attributed to the source files it is
  * grounded in, so provenance (and staleness) stays exact.
  */
-import OpenAI from "openai";
+import type { ChatModel } from "./llm/types.js";
 
 /** A directed edge to another node, by node name (resolved to a slug later). */
 export interface SynthLink {
@@ -122,44 +122,34 @@ function clean(nodes: unknown): SynthNode[] {
   return out;
 }
 
-const RECORD_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "record_graph",
-    description: "Record the curated architecture-graph nodes and their links.",
-    parameters: NODES_SCHEMA,
-  },
-};
+const RECORD_TOOL = "record_graph";
 
-/** Synthesizer backed by OpenRouter's OpenAI-compatible chat API (tool calling). */
-export class OpenRouterSynthesizer implements Synthesizer {
-  private client: OpenAI;
-  private model: string;
-
-  constructor(apiKey: string, model: string, baseUrl = "https://openrouter.ai/api/v1") {
-    this.client = new OpenAI({ apiKey, baseURL: baseUrl, defaultHeaders: { "X-Title": "Context Graph Engine" } });
-    this.model = model;
-  }
+/** Synthesizer backed by any {@link ChatModel} via forced tool calling. */
+export class ChatSynthesizer implements Synthesizer {
+  constructor(private model: ChatModel) {}
 
   async synthesize(files: FileSummary[]): Promise<SynthNode[]> {
     if (files.length === 0) return [];
-    const response = await this.client.chat.completions.create({
-      model: this.model,
+    const res = await this.model.create({
       temperature: 0,
-      tools: [RECORD_TOOL],
-      tool_choice: { type: "function", function: { name: "record_graph" } },
+      maxTokens: 8192,
+      tools: [
+        {
+          name: RECORD_TOOL,
+          description: "Record the curated architecture-graph nodes and their links.",
+          parameters: NODES_SCHEMA as unknown as Record<string, unknown>,
+        },
+      ],
+      responseFormat: { kind: "tool", name: RECORD_TOOL },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent(files) },
       ],
     });
-    const call = response.choices[0]?.message?.tool_calls?.[0];
-    if (!call || call.type !== "function") return [];
-    try {
-      return clean((JSON.parse(call.function.arguments) as { nodes?: unknown }).nodes);
-    } catch {
-      return [];
-    }
+    const call = res.toolCalls[0];
+    if (!call) return [];
+    // `args` is already a parsed object — no JSON.parse.
+    return clean((call.args as { nodes?: unknown })?.nodes);
   }
 }
 

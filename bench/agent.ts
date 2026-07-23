@@ -8,12 +8,12 @@
  * We run a *manual* loop so we can read `usage` off every turn and sum it, so
  * the reported token cost is exact rather than estimated.
  */
-import type OpenAI from "openai";
 import { readFileSync, statSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, relative, join, isAbsolute, sep } from "node:path";
 import { SKIP_DIRS, MAX_FILE_BYTES } from "../src/ingest/fs.js";
 import { ask, formatAsk, skeleton, formatSkeleton } from "../src/ask/ask.js";
-import { makeClient, AGENT_MODEL } from "./llm.js";
+import { makeChatModel, AGENT_MODEL } from "./llm.js";
+import type { ChatModel, Message, ToolSpec } from "../src/ai/llm/types.js";
 
 export { AGENT_MODEL };
 
@@ -38,7 +38,7 @@ export interface RunAgentOptions {
    * front; the agent pays for graph context only when it asks for it. */
   graft?: { contextDir: string };
   maxIterations?: number;
-  client?: OpenAI;
+  model?: ChatModel;
 }
 
 const SYSTEM_PROMPT =
@@ -110,92 +110,74 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp("^" + re + "$");
 }
 
-/** Tool definitions in OpenAI/OpenRouter function-calling format. */
-const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+/** Tool definitions in provider-neutral form. */
+const TOOLS: ToolSpec[] = [
   {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read a UTF-8 text file under the root. Optionally limit to a line range.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string", description: "Path relative to the root" },
-          start_line: { type: "integer", description: "1-based first line (optional)" },
-          end_line: { type: "integer", description: "1-based last line (optional)" },
-        },
-        required: ["path"],
+    name: "read_file",
+    description: "Read a UTF-8 text file under the root. Optionally limit to a line range.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path relative to the root" },
+        start_line: { type: "integer", description: "1-based first line (optional)" },
+        end_line: { type: "integer", description: "1-based last line (optional)" },
       },
+      required: ["path"],
     },
   },
   {
-    type: "function",
-    function: {
-      name: "grep",
-      description: "Search file contents with a JavaScript regular expression. Returns matching lines as path:line: text.",
-      parameters: {
-        type: "object",
-        properties: {
-          pattern: { type: "string", description: "Regular expression" },
-          path: { type: "string", description: "Restrict to this subdirectory or file (optional)" },
-          ignore_case: { type: "boolean", description: "Case-insensitive match (optional)" },
-        },
-        required: ["pattern"],
+    name: "grep",
+    description: "Search file contents with a JavaScript regular expression. Returns matching lines as path:line: text.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Regular expression" },
+        path: { type: "string", description: "Restrict to this subdirectory or file (optional)" },
+        ignore_case: { type: "boolean", description: "Case-insensitive match (optional)" },
       },
+      required: ["pattern"],
     },
   },
   {
-    type: "function",
-    function: {
-      name: "glob",
-      description: "List files whose root-relative path matches a glob (e.g. src/**/*.ts).",
-      parameters: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] },
-    },
+    name: "glob",
+    description: "List files whose root-relative path matches a glob (e.g. src/**/*.ts).",
+    parameters: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] },
   },
   {
-    type: "function",
-    function: {
-      name: "list_dir",
-      description: "List the entries of a directory under the root.",
-      parameters: {
-        type: "object",
-        properties: { path: { type: "string", description: "Directory relative to the root (default: root)" } },
-        required: [],
-      },
+    name: "list_dir",
+    description: "List the entries of a directory under the root.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "Directory relative to the root (default: root)" } },
+      required: [],
     },
   },
 ];
 
 /** Extra tools for the pull arm: the graft graph as an on-demand service. */
-const GRAFT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+const GRAFT_TOOLS: ToolSpec[] = [
   {
-    type: "function",
-    function: {
-      name: "graft_ask",
-      description:
-        "Query this repo's prebuilt context graph in plain words. Returns ranked symbols/concepts with exact file:line spans and the relevant source inlined — the cheapest way to locate and understand code. Prefer it over grep/read_file for orientation; use structural phrasings too ('who calls X').",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "What you want to understand, in plain words" },
-          limit: { type: "integer", description: "Max results (default 5)" },
-          full: { type: "boolean", description: "Inline whole definition spans instead of crux excerpts" },
-        },
-        required: ["query"],
+    name: "graft_ask",
+    description:
+      "Query this repo's prebuilt context graph in plain words. Returns ranked symbols/concepts with exact file:line spans and the relevant source inlined — the cheapest way to locate and understand code. Prefer it over grep/read_file for orientation; use structural phrasings too ('who calls X').",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What you want to understand, in plain words" },
+        limit: { type: "integer", description: "Max results (default 5)" },
+        full: { type: "boolean", description: "Inline whole definition spans instead of crux excerpts" },
       },
+      required: ["query"],
     },
   },
   {
-    type: "function",
-    function: {
-      name: "graft_skeleton",
-      description:
-        "Signatures-only view of one file — every definition's signature + line span, ~10× cheaper than reading the file.",
-      parameters: {
-        type: "object",
-        properties: { file: { type: "string", description: "Repo-relative file path" } },
-        required: ["file"],
-      },
+    name: "graft_skeleton",
+    description:
+      "Signatures-only view of one file — every definition's signature + line span, ~10× cheaper than reading the file.",
+    parameters: {
+      type: "object",
+      properties: { file: { type: "string", description: "Repo-relative file path" } },
+      required: ["file"],
     },
   },
 ];
@@ -277,7 +259,7 @@ function runTool(root: string, name: string, input: any, graft?: { contextDir: s
 }
 
 export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
-  const client = opts.client ?? makeClient();
+  const model = opts.model ?? makeChatModel(AGENT_MODEL);
   const root = resolve(opts.root);
   const maxIterations = opts.maxIterations ?? 15;
 
@@ -287,29 +269,27 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
       `<graph_context>\n${opts.contextBundle}\n</graph_context>\n\nQuestion: ${opts.question}`
     : `Question: ${opts.question}`;
 
-  // Content is expressed as parts so we can attach Anthropic prompt-caching
-  // breakpoints (OpenRouter forwards `cache_control` to Anthropic). The system
-  // + tools + the (possibly large) bundle are a stable head, cached once; a
-  // breakpoint then slides onto the newest tool result each turn so the entire
-  // prior transcript is a cache read rather than re-billed at full price —
-  // which is how Claude Code actually runs, and what makes the token numbers fair.
-  const cc = { type: "ephemeral" as const };
+  // Cache breakpoints (Message.cacheBreakpoint) let the adapter mark a stable
+  // prefix as cacheable. The system + tools + the (possibly large) bundle are a
+  // stable head, cached once; a breakpoint then slides onto the newest tool
+  // result each turn so the entire prior transcript is a cache read rather than
+  // re-billed at full price — which is how Claude Code actually runs, and what
+  // makes the token numbers fair.
   const systemText = opts.graft
     ? SYSTEM_PROMPT +
       " This repo also has a prebuilt context graph: the graft_ask and graft_skeleton tools query it and are much cheaper than grep/read_file for finding and understanding code."
     : SYSTEM_PROMPT;
   const tools = opts.graft ? [...TOOLS, ...GRAFT_TOOLS] : TOOLS;
-  const messages: any[] = [
-    { role: "system", content: [{ type: "text", text: systemText, cache_control: cc }] },
-    { role: "user", content: [{ type: "text", text: userText, cache_control: cc }] },
+  const messages: Message[] = [
+    { role: "system", content: systemText, cacheBreakpoint: true },
+    { role: "user", content: userText, cacheBreakpoint: true },
   ];
 
   /** Keep the cache breakpoint on the most recent tool result (strip it from older ones). */
   const slideCacheBreakpoint = () => {
     const toolMsgs = messages.filter((m) => m.role === "tool");
     toolMsgs.forEach((m, i) => {
-      const part = Array.isArray(m.content) ? m.content[m.content.length - 1] : null;
-      if (part) part.cache_control = i === toolMsgs.length - 1 ? cc : undefined;
+      m.cacheBreakpoint = i === toolMsgs.length - 1;
     });
   };
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 };
@@ -321,42 +301,27 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
 
   const started = Date.now();
   for (iterations = 1; iterations <= maxIterations; iterations++) {
-    const resp = await client.chat.completions.create({
-      model: AGENT_MODEL,
-      max_tokens: 4096,
-      messages,
-      tools,
-    });
-    const u: any = resp.usage ?? {};
-    const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
-    tokens.cacheRead += cached;
-    tokens.input += Math.max(0, (u.prompt_tokens ?? 0) - cached); // uncached input only
-    tokens.output += u.completion_tokens ?? 0;
-    const choice = resp.choices[0];
-    stopReason = choice?.finish_reason ?? null;
-    const msg = choice?.message;
-    if (!msg) break;
+    const resp = await model.create({ messages, tools, maxTokens: 4096 });
+    // Usage is already normalized (input = uncached-only) by the adapter.
+    tokens.input += resp.usage.input;
+    tokens.output += resp.usage.output;
+    tokens.cacheRead += resp.usage.cacheRead;
+    tokens.cacheCreate += resp.usage.cacheCreate;
+    stopReason = resp.stopReason;
 
-    messages.push(msg); // preserve the assistant turn (with any tool_calls) for the next request
+    messages.push(resp.assistant); // preserve the assistant turn (verbatim replay) for the next request
 
-    const toolCallList = msg.tool_calls ?? [];
-    if (toolCallList.length === 0) {
-      answer = (msg.content ?? "").trim();
+    if (resp.toolCalls.length === 0) {
+      answer = resp.text.trim();
       break;
     }
 
-    for (const tc of toolCallList) {
-      if (tc.type !== "function") continue;
+    for (const tc of resp.toolCalls) {
       toolCalls++;
-      let input: any = {};
-      try {
-        input = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        /* leave input empty; runTool will error informatively */
-      }
-      toolLog.push({ name: tc.function.name, input });
-      const result = runTool(root, tc.function.name, input, opts.graft);
-      messages.push({ role: "tool", tool_call_id: tc.id, content: [{ type: "text", text: result }] });
+      const input = (tc.args ?? {}) as any; // already parsed by the adapter
+      toolLog.push({ name: tc.name, input });
+      const result = runTool(root, tc.name, input, opts.graft);
+      messages.push({ role: "tool", toolCallId: tc.id, content: result });
     }
     slideCacheBreakpoint();
   }
@@ -364,7 +329,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
   if (!answer) {
     // Loop hit the cap — take the last assistant text we have.
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant" && typeof messages[i].content === "string" && messages[i].content.trim()) {
+      if (messages[i].role === "assistant" && messages[i].content.trim()) {
         answer = messages[i].content.trim();
         break;
       }

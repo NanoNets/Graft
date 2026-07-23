@@ -1,5 +1,5 @@
-# bench/llm.ts · [[ai-model-integration]] [[benchmarking-framework]]
+# bench/llm.ts · [[benchmarking-system]] [[llm-integration]]
 
-This file configures and provides access to the OpenRouter API for benchmarking LLMs without needing separate API keys.
+This file provides a benchmark setup for LLMs, ensuring that the correct models and configurations are used based on environment variables.
 
-- makeClient · function · L14-L18 — Creates an OpenAI client instance, ensuring that the necessary API key is provided for operation.
+- makeChatModel · function · L16-L28 — Creates a chat model instance while enforcing the requirement of a valid API key for the provider.

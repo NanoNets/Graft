@@ -10,8 +10,8 @@
  *
  * Final correctness = judge says correct AND the keyword floor passed.
  */
-import type OpenAI from "openai";
-import { makeClient, JUDGE_MODEL } from "./llm.js";
+import { makeChatModel, JUDGE_MODEL } from "./llm.js";
+import type { ChatModel } from "../src/ai/llm/types.js";
 
 export { JUDGE_MODEL };
 
@@ -28,7 +28,7 @@ export interface JudgeInput {
   referenceAnswer: string;
   agentAnswer: string;
   requiredKeywords: string[];
-  client?: OpenAI;
+  model?: ChatModel;
 }
 
 /** Pull the first {...} JSON object out of a string (models sometimes wrap JSON in prose/fences). */
@@ -49,7 +49,7 @@ function extractJson(text: string): any {
 }
 
 export async function judge(input: JudgeInput): Promise<Verdict> {
-  const client = input.client ?? makeClient();
+  const model = input.model ?? makeChatModel(JUDGE_MODEL);
 
   const kw = input.requiredKeywords ?? [];
   const hay = input.agentAnswer.toLowerCase();
@@ -65,14 +65,13 @@ export async function judge(input: JudgeInput): Promise<Verdict> {
     `Grade whether the agent's answer is factually correct and responsive, judged against the reference. ` +
     `Extra correct detail is fine; contradicting the reference or missing the core fact is not.`;
 
-  const resp = await client.chat.completions.create({
-    model: JUDGE_MODEL,
-    max_tokens: 1024,
+  const resp = await model.create({
+    maxTokens: 1024,
     messages: [{ role: "user", content: prompt }],
-    response_format: { type: "json_object" },
+    responseFormat: { kind: "json" },
   });
 
-  const text = resp.choices[0]?.message?.content ?? "";
+  const text = resp.text;
   const parsed = extractJson(text) ?? { correct: false, score: 0, reasoning: `unparseable judge output: ${text.slice(0, 200)}` };
 
   const score = Math.max(0, Math.min(1, Number(parsed.score) || 0));

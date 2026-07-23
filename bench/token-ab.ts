@@ -18,10 +18,11 @@
  * Tune:  edit the CONFIG block, or override via env (REPO, QUESTION, MODEL, MAX_STEPS).
  */
 import "dotenv/config";
-import OpenAI from "openai";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
+import { makeChatModel } from "./llm.js";
+import type { Message, ToolSpec } from "../src/ai/llm/types.js";
 
 // ─────────────────────────── CONFIG (edit freely) ───────────────────────────
 const CONFIG = {
@@ -44,17 +45,12 @@ const CONFIG = {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
-const KEY = process.env.OPENROUTER_API_KEY;
-if (!KEY) {
-  console.error("✗ OPENROUTER_API_KEY not set (expected in context-engine/.env).");
-  process.exit(1);
-}
 if (!existsSync(CONFIG.REPO)) {
   console.error(`✗ REPO not found: ${CONFIG.REPO}`);
   process.exit(1);
 }
 
-const client = new OpenAI({ apiKey: KEY, baseURL: "https://openrouter.ai/api/v1" });
+const model = makeChatModel(CONFIG.MODEL);
 
 interface Metrics {
   arm: string;
@@ -72,34 +68,28 @@ const SYSTEM =
   "Be accurate and cite specific files and functions. When you have enough to answer, " +
   "STOP calling tools and write the final answer as prose. Do not pad.";
 
-const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+const TOOLS: ToolSpec[] = [
   {
-    type: "function",
-    function: {
-      name: "search",
-      description:
-        "Regex search across the repo's source (ripgrep). Returns matching file:line: text rows.",
-      parameters: {
-        type: "object",
-        properties: { pattern: { type: "string", description: "regex or literal to search for" } },
-        required: ["pattern"],
-      },
+    name: "search",
+    description:
+      "Regex search across the repo's source (ripgrep). Returns matching file:line: text rows.",
+    parameters: {
+      type: "object",
+      properties: { pattern: { type: "string", description: "regex or literal to search for" } },
+      required: ["pattern"],
     },
   },
   {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read a source file (optionally a line range) relative to the repo root.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string", description: "repo-relative path, e.g. src/components/chat/TaskFeed.tsx" },
-          start_line: { type: "number", description: "1-based start line (optional)" },
-          end_line: { type: "number", description: "1-based end line (optional)" },
-        },
-        required: ["path"],
+    name: "read_file",
+    description: "Read a source file (optionally a line range) relative to the repo root.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "repo-relative path, e.g. src/components/chat/TaskFeed.tsx" },
+        start_line: { type: "number", description: "1-based start line (optional)" },
+        end_line: { type: "number", description: "1-based end line (optional)" },
       },
+      required: ["path"],
     },
   },
 ];
@@ -172,51 +162,42 @@ async function runAgent(arm: string, extraContext: string | null): Promise<Metri
         "=== CONTEXT PACK ===\n" + extraContext,
     );
   }
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+  const messages: Message[] = [
     { role: "system", content: SYSTEM },
     { role: "user", content: userParts.join("\n") },
   ];
 
   for (let step = 0; step < CONFIG.MAX_STEPS; step++) {
-    const resp = await client.chat.completions.create({
-      model: CONFIG.MODEL,
-      temperature: 0,
-      messages,
-      tools: TOOLS,
-      tool_choice: "auto",
-    });
+    const resp = await model.create({ temperature: 0, maxTokens: 4096, messages, tools: TOOLS });
     m.llmCalls++;
-    m.promptTokens += resp.usage?.prompt_tokens ?? 0;
-    m.completionTokens += resp.usage?.completion_tokens ?? 0;
+    m.promptTokens += resp.usage.input + resp.usage.cacheRead;
+    m.completionTokens += resp.usage.output;
 
-    const msg = resp.choices[0].message;
-    messages.push(msg as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+    messages.push(resp.assistant);
 
-    const calls = msg.tool_calls ?? [];
-    if (calls.length === 0) {
-      m.answer = msg.content ?? "(empty)";
+    if (resp.toolCalls.length === 0) {
+      m.answer = resp.text || "(empty)";
       break;
     }
 
-    for (const call of calls) {
-      if (call.type !== "function") continue;
+    for (const call of resp.toolCalls) {
       m.toolCalls++;
       let result = "";
       try {
-        const args = JSON.parse(call.function.arguments || "{}");
-        if (call.function.name === "search") {
+        const args = (call.args ?? {}) as any;
+        if (call.name === "search") {
           result = runSearch(String(args.pattern ?? ""));
-        } else if (call.function.name === "read_file") {
+        } else if (call.name === "read_file") {
           const r = runRead(String(args.path ?? ""), args.start_line, args.end_line);
           if (existsSync(resolve(CONFIG.REPO, String(args.path ?? "")))) m.filesRead.add(r.resolved);
           result = r.text;
         } else {
-          result = `(unknown tool ${call.function.name})`;
+          result = `(unknown tool ${call.name})`;
         }
       } catch (e: any) {
         result = `(tool error: ${e?.message ?? e})`;
       }
-      messages.push({ role: "tool", tool_call_id: call.id, content: result });
+      messages.push({ role: "tool", toolCallId: call.id, content: result });
     }
     if (step === CONFIG.MAX_STEPS - 1) m.answer = "(hit MAX_STEPS without a final answer)";
   }

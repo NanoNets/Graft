@@ -7,13 +7,15 @@
  *     sync with the code (for CI).
  *
  * The graph is a folder of linked markdown files committed to the repo; git is
- * the sync. This class wires the OpenRouter LLM providers into the build/check
+ * the sync. This class wires the configured LLM provider into the build/check
  * pipelines; an API key is required for any LLM-backed operation.
  */
 import { resolveConfig, type EngineConfig, type ResolvedConfig } from "./ai/providers.js";
-import { OpenRouterSynthesizer, type Synthesizer } from "./ai/synthesize.js";
-import { OpenRouterSummarizer, type Summarizer } from "./ai/summarize.js";
-import { OpenRouterCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
+import { ChatSynthesizer, type Synthesizer } from "./ai/synthesize.js";
+import { ChatSummarizer, type Summarizer } from "./ai/summarize.js";
+import { ChatCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
+import { createChatModel } from "./ai/llm/factory.js";
+import type { ChatModel } from "./ai/llm/types.js";
 import { buildContext, CODE_EXTENSIONS, type BuildProgress, type BuildResult } from "./context/build.js";
 import { checkContext, type CheckResult } from "./context/check.js";
 import { buildGraph, type GraphBuildOptions, type GraphBuildResult } from "./graph/build.js";
@@ -94,35 +96,45 @@ export class Graft {
     return ask(dir, query, { contextDir: this.cfg.contextDir, limit: opts.limit, source: opts.source, full: opts.full });
   }
 
-  /** The OpenRouter API key, or a clear error telling the user how to set it. */
-  private requireKey(): string {
-    if (!this.cfg.openrouterApiKey) {
+  private _chatModel?: ChatModel;
+
+  /** The configured transport, or a clear error telling the user how to set a key. */
+  private chatModel(): ChatModel {
+    if (this.cfg.chatModel) return this.cfg.chatModel;
+    if (this._chatModel) return this._chatModel;
+    if (!this.cfg.apiKey) {
       throw new Error(
-        "No OpenRouter API key. Set OPENROUTER_API_KEY (get one at https://openrouter.ai/keys) " +
-          "to build or summarize the graph.",
+        "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
+          "for your provider) to build or summarize the graph.",
       );
     }
-    return this.cfg.openrouterApiKey;
+    this._chatModel = createChatModel({
+      provider: this.cfg.provider,
+      apiKey: this.cfg.apiKey,
+      model: this.cfg.model,
+      baseUrl: this.cfg.baseUrl,
+      headers: this.cfg.headers,
+    });
+    return this._chatModel;
   }
 
   private synthesizer(): Synthesizer {
-    if (this.cfg.synthesizer) return this.cfg.synthesizer;
-    return new OpenRouterSynthesizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
+    return this.cfg.synthesizer ?? new ChatSynthesizer(this.chatModel());
   }
 
   /** Per-node crux summarizer for the code graph's Tier-2 pass. */
   private cruxSummarizer(): CruxSummarizer {
-    return new OpenRouterCruxSummarizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
+    return this.cfg.cruxSummarizer ?? new ChatCruxSummarizer(this.chatModel());
   }
 
   private summarizer(): Summarizer {
-    if (this.cfg.summarizer) return this.cfg.summarizer;
-    return new OpenRouterSummarizer(this.requireKey(), this.cfg.openrouterModel, this.cfg.openrouterBaseUrl);
+    return this.cfg.summarizer ?? new ChatSummarizer(this.chatModel());
   }
 
   /** Human label for the active model, recorded in the manifest. */
   private modelLabel(): string {
-    if (this.cfg.synthesizer || this.cfg.summarizer) return "custom";
-    return `openrouter:${this.cfg.openrouterModel}`;
+    if (this.cfg.chatModel) return this.cfg.chatModel.label;
+    if (this.cfg.synthesizer || this.cfg.summarizer || this.cfg.cruxSummarizer) return "custom";
+    return `${this.cfg.provider}:${this.cfg.model}`;
   }
 }

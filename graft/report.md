@@ -1,15 +1,15 @@
 ---
-name: Benchmarking Results Reporting
-slug: benchmarking-results-reporting
+name: Report
+slug: report
 type: system
 sources:
   - path: bench/report.ts
-    hash: 775be8c40a8e4172521bba8f6a1f026fa23c4d24b9b5225da3ed5b745077a5b0
-sources_digest: f7b46f3036503f43413cb48d25fa6ce54585514fb19e9b4e923c0c5628ce8aed
+    hash: 17c0be550f9712165177d070f58cbe7a0f60fcb2c1dc5830eb1a4dde97ec12f3
+sources_digest: 38642e3446c662002dd4ca9bd1c6438520ecfe224cb0b2481b1c21d74dc32228
 links:
-  - to: benchmarking-framework
+  - to: benchmarking-system
     relation: part_of
-    description: Integrates with the benchmarking framework to report results.
+    description: The report is a key output of the benchmarking system.
 generator:
   version: 1
 covers:
@@ -53,11 +53,11 @@ covers:
 <!-- context:generated:start -->
 ## Summary
 
-This component aggregates and formats the results of benchmarking trials, providing insights into performance metrics and cost evaluations. It emphasizes clarity in reporting and economic implications.
+The report component aggregates benchmarking results from various trials, transforming raw data into a structured markdown report that highlights performance metrics and provides insights into the benchmarking context.
 
 ## Related
 
-- part of [[benchmarking-framework]] — Integrates with the benchmarking framework to report results.
+- part of [[benchmarking-system]] — The report is a key output of the benchmarking system.
 <!-- context:generated:end -->
 
 ## Notes

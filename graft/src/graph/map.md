@@ -1,17 +1,19 @@
 # src/graph/map.ts
 
-- Hub · interface · L25-L31 — interface Hub
-- DirEntry · interface · L33-L39 — interface DirEntry
-- RepoMap · interface · L41-L49 — interface RepoMap
-- BuildRepoMapOptions · interface · L51-L58 — interface BuildRepoMapOptions
-- dirKey · function · L70-L73 — function dirKey(path: string, depth: number): string
-- computeInDegree · function · L78-L85 — function computeInDegree(graph: GraphV1): Map<string, number>
-- topHubs · function · L90-L96 — function topHubs(nodes: NodeV1[], inDegree: Map<string, number>, cap: number): Hub[]
-- sortedLanguages · function · L98-L105 — function sortedLanguages(paths: string[]): string[]
-- buildRepoMap · function · L112-L180 — function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): RepoMap
-- depthFor · function · L137-L137 — depthFor = (path: string): number
-- basenameOf · function · L184-L187 — function basenameOf(path: string): string
-- formatDirHub · function · L189-L191 — function formatDirHub(h: Hub): string
-- formatDirLine · function · L193-L198 — function formatDirLine(d: DirEntry): string
-- formatHotspot · function · L200-L202 — function formatHotspot(h: Hub): string
-- formatRepoMap · function · L210-L223 — function formatRepoMap(map: RepoMap): string
+Builds a structured representation of a repository's file and symbol organization based on their relationships, facilitating easier navigation and understanding of the codebase.
+
+- Hub · interface · L25-L31 — Defines the structure of a hub in the repository map, capturing its essential attributes for identification and ranking.
+- DirEntry · interface · L33-L39 — Represents a directory entry in the repository map, summarizing its contents and associated hubs for better navigation.
+- RepoMap · interface · L41-L49 — Encapsulates the entire repository map structure, providing a comprehensive overview of files, symbols, and their relationships.
+- BuildRepoMapOptions · interface · L51-L58 — Specifies options for building the repository map, allowing customization of directory and hub limits.
+- dirKey · function · L70-L73 — Generates a directory key based on the specified depth, facilitating the grouping of files in the repository map.
+- computeInDegree · function · L78-L85 — Calculates the in-degree of nodes in the graph, determining the number of incoming edges for each target, which is crucial for identifying hubs.
+- topHubs · function · L90-L96 — Identifies the top hubs based on in-degree, ensuring that only significant nodes are included in the repository map.
+- sortedLanguages · function · L98-L105 — Sorts and deduplicates the programming languages used in the repository, enhancing the metadata of the repository map.
+- buildRepoMap · function · L112-L180 — Constructs the repository map from a given graph, organizing files and symbols into a structured format for easy access.
+- depthFor · function · L137-L137 — Determines the depth for a given path, influencing how files are grouped in the repository map based on the split segment.
+- basenameOf · function · L184-L187 — Extracts the base name from a file path, simplifying the representation of file names in the output.
+- formatDirHub · function · L189-L191 — Formats a hub's information for display, providing a user-friendly representation of its attributes.
+- formatDirLine · function · L193-L198 — Formats a directory entry for display, summarizing its contents and associated hubs in a readable format.
+- formatHotspot · function · L200-L202 — Formats a hotspot's information for display, detailing its attributes in a clear manner.
+- formatRepoMap · function · L210-L223 — Renders the repository map as a human-readable string, summarizing its contents and structure for easy understanding.

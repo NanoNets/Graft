@@ -12,39 +12,30 @@ import assert from "node:assert/strict";
 import { runAgent } from "./agent.js";
 import { judge } from "./judge.js";
 import { buildMarkdown, type Row } from "./report.js";
+import type { ChatModel } from "../src/ai/llm/types.js";
 
-const usage = { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 };
+const usage = { input: 100, output: 50, cacheRead: 0, cacheCreate: 0 };
 
-/** Stub that mimics the OpenAI/OpenRouter chat.completions shape our code reads. Judge turns pass `response_format`. */
-function makeStubClient() {
+/** Stub {@link ChatModel}: agent uses grep then answers; a `json` request is the judge. */
+function makeStubModel(): ChatModel {
   let agentTurn = 0;
   return {
-    chat: {
-      completions: {
-        create: async (params: any) => {
-          if (params.response_format) {
-            // Judge call → JSON verdict.
-            return {
-              choices: [{ message: { role: "assistant", content: JSON.stringify({ correct: true, score: 0.9, reasoning: "matches reference" }) }, finish_reason: "stop" }],
-              usage,
-            };
-          }
-          // Agent call. First turn: use grep. Second turn: final answer.
-          agentTurn++;
-          if (agentTurn === 1) {
-            return {
-              choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "tc_1", type: "function", function: { name: "grep", arguments: JSON.stringify({ pattern: "SECRET_TOKEN" }) } }] }, finish_reason: "tool_calls" }],
-              usage,
-            };
-          }
-          return {
-            choices: [{ message: { role: "assistant", content: "The secret token is SECRET_TOKEN, defined in config.ts." }, finish_reason: "stop" }],
-            usage,
-          };
-        },
-      },
+    label: "stub:model",
+    async create(req) {
+      if (req.responseFormat?.kind === "json") {
+        const text = JSON.stringify({ correct: true, score: 0.9, reasoning: "matches reference" });
+        return { text, toolCalls: [], usage, stopReason: "stop", assistant: { role: "assistant", content: text } };
+      }
+      // Agent call. First turn: use grep. Second turn: final answer.
+      agentTurn++;
+      if (agentTurn === 1) {
+        const toolCalls = [{ id: "tc_1", name: "grep", args: { pattern: "SECRET_TOKEN" } }];
+        return { text: "", toolCalls, usage, stopReason: "tool_use", assistant: { role: "assistant", content: "", toolCalls } };
+      }
+      const text = "The secret token is SECRET_TOKEN, defined in config.ts.";
+      return { text, toolCalls: [], usage, stopReason: "stop", assistant: { role: "assistant", content: text } };
     },
-  } as any;
+  };
 }
 
 async function main() {
@@ -52,10 +43,10 @@ async function main() {
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src", "config.ts"), "export const token = 'SECRET_TOKEN';\n");
 
-  const client = makeStubClient();
+  const model = makeStubModel();
 
   // 1. Agent loop: should call the grep tool once, then answer.
-  const ar = await runAgent({ client, root, question: "What is the secret token?" });
+  const ar = await runAgent({ model, root, question: "What is the secret token?" });
   assert.equal(ar.toolCalls, 1, "expected exactly one tool call");
   assert.equal(ar.toolLog[0].name, "grep", "expected the grep tool to run");
   assert.ok(ar.answer.includes("SECRET_TOKEN"), "answer should contain the fact");
@@ -65,7 +56,7 @@ async function main() {
 
   // 2. Real tool execution actually found the file (grep ran against the temp repo).
   const graphAr = await runAgent({
-    client: makeStubClient(),
+    model: makeStubModel(),
     root,
     question: "What is the secret token?",
     contextBundle: "# Context\nSECRET_TOKEN lives in config.ts",
@@ -75,7 +66,7 @@ async function main() {
 
   // 3. Judge: keyword floor + parsed verdict.
   const v = await judge({
-    client,
+    model,
     question: "What is the secret token?",
     referenceAnswer: "SECRET_TOKEN",
     agentAnswer: ar.answer,
@@ -89,7 +80,7 @@ async function main() {
 
   // 3b. Keyword floor overrides an over-generous judge.
   const vMiss = await judge({
-    client,
+    model,
     question: "q",
     referenceAnswer: "SECRET_TOKEN",
     agentAnswer: "I could not find it.",

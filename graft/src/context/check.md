@@ -1,4 +1,4 @@
-# src/context/check.ts · [[graph-construction]]
+# src/context/check.ts · [[graph-synchronization]]
 
 This file provides functionality to verify if the committed context graph is synchronized with the current codebase, ensuring consistency in CI environments.
 

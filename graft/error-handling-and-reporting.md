@@ -4,34 +4,81 @@ slug: error-handling-and-reporting
 type: concept
 sources:
   - path: bench/run.ts
-    hash: a0d2859628588f45ae31862f5f801d6219802449c23bbbdba9aa51b7b9febf47
+    hash: fd4445eb0d6d3c1a8b994c7e4be42522c3214612a8499e4f76bfc10d0030f9da
+  - path: src/engine.ts
+    hash: 55e2191dd67d1e4369c2a872f1b908937bd6034ce6f8f4b03e6c86a059e271c7
   - path: src/graph/build.ts
-    hash: b18f5fc18dffd77771f39722eb19963c1188fd298cbb5cfd5d71ef8dc45658c6
-  - path: src/graph/check.ts
-    hash: 5358023fe498fb2878e3aa9b6756272c39926dda865c6495d8f33d13c5ceb376
-sources_digest: 1386bf6efb7992fa69cd12a578fcd62b16f5332693ce2d7020e4050ba354f2f7
+    hash: 10ae2a085b299a56cb90d41289a956065dd8eef358ae2abbc39db59b82a12dc9
+sources_digest: 616914a6531c73b635ea2da8eba71b3f12bdae64d0e10c2618cdd7c1ebfc658b
 links:
-  - to: graph-construction
+  - to: benchmarking-system
     relation: validates
-    description: Ensures that errors in graph construction are reported effectively.
+    description: >-
+      Error handling is crucial for maintaining the integrity of benchmarking
+      results.
 generator:
   version: 1
 covers:
   - symbol: Args
     kind: interface
-    at: 'bench/run.ts:L38-L44'
+    at: 'bench/run.ts:L39-L45'
   - symbol: parseArgs
     kind: function
-    at: 'bench/run.ts:L46-L66'
+    at: 'bench/run.ts:L47-L67'
   - symbol: pool
     kind: function
-    at: 'bench/run.ts:L69-L80'
+    at: 'bench/run.ts:L70-L81'
   - symbol: worker
     kind: function
-    at: 'bench/run.ts:L72-L77'
+    at: 'bench/run.ts:L73-L78'
   - symbol: main
     kind: function
-    at: 'bench/run.ts:L82-L202'
+    at: 'bench/run.ts:L83-L204'
+  - symbol: InitOptions
+    kind: interface
+    at: 'src/engine.ts:L28-L33'
+  - symbol: CheckRunOptions
+    kind: interface
+    at: 'src/engine.ts:L35-L37'
+  - symbol: GraphRunOptions
+    kind: interface
+    at: 'src/engine.ts:L39-L45'
+  - symbol: Graft
+    kind: class
+    at: 'src/engine.ts:L47-L140'
+  - symbol: constructor
+    kind: method
+    at: 'src/engine.ts:L50-L52'
+  - symbol: init
+    kind: method
+    at: 'src/engine.ts:L55-L64'
+  - symbol: check
+    kind: method
+    at: 'src/engine.ts:L67-L69'
+  - symbol: checkGraph
+    kind: method
+    at: 'src/engine.ts:L72-L74'
+  - symbol: graph
+    kind: method
+    at: 'src/engine.ts:L81-L88'
+  - symbol: ask
+    kind: method
+    at: 'src/engine.ts:L95-L97'
+  - symbol: chatModel
+    kind: method
+    at: 'src/engine.ts:L102-L119'
+  - symbol: synthesizer
+    kind: method
+    at: 'src/engine.ts:L121-L123'
+  - symbol: cruxSummarizer
+    kind: method
+    at: 'src/engine.ts:L126-L128'
+  - symbol: summarizer
+    kind: method
+    at: 'src/engine.ts:L130-L132'
+  - symbol: modelLabel
+    kind: method
+    at: 'src/engine.ts:L135-L139'
   - symbol: GraphBuildOptions
     kind: interface
     at: 'src/graph/build.ts:L23-L36'
@@ -47,27 +94,15 @@ covers:
   - symbol: buildGraph
     kind: function
     at: 'src/graph/build.ts:L78-L183'
-  - symbol: GraphCheckResult
-    kind: interface
-    at: 'src/graph/check.ts:L27-L37'
-  - symbol: GraphCheckOptions
-    kind: interface
-    at: 'src/graph/check.ts:L39-L41'
-  - symbol: checkGraph
-    kind: function
-    at: 'src/graph/check.ts:L43-L101'
-  - symbol: formatGraphCheckReport
-    kind: function
-    at: 'src/graph/check.ts:L104-L135'
 ---
 <!-- context:generated:start -->
 ## Summary
 
-This concept focuses on the strategies employed to handle errors gracefully during benchmarking and graph construction, ensuring robust performance and user feedback.
+This concept focuses on the strategies employed to handle errors gracefully throughout the system, ensuring that failures do not disrupt the user experience and that meaningful feedback is provided.
 
 ## Related
 
-- validates [[graph-construction]] — Ensures that errors in graph construction are reported effectively.
+- validates [[benchmarking-system]] — Error handling is crucial for maintaining the integrity of benchmarking results.
 <!-- context:generated:end -->
 
 ## Notes

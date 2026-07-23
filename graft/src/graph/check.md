@@ -1,4 +1,4 @@
-# src/graph/check.ts · [[error-handling-and-reporting]] [[graph-construction]]
+# src/graph/check.ts · [[graph-synchronization]]
 
 Ensures that the committed graph.json accurately reflects the current state of the codebase, identifying any discrepancies.
 

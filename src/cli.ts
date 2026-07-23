@@ -20,7 +20,8 @@ import { Command } from "commander";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
-import { resolveConfig } from "./ai/providers.js";
+import { resolveConfig, type EngineConfig } from "./ai/providers.js";
+import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
 import { runInit } from "./claude/init.js";
@@ -38,11 +39,34 @@ program
   .name("graft")
   .description("Build a repo's context graph as linked markdown, and keep it in sync with the code.")
   .version(currentVersion, "-v, --version")
-  .option("--dir <path>", "context graph directory (default: <repo>/graft)");
+  .option("--dir <path>", "context graph directory (default: <repo>/graft)")
+  .option("--provider <name>", "LLM wire format: openai | anthropic (env GRAFT_PROVIDER)")
+  .option("--model <id>", "model id for the LLM pass (env GRAFT_MODEL)")
+  .option("--api-key <key>", "provider API key (env GRAFT_API_KEY)")
+  .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)");
+
+interface GlobalOpts {
+  dir?: string;
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+/** Config drawn from the global CLI flags (env + defaults fill the rest). */
+function cliConfig(): EngineConfig {
+  const o = program.opts<GlobalOpts>();
+  return {
+    contextDir: o.dir,
+    provider: o.provider as ProviderKind | undefined,
+    model: o.model,
+    apiKey: o.apiKey,
+    baseUrl: o.baseUrl,
+  };
+}
 
 function engineFrom(): Graft {
-  const opts = program.opts<{ dir?: string }>();
-  return new Graft({ contextDir: opts.dir });
+  return new Graft(cliConfig());
 }
 
 program
@@ -88,12 +112,18 @@ program
     // --deep needs a key; without one, degrade to the $0 structural build
     // rather than failing — the wiring graph is still worth having.
     let deep = opts.deep;
-    if (deep && !resolveConfig().openrouterApiKey) {
+    const resolved = resolveConfig(cliConfig());
+    if (deep && !resolved.apiKey) {
       deep = false;
       console.error(
-        "⚠ no OPENROUTER_API_KEY set — falling back to the structural build (no LLM summaries).\n" +
-          "  Set OPENROUTER_API_KEY (https://openrouter.ai/keys) and re-run `graft build --deep`\n" +
-          "  to add concept nodes and per-symbol summaries.",
+        "⚠ no API key set — falling back to the structural build (no LLM summaries).\n" +
+          "  Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL for your\n" +
+          "  provider) and re-run `graft build --deep` to add concept nodes and summaries.",
+      );
+    }
+    if (deep && resolved.usedLegacyEnv) {
+      console.error(
+        "⚠ using OPENROUTER_API_KEY (deprecated) — prefer GRAFT_API_KEY + GRAFT_BASE_URL.",
       );
     }
 

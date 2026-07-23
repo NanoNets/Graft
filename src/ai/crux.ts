@@ -14,7 +14,7 @@
  * sees each symbol's neighbours, which sharpens the summaries. Line numbers are
  * consumed once, at write time, to slice the crux text verbatim from source.
  */
-import OpenAI from "openai";
+import type { ChatModel } from "./llm/types.js";
 import type { Kind } from "../graph/types.js";
 
 /** One definition we want described, located by its line span within the file. */
@@ -45,17 +45,35 @@ export interface CruxSummarizer {
 
 const SYSTEM_PROMPT = `You explain code definitions for a code graph that helps engineers navigate a codebase.
 
-You are given ONE source file with 1-based line numbers, and a list of TARGET definitions in it. For every target, return its purpose and the line range of its core logic.
-
-Return STRICT JSON, exactly:
-{ "symbols": [ { "id": string, "summary": string, "crux_start": number, "crux_end": number }, ... ] }
+You are given ONE source file with 1-based line numbers, and a list of TARGET definitions in it. For every target, record its purpose and the line range of its core logic via the record_symbols tool.
 
 Rules:
 - Emit exactly one entry per target id given, using that id verbatim.
 - summary: ONE sentence — what the symbol is FOR at the business-logic level. Say what problem it solves or rule it enforces, not what its signature already says.
 - crux_start / crux_end: FILE line numbers (as shown), inside that symbol's own line range. Pick the SINGLE most important contiguous span — the core branch, formula, guard, or state change. Keep it TIGHT: at most ~8 lines, and NEVER the whole function. If you can't narrow it below that, the symbol has no distinct crux — use 0/0.
-- Skip boilerplate, logging, and plumbing. If a symbol has no meaningful crux (trivial getter, data holder, one-line delegation, or logic spread evenly with no focal point), use "crux_start": 0 and "crux_end": 0.
-- Output ONLY the JSON object. No prose, no code fences.`;
+- Skip boilerplate, logging, and plumbing. If a symbol has no meaningful crux (trivial getter, data holder, one-line delegation, or logic spread evenly with no focal point), use "crux_start": 0 and "crux_end": 0.`;
+
+const RECORD_TOOL = "record_symbols";
+
+const SYMBOLS_SCHEMA = {
+  type: "object",
+  properties: {
+    symbols: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          summary: { type: "string" },
+          crux_start: { type: "number" },
+          crux_end: { type: "number" },
+        },
+        required: ["id", "summary", "crux_start", "crux_end"],
+      },
+    },
+  },
+  required: ["symbols"],
+} as const;
 
 /** Cap the file text sent per request so one huge file can't blow the context. */
 const MAX_CODE_CHARS = 18_000;
@@ -80,11 +98,9 @@ function userContent(input: FileCruxInput): string {
   return `FILE: ${input.path}\n\n${numberLines(input.source)}\n\nTARGETS:\n${targets}`;
 }
 
-/** Best-effort parse of a model's JSON reply into a {@link NodeCrux} list. */
-function parseResults(raw: string): NodeCrux[] {
-  const text = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const obj = JSON.parse(text) as { symbols?: unknown };
-  if (!Array.isArray(obj.symbols)) return [];
+/** Normalize the tool's parsed argument object into a {@link NodeCrux} list. */
+function parseResults(obj: { symbols?: unknown } | undefined): NodeCrux[] {
+  if (!obj || !Array.isArray(obj.symbols)) return [];
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
   return obj.symbols
     .map((s) => s as Record<string, unknown>)
@@ -97,31 +113,28 @@ function parseResults(raw: string): NodeCrux[] {
     }));
 }
 
-/** Crux summarizer backed by OpenRouter's OpenAI-compatible chat API. */
-export class OpenRouterCruxSummarizer implements CruxSummarizer {
-  private client: OpenAI;
-  private model: string;
-
-  constructor(apiKey: string, model: string, baseUrl = "https://openrouter.ai/api/v1") {
-    this.client = new OpenAI({
-      apiKey,
-      baseURL: baseUrl,
-      defaultHeaders: { "X-Title": "Context Graph Engine" },
-    });
-    this.model = model;
-  }
+/** Crux summarizer backed by any {@link ChatModel} via forced tool calling. */
+export class ChatCruxSummarizer implements CruxSummarizer {
+  constructor(private model: ChatModel) {}
 
   async describeFile(input: FileCruxInput): Promise<NodeCrux[]> {
     if (input.nodes.length === 0) return [];
-    const response = await this.client.chat.completions.create({
-      model: this.model,
+    const res = await this.model.create({
       temperature: 0,
-      response_format: { type: "json_object" },
+      maxTokens: 8192,
+      tools: [
+        {
+          name: RECORD_TOOL,
+          description: "Record each target definition's purpose and crux line range.",
+          parameters: SYMBOLS_SCHEMA as unknown as Record<string, unknown>,
+        },
+      ],
+      responseFormat: { kind: "tool", name: RECORD_TOOL },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent(input) },
       ],
     });
-    return parseResults(response.choices[0]?.message?.content ?? "");
+    return parseResults(res.toolCalls[0]?.args as { symbols?: unknown } | undefined);
   }
 }

@@ -1,4 +1,4 @@
-# src/viz/serve.ts
+# src/viz/serve.ts · [[visualization-and-serving]]
 
 This file implements a local server for serving a viewer and handling API requests related to context and code graphs.
 

@@ -1,5 +1,7 @@
 # src/ask/graphrank.ts
 
-- PageRankOptions · interface · L20-L26 — interface PageRankOptions
-- personalizedPageRank · function · L39-L101 — function personalizedPageRank( graph: GraphV1, seeds: Map<string, number>, opts: PageRankOptions = {}, ): Map<string, number>
-- link · function · L51-L53 — link = (a: string, b: string)
+This module implements a personalized PageRank algorithm to improve the ranking of code nodes based on their structural relevance rather than just lexical similarity.
+
+- PageRankOptions · interface · L20-L26 — Defines options for configuring the personalized PageRank algorithm, including restart probability and iteration count.
+- personalizedPageRank · function · L39-L101 — Calculates personalized PageRank scores for nodes in a wiring graph based on provided seeds, enhancing the relevance of code suggestions.
+- link · function · L51-L53 — Creates undirected links between nodes in the graph for the PageRank calculation, ensuring that both directions are considered.

@@ -32,9 +32,15 @@ average.
 
 ## Requirements
 
-- `OPENROUTER_API_KEY` — agent (`anthropic/claude-sonnet-5`) and judge
-  (`anthropic/claude-opus-4.8`) run through OpenRouter. Graph building is keyless.
-  Override the models with `BENCH_AGENT_MODEL` / `BENCH_JUDGE_MODEL`.
+- A provider key — the agent (`anthropic/claude-sonnet-5`) and judge
+  (`anthropic/claude-opus-4.8`) run through the same vendor-neutral provider
+  layer as the engine. Set `GRAFT_API_KEY` (+ `GRAFT_PROVIDER` / `GRAFT_BASE_URL`),
+  or the legacy `OPENROUTER_API_KEY`. Graph building is keyless. Override the
+  models with `BENCH_AGENT_MODEL` / `BENCH_JUDGE_MODEL`.
+- The committed baseline was recorded via OpenRouter (no extended thinking). If
+  you rerun against the **native** `anthropic` provider, note that current Claude
+  models enable adaptive thinking by default, which inflates output tokens — so
+  those numbers are not directly comparable to the committed baseline.
 
 ## Run
 

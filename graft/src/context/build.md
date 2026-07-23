@@ -1,4 +1,4 @@
-# src/context/build.ts · [[caching-mechanism]] [[graph-construction]]
+# src/context/build.ts
 
 This file builds a context graph from a code repository by summarizing source files and synthesizing nodes.
 

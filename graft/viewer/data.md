@@ -1,4 +1,4 @@
-# viewer/data.ts · [[visualization-layer]]
+# viewer/data.ts · [[graph-visualization]]
 
 This file defines data structures and functions for managing and visualizing graph data from a server.
 

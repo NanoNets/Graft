@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import type { ChatModel } from "./llm/types.js";
 
 /**
  * Turns one source-code file into a short prose summary for the knowledge graph.
@@ -33,29 +33,19 @@ function userContent(code: string, path: string): string {
   return `File: ${path}\n\n${clipped}`;
 }
 
-/** Summarizer backed by OpenRouter's OpenAI-compatible chat API. */
-export class OpenRouterSummarizer implements Summarizer {
-  private client: OpenAI;
-  private model: string;
-
-  constructor(apiKey: string, model: string, baseUrl = "https://openrouter.ai/api/v1") {
-    this.client = new OpenAI({
-      apiKey,
-      baseURL: baseUrl,
-      defaultHeaders: { "X-Title": "Context Graph Engine" },
-    });
-    this.model = model;
-  }
+/** Summarizer backed by any {@link ChatModel} (a plain-text completion). */
+export class ChatSummarizer implements Summarizer {
+  constructor(private model: ChatModel) {}
 
   async summarize(code: string, opts: { path: string }): Promise<string> {
-    const response = await this.client.chat.completions.create({
-      model: this.model,
+    const res = await this.model.create({
       temperature: 0,
+      maxTokens: 2048,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent(code, opts.path) },
       ],
     });
-    return response.choices[0]?.message?.content?.trim() ?? "";
+    return res.text.trim();
   }
 }

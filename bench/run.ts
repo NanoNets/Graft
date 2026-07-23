@@ -28,7 +28,8 @@ import { ask, formatAsk } from "../src/ask/ask.js";
 import { CORPORA } from "./tasks.js";
 import { runAgent } from "./agent.js";
 import { judge } from "./judge.js";
-import { makeClient } from "./llm.js";
+import { makeChatModel, AGENT_MODEL, JUDGE_MODEL } from "./llm.js";
+import { resolveConfig } from "../src/ai/providers.js";
 import { buildMarkdown, type Row, type Arm } from "./report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -81,11 +82,12 @@ async function pool<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): P
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (!process.env.OPENROUTER_API_KEY) {
-    console.error("Set OPENROUTER_API_KEY (agent and judge run through OpenRouter).");
+  if (!resolveConfig().apiKey) {
+    console.error("Set GRAFT_API_KEY (or OPENROUTER_API_KEY) — the agent and judge need a provider key.");
     process.exit(1);
   }
-  const client = makeClient();
+  const agentModel = makeChatModel(AGENT_MODEL);
+  const judgeModel = makeChatModel(JUDGE_MODEL);
 
   const corpora = CORPORA.filter((c) => !args.corpora || args.corpora.includes(c.id));
   if (corpora.length === 0) {
@@ -142,14 +144,14 @@ async function main() {
       };
       try {
         const ar = await runAgent({
-          client,
+          model: agentModel,
           root: corpus.path,
           question: task.question,
           contextBundle: arm === "graph" ? bundles.get(task.id) : undefined,
           graft: arm === "pull" ? { contextDir: graftDir } : undefined,
         });
         const v = await judge({
-          client,
+          model: judgeModel,
           question: task.question,
           referenceAnswer: task.referenceAnswer,
           agentAnswer: ar.answer,

@@ -1,11 +1,13 @@
-# bench/token-ab.ts
+# bench/token-ab.ts · [[benchmarking-system]] [[token-a-b-testing]]
 
-- Metrics · interface · L59-L68 — interface Metrics
-- runSearch · function · L108-L138 — function runSearch(pattern: string): string
-- runRead · function · L140-L157 — function runRead(path: string, start?: number, end?: number): { text: string; resolved: string }
-- runAgent · function · L160-L226 — async function runAgent(arm: string, extraContext: string | null): Promise<Metrics>
-- graftPack · function · L229-L240 — function graftPack(): { pack: string; ms: number }
-- cost · function · L242-L246 — function cost(m: Metrics): string
-- row · function · L248-L250 — function row(label: string, a: string | number, b: string | number): string
-- main · function · L252-L292 — async function main()
-- pct · function · L272-L272 — pct = (a: number, b: number)
+This script benchmarks the performance of an agent using two different approaches (COLD and GRAFT) to determine if providing pre-computed context saves tokens during code exploration.
+
+- Metrics · interface · L55-L64 — Defines the structure for capturing metrics related to the A/B testing of the agent's performance.
+- runSearch · function · L98-L128 — Executes a regex search across the repository to find relevant code snippets based on a given pattern.
+- runRead · function · L130-L147 — Reads a specified source file or a range of lines from it, ensuring it is within the repository's bounds.
+- runAgent · function · L150-L207 — Manages the agent's execution loop, handling user queries and tool calls while tracking performance metrics.
+- graftPack · function · L210-L221 — Generates a context pack using the graft tool to provide pre-computed information for the agent.
+- cost · function · L223-L227 — Calculates the estimated cost of the agent's operations based on token usage and pricing configuration.
+- row · function · L229-L231 — Formats a row of metrics for display in the output table comparing the COLD and GRAFT arms.
+- main · function · L233-L273 — Coordinates the overall execution of the A/B test, including generating the graft pack and running both agent arms.
+- pct · function · L253-L253 — Calculates the percentage improvement in token usage between the COLD and GRAFT arms.

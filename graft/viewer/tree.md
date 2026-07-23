@@ -1,4 +1,4 @@
-# viewer/tree.ts · [[visualization-layer]]
+# viewer/tree.ts · [[graph-visualization]]
 
 Generates a collapsible tree view of a code graph's hierarchy, allowing users to navigate through files, classes, and methods.
 

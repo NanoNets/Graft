@@ -1,5 +1,5 @@
 # src/index.ts
 
-This file serves as the public API for the Graft library, facilitating the management and synchronization of linked markdown files in a repository.
+This module serves as the public API for the Graft library, facilitating the building and checking of a graph of linked markdown files.
 
 _No extracted symbols in this file._

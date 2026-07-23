@@ -1,6 +1,6 @@
 ---
-name: Visualization Layer
-slug: visualization-layer
+name: Graph Visualization
+slug: graph-visualization
 type: system
 sources:
   - path: viewer/data.ts
@@ -15,9 +15,11 @@ sources:
     hash: d66e0157f4c2a1525c16505306eb3aabce82565c3d0e56199ea5b7a860290b01
 sources_digest: fd0623540e7f7eed9942e3db2bc219f9a08b3814ac219dfb2b9a74f8c1aea966
 links:
-  - to: graph-management
-    relation: depends_on
-    description: Utilizes the graph data for rendering visualizations.
+  - to: graph-traversal-and-impact-analysis
+    relation: uses
+    description: >-
+      The visualization relies on the traversal utilities to accurately
+      represent node relationships.
 generator:
   version: 1
 covers:
@@ -199,11 +201,11 @@ covers:
 <!-- context:generated:start -->
 ## Summary
 
-This component provides the visualization tools for the context graph, enabling users to interact with and explore the graph structure through a web interface.
+This component is responsible for rendering and displaying the graph data, providing interactive visualizations that allow users to explore node relationships and details effectively.
 
 ## Related
 
-- depends on [[graph-management]] — Utilizes the graph data for rendering visualizations.
+- uses [[graph-traversal-and-impact-analysis]] — The visualization relies on the traversal utilities to accurately represent node relationships.
 <!-- context:generated:end -->
 
 ## Notes

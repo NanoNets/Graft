@@ -1,7 +1,9 @@
-# test/graph-map.test.ts
+# test/graph-map.test.ts · [[testing-and-validation]]
 
-- fileNode · function · L16-L31 — function fileNode(path: string): NodeV1
-- symNode · function · L33-L49 — function symNode(path: string, name: string, opts: { kind?: Kind; span?: string } = {}): NodeV1
-- edge · function · L51-L53 — function edge(source: string, target: string, relation: Relation = "calls"): EdgeV1
-- graphOf · function · L55-L61 — function graphOf(nodes: NodeV1[], edges: EdgeV1[]): GraphV1
-- bigFixture · function · L240-L259 — function bigFixture(): GraphV1
+This file contains tests for the `buildRepoMap` and `formatRepoMap` functions, ensuring they correctly process and format repository data.
+
+- fileNode · function · L16-L31 — Creates a file node representation for the graph, encapsulating file metadata for processing.
+- symNode · function · L33-L49 — Generates a symbol node representation for the graph, allowing for the inclusion of function or variable symbols with associated metadata.
+- edge · function · L51-L53 — Defines a connection between two nodes in the graph, representing relationships such as function calls.
+- graphOf · function · L55-L61 — Constructs a graph structure from nodes and edges, serving as the foundational data for repository mapping.
+- bigFixture · function · L240-L259 — Creates a large fixture graph for testing, simulating a repository with multiple directories and symbols.
