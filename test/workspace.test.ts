@@ -28,7 +28,9 @@ function workspaceFx(children: Record<string, Record<string, string>>): string {
   for (const [child, files] of Object.entries(children)) {
     mkdirSync(join(parent, child, ".git"), { recursive: true });
     for (const [name, content] of Object.entries(files)) {
-      writeFileSync(join(parent, child, name), content);
+      const path = join(parent, child, name);
+      mkdirSync(join(path, ".."), { recursive: true }); // create nested dirs (e.g. src/gateway.ts)
+      writeFileSync(path, content);
     }
   }
   return parent;
@@ -284,6 +286,24 @@ test("strength gate: a legit COMMON-term (low-idf) name match is NOT overcorrect
   assert.ok(r.hits.some((h) => h.scope!.startsWith("repoConfig")), "real partial-relevance (low-idf name hit) must still federate");
   rmSync(p, { recursive: true, force: true });
 });
+
+for (const [kind, junkFiles] of [
+  ["file basename gateway.ts", { "src/gateway.ts": "export function renderList() { return 0; }\n" }],
+  ["dir segment gateway/", { "gateway/handler.ts": "export function renderList() { return 0; }\n" }],
+] as const) {
+  test(`strength gate: junk matching only a ${kind} (no symbol named for the term) is gated out`, async () => {
+    const p = workspaceFx({
+      repoStrong: { "m.ts": "export function paymentGatewayRefund() { return 1; }\n", "pad.ts": pad(25) },
+      repoJunk: { ...junkFiles, "pad.ts": pad(25) },
+    });
+    await buildWorkspace(p);
+    const r = federateAsk(p, undefined, "payment gateway refund", { limit: 8 });
+    assert.ok(r.hits[0]?.title.startsWith("paymentGatewayRefund"), `strong repo's real hit must be #1, got: ${r.hits[0]?.title}`);
+    assert.ok(!r.hits.some((h) => h.scope!.startsWith("repoJunk")), "coincidental path-name junk must NOT federate");
+    assert.ok(r.scopes?.alsoMatched.some((m) => m.scope === "repoJunk"), "junk reported in alsoMatched");
+    rmSync(p, { recursive: true, force: true });
+  });
+}
 
 test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   const p = mkdtempSync(join(tmpdir(), "ws-"));

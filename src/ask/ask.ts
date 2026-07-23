@@ -336,6 +336,26 @@ function hasTerm(f: Map<string, number>, t: string): boolean {
  * "write": common → near-weightless even when they collide with a symbol name);
  * a task prompt matches exactly its rare, discriminating identifiers. Terms the
  * corpus has never seen take `dfltIdf` (the df=0 weight). */
+/** The match-STRENGTH share behind `coverageStrong`: idf-weighted share of the
+ * query matched in the node's NAME field ONLY. The PATH field is deliberately
+ * excluded — a coincidental generic directory (`gateway/`) or file basename
+ * (`gateway.ts`) in an unrelated repo would otherwise clear the strength gate
+ * and float that repo to the top; an on-topic path-organized repo is still
+ * rescued by the broad-coverage HIGH_FLOOR clause instead. For the same reason
+ * a `kind:"file"` node contributes zero strength: its `name` is a basename (a
+ * path component), not a symbol name, so a file whose basename happens to share
+ * a query word is not a strong match. */
+function strongShare(
+  q: Map<string, number>,
+  node: NodeV1,
+  doc: { name: Map<string, number> },
+  idf: Map<string, number>,
+  dfltIdf: number,
+): number {
+  if (node.kind === "file") return 0;
+  return matchedIdfShare(q, [doc.name], idf, dfltIdf);
+}
+
 function matchedIdfShare(
   q: Map<string, number>,
   fields: Array<Map<string, number>>,
@@ -550,7 +570,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       const d = docsById.get(rd.id);
       const si = idfOf.get(rd.scope);
       matchedOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt) : 0);
-      matchedStrongOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path], si.idf, si.dflt) : 0);
+      matchedStrongOf.set(hit, d && si ? strongShare(q, n, d, si.idf, si.dflt) : 0);
       symbolHits.push(hit);
     }
     // Label + footer only when federation actually happened (or a scope was
@@ -614,7 +634,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     };
     const d = docsById.get(id);
     matchedOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path, d.body], idf, dfltIdf) : 0);
-    matchedStrongOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path], idf, dfltIdf) : 0);
+    matchedStrongOf.set(hit, d ? strongShare(q, n, d, idf, dfltIdf) : 0);
     symbolHits.push(hit);
   }
   }
