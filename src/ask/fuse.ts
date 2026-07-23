@@ -28,7 +28,10 @@ export interface ScopedDoc {
 }
 
 export interface FusionResult {
-  /** fused order, best first; carries per-doc scope label + fused score in [0,1] */
+  /** fused order, best first; carries per-doc scope label + fused score.
+   * Normalized so the top MULTI-scope fused doc is 1 — but the single-scoring-
+   * scope degenerate case passes ORIGINAL (pre-fusion) scores through
+   * unchanged, and those are not guaranteed to fall in [0,1]. */
   ranked: { id: string; scope: string; score: number }[];
   /** scopes that participated in fusion */
   federated: string[];
@@ -141,11 +144,22 @@ export interface ScopeRankOps {
 
 /**
  * Multi-scope orchestration for `ask`'s symbol ranking: for each scope, score
- * lexically, walk the scope's subgraph, blend exactly like the single-scope
- * path (`lexN + graphWeight·pr`, both per-scope-normalized; walk-rescued
- * nodes join above `rescueFloor`), then fuse all scopes' blended lists with
+ * lexically, gate by soft federation on the RAW lexical scores, walk the
+ * scope's subgraph, blend exactly like the single-scope path (`lexN +
+ * graphWeight·pr`, both per-scope-normalized; walk-rescued nodes join above
+ * `rescueFloor`), then fuse the surviving scopes' blended lists with
  * {@link fuseScopes}. A scope with zero lexical matches contributes nothing
  * (no seeds → no walk → no docs).
+ *
+ * The gate MUST run on raw (pre-normalization) lexical scores. `fuseScopes`'s
+ * own gate compares its input scores, but this function's input to
+ * `fuseScopes` is already per-scope-normalized (`lexN`, each scope's own max
+ * → ~1.0) — gating on THAT would make the 0.25×global-best participation gate
+ * vacuous: any scope with even one scoring doc, however weak, normalizes to
+ * the same ceiling as every other scope and always clears it. So the gate is
+ * applied here, before normalization, and gated-out scopes never enter the
+ * walk/blend/fuse pipeline at all — they go straight to `alsoMatched` with
+ * their best RAW-lex doc.
  */
 export function rankScopesAndFuse(
   scopes: string[],
@@ -153,13 +167,41 @@ export function rankScopesAndFuse(
   graphWeight: number,
   rescueFloor: number,
 ): FusionResult {
-  const scoped: ScopedDoc[] = [];
+  // Pass 1: lexical scoring only, per scope — cheap, and needed up front to
+  // compute the global raw best the gate compares against.
+  const lexByScope = new Map<string, Map<string, number>>();
+  let globalRawBest = 0;
   for (const scope of scopes) {
     const lex = ops.lex(scope);
     if (lex.size === 0) continue;
-    const pr = ops.walk(scope, lex);
+    lexByScope.set(scope, lex);
+    for (const v of lex.values()) if (v > globalRawBest) globalRawBest = v;
+  }
+
+  const gate = PARTICIPATION_RATIO * globalRawBest;
+  const alsoMatched: FusionResult["alsoMatched"] = [];
+  const scoped: ScopedDoc[] = [];
+
+  for (const [scope, lex] of lexByScope) {
+    // Raw best (+ its doc id) for THIS scope, score desc / id asc — same
+    // tiebreak fuseScopes uses, so the reported bestId is deterministic.
     let maxLex = 0;
-    for (const v of lex.values()) if (v > maxLex) maxLex = v;
+    let bestId = "";
+    for (const [id, v] of lex) {
+      if (v > maxLex || (v === maxLex && id < bestId)) {
+        maxLex = v;
+        bestId = id;
+      }
+    }
+    if (maxLex <= 0) continue; // no positive-scoring doc — contributes nothing
+
+    if (maxLex < gate) {
+      alsoMatched.push({ scope, bestId });
+      continue; // excluded from fusion — no walk, no blend
+    }
+
+    // Pass 2: only surviving scopes pay for the graph walk + blend.
+    const pr = ops.walk(scope, lex);
     const candidates = new Set(lex.keys());
     for (const [id, p] of pr) if (p >= rescueFloor) candidates.add(id);
     for (const id of candidates) {
@@ -168,5 +210,14 @@ export function rankScopesAndFuse(
       if (blended > 0) scoped.push({ id, scope, score: blended });
     }
   }
-  return fuseScopes(scoped);
+
+  // fuseScopes's own gate still runs on this (already-survivor, already-
+  // normalized) input — left as-is per its pure-test contract; it's now
+  // effectively a no-op safety net rather than the real gate.
+  const fused = fuseScopes(scoped);
+  return {
+    ranked: fused.ranked,
+    federated: fused.federated,
+    alsoMatched: [...alsoMatched, ...fused.alsoMatched],
+  };
 }

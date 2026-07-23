@@ -5,7 +5,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fuseScopes, RRF_K, PARTICIPATION_RATIO, type ScopedDoc } from "../src/ask/fuse.js";
+import {
+  fuseScopes,
+  rankScopesAndFuse,
+  RRF_K,
+  PARTICIPATION_RATIO,
+  type ScopedDoc,
+  type ScopeRankOps,
+} from "../src/ask/fuse.js";
+import { formatAsk, type AskHit, type AskResult } from "../src/ask/ask.js";
 
 /** A scope's docs with per-scope-normalized-looking scores, best first. */
 function scopeDocs(scope: string, scores: number[]): ScopedDoc[] {
@@ -94,4 +102,85 @@ test("deterministic under input shuffle, including score ties", () => {
   for (const shuffled of shuffles) {
     assert.deepEqual(fuseScopes(shuffled), baseline, "same result regardless of input order");
   }
+});
+
+// ── rankScopesAndFuse: the participation gate must apply to RAW lexical
+// scores, not the per-scope-normalized blend. `rankScopesAndFuse` normalizes
+// each scope's lexical scores to ITS OWN max before blending, so if the gate
+// were checked on the blended input (as `fuseScopes` sees it), every scope
+// with even one scoring doc would normalize to ~1.0 and the 0.25×global-best
+// gate would never fire. These drive `rankScopesAndFuse` end to end (through
+// its `lex`/`walk` callback seam, the same seam `ask.ts` drives it through)
+// so a regression here is caught even if `fuseScopes`'s own (pure, post-
+// normalization) gate still passes its tests. ──────────────────────────────
+
+/** Scope "a": five docs with a real raw-lex spread (best = 10). Scope "b":
+ * one doc whose raw score is `bRaw` — the probe knob. No graph walk (PR
+ * rescue isn't what's under test). */
+function makeOps(bRaw: number): ScopeRankOps {
+  const aLex = new Map([
+    ["a1", 10],
+    ["a2", 8],
+    ["a3", 6],
+    ["a4", 4],
+    ["a5", 2],
+  ]);
+  const bLex = new Map([["b1", bRaw]]);
+  return {
+    lex: (s) => (s === "a" ? new Map(aLex) : new Map(bLex)),
+    walk: () => new Map(),
+  };
+}
+
+test("rankScopesAndFuse: a scope with one weak RAW-lex match (ratio « 0.25) is excluded from ranked and reported in alsoMatched", () => {
+  // b1 = 0.4, a's raw best = 10 → ratio 0.04, far under the 0.25 gate. Under
+  // the vacuous gate this junk match would normalize to 1.0 (it's its scope's
+  // own max) and federate, fusing at rank ~1-2 by RRF's rank-only math — this
+  // pins that it no longer does.
+  const r = rankScopesAndFuse(["a", "b"], makeOps(0.4), 0.5, 0.05);
+  assert.deepEqual(r.federated, ["a"], "b must not federate on a raw ratio of 0.04");
+  assert.deepEqual(r.alsoMatched, [{ scope: "b", bestId: "b1" }]);
+  assert.ok(
+    r.ranked.every((d) => d.scope === "a"),
+    "b's junk match must not appear anywhere in the fused order",
+  );
+  assert.deepEqual(
+    r.ranked.map((d) => d.id),
+    ["a1", "a2", "a3", "a4", "a5"],
+    "sole surviving scope passes through in raw score order",
+  );
+});
+
+test("rankScopesAndFuse: inverse — a scope whose RAW-lex ratio meets the gate still federates", () => {
+  // b1 = 2.5 = exactly 0.25 × 10 — the gate is inclusive.
+  const r = rankScopesAndFuse(["a", "b"], makeOps(2.5), 0.5, 0.05);
+  assert.deepEqual([...r.federated].sort(), ["a", "b"], "b federates at exactly the raw-lex gate");
+  assert.deepEqual(r.alsoMatched, []);
+  assert.ok(
+    r.ranked.some((d) => d.id === "b1"),
+    "b's doc appears in the fused order",
+  );
+});
+
+test("formatAsk: 'also matched … --in …' actually renders for a scope gated out on raw lex", () => {
+  const fusion = rankScopesAndFuse(["a", "b"], makeOps(0.4), 0.5, 0.05);
+  const hits: AskHit[] = fusion.ranked.map((d) => ({
+    kind: "symbol",
+    title: d.id,
+    pointer: d.id,
+    snippet: "",
+    score: d.score,
+    scope: d.scope,
+  }));
+  const scopes =
+    fusion.federated.length > 1 || fusion.alsoMatched.length > 0
+      ? { federated: fusion.federated, alsoMatched: fusion.alsoMatched }
+      : undefined;
+  const result: AskResult = { query: "weak-scope probe", mode: "lexical", hits, scopes };
+  const out = formatAsk(result);
+  assert.match(
+    out,
+    /also matched: b\/ — narrow with --in b\//,
+    `expected an "also matched" footer line for b/, got:\n${out}`,
+  );
 });
