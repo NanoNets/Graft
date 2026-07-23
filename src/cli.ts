@@ -187,7 +187,7 @@ program
     const askGlobalDir = program.opts<GlobalOpts>().dir;
     if (readWorkspace(resolve(dir), askGlobalDir)) {
       runWorkspaceAsk(resolve(dir), askGlobalDir, query, {
-        limit: Number(opts.limit), source: opts.source, full: opts.full, json: opts.json,
+        limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, json: opts.json,
       });
       return;
     }

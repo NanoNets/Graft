@@ -188,6 +188,49 @@ test("one unbuilt child is surfaced, not silently skipped", async () => {
   rmSync(p, { recursive: true, force: true });
 });
 
+const JUNK = {
+  repoA: { "a.ts": "export function invoiceTotalTaxBreakdown() { return sumLineItems(); }\nfunction sumLineItems() { return 0; }\n" },
+  repoB: { "b.ts": "export function renderPanel() { const total = 0; return total; }\nfunction helper() { return 1; }\n" },
+};
+
+test("federated ask: a junk-body-token child is gated out of the ranking, into alsoMatched", async () => {
+  const p = workspaceFx(JUNK);
+  await buildWorkspace(p);
+  // repoA genuinely matches all query terms (coverage 1.0); repoB matches only
+  // the incidental body token "total" (coverage ~0.19) → below 0.25×best.
+  const r = federateAsk(p, undefined, "invoice total tax breakdown", { limit: 8 });
+  const titles = r.hits.map((h) => h.title);
+  assert.ok(titles.some((t) => t.startsWith("invoiceTotalTaxBreakdown")), "repoA genuine hit federates");
+  assert.ok(!titles.some((t) => t.startsWith("renderPanel")), `junk hit must NOT federate:\n${titles.join("\n")}`);
+  assert.ok(r.hits.every((h) => h.scope!.startsWith("repoA")), "only repoA federates");
+  assert.deepEqual(r.scopes?.alsoMatched.map((m) => m.scope), ["repoB"], "junk child reported in alsoMatched");
+  rmSync(p, { recursive: true, force: true });
+});
+
+test("federated ask: a genuinely-shared query still federates both children", async () => {
+  const p = workspaceFx(REPOS);
+  await buildWorkspace(p);
+  const r = federateAsk(p, undefined, "handler", { limit: 8 });
+  const scopeSet = new Set(r.hits.map((h) => h.scope!.split("/")[0]));
+  assert.ok(scopeSet.has("repoA") && scopeSet.has("repoB"), "both children federate a shared term");
+  rmSync(p, { recursive: true, force: true });
+});
+
+test("federated ask: --in <child> narrows to that child; --in <unknown> errors listing repos", async () => {
+  const p = workspaceFx(REPOS);
+  await buildWorkspace(p);
+  const scoped = federateAsk(p, undefined, "handler", { limit: 8, in: "repoA" });
+  assert.ok(scoped.hits.length > 0);
+  assert.ok(scoped.hits.every((h) => h.scope!.startsWith("repoA")), "--in repoA excludes repoB");
+  // trailing slash tolerated, same as single-repo --in
+  assert.ok(federateAsk(p, undefined, "handler", { in: "repoA/" }).hits.every((h) => h.scope!.startsWith("repoA")));
+  assert.throws(
+    () => federateAsk(p, undefined, "handler", { in: "nope" }),
+    /no workspace repo "nope".*repoA.*repoB/s,
+  );
+  rmSync(p, { recursive: true, force: true });
+});
+
 test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   const p = mkdtempSync(join(tmpdir(), "ws-"));
   mkdirSync(contextDirFor(p), { recursive: true });

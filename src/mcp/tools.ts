@@ -158,7 +158,8 @@ function callWorkspaceTool(
       const query = String(args.query ?? '');
       if (!query) return { text: 'graft_ask requires a query', isError: true };
       const limit = typeof args.limit === 'number' ? args.limit : 5;
-      const r = federateAsk(root, dirOverride, query, { limit, source: true, full: args.full === true });
+      const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
+      const r = federateAsk(root, dirOverride, query, { limit, source: true, full: args.full === true, in: inArg });
       return { text: formatAsk(r), isError: false };
     }
     case 'graft_callers': {

@@ -34,7 +34,7 @@ import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
 import { wiringPath } from "./write.js";
 import type { GraphV1 } from "./types.js";
 import { ask, type AskHit, type AskResult } from "../ask/ask.js";
-import { fuseScopes, type ScopedDoc } from "../ask/fuse.js";
+import { fuseScopes, PARTICIPATION_RATIO, type ScopedDoc } from "../ask/fuse.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "../search/grep.js";
 import { formatGrepResult, zeroHitNote } from "../search/grep-cli.js";
 import { savingsFooter, type Savings } from "../context/savings.js";
@@ -169,6 +169,17 @@ export interface FederateAskOptions {
   source?: boolean;
   full?: boolean;
   graphRank?: boolean;
+  /** Narrow to one child (`repoA`) or a sub-scope within it (`repoA/backend`).
+   * A prefix matching NO child throws, listing the repos. */
+  in?: string;
+}
+
+interface ChildRun {
+  child: string;
+  hits: AskHit[];
+  /** The child's top-hit idf-weighted matched share — a RAW, cross-child-
+   * comparable magnitude (NOT per-child normalized), used for the gate. */
+  coverage: number;
 }
 
 /**
@@ -190,10 +201,26 @@ export function federateAsk(
 ): AskResult {
   const wg = loadWorkspaceGraphs(root, override);
   const limit = opts.limit ?? 8;
-  const docs: ScopedDoc[] = [];
-  const back = new Map<string, { child: string; hit: AskHit }>();
 
+  // `--in` scopes to a single child (and, past the first segment, a sub-scope
+  // within it). A prefix naming no known child at all is a caller mistake.
+  let onlyChild: string | undefined;
+  let childIn: string | undefined;
+  if (opts.in) {
+    const prefix = opts.in.replace(/\/+$/, "");
+    const [name, ...rest] = prefix.split("/");
+    const allChildren = [...wg.loaded.map((l) => l.child), ...wg.missing].sort();
+    if (!allChildren.includes(name)) {
+      throw new Error(`no workspace repo "${name}" - repos: ${allChildren.join(", ")}`);
+    }
+    onlyChild = name;
+    childIn = rest.length ? rest.join("/") : undefined;
+  }
+
+  // Pass 1: run each child's ask; keep its hits + RAW top-hit coverage.
+  const runs: ChildRun[] = [];
   for (const { child } of wg.loaded) {
+    if (onlyChild && child !== onlyChild) continue;
     let r: AskResult;
     try {
       // Over-fetch per child so cross-child fusion has enough candidates to
@@ -203,13 +230,38 @@ export function federateAsk(
         source: opts.source,
         full: opts.full,
         graphRank: opts.graphRank,
+        in: childIn,
       });
     } catch {
-      continue; // a corrupt/odd child never sinks the whole federated query
+      continue; // corrupt child, or a sub-scope --in matching nothing here
     }
-    r.hits.forEach((hit, i) => {
+    if (r.hits.length === 0) continue;
+    runs.push({ child, hits: r.hits, coverage: r.coverage ?? 0 });
+  }
+
+  // Cross-child participation gate on RAW coverage: per-child scores are each
+  // normalized (top ~1.0 everywhere), which makes fuseScopes's own gate vacuous
+  // across repos. coverage (the top hit's idf-weighted matched share) is NOT
+  // per-child normalized and IS comparable across corpora, so a child below
+  // 0.25x the best is reported in alsoMatched, not fused — this keeps a junk
+  // body-token collision in one repo out of another repo's genuine ranking.
+  const bestCoverage = runs.reduce((m, r) => Math.max(m, r.coverage), 0);
+  const gate = PARTICIPATION_RATIO * bestCoverage;
+  const gatedOut: { scope: string; bestId: string }[] = [];
+  const survivors: ChildRun[] = [];
+  for (const run of runs) {
+    if (run.coverage >= gate) survivors.push(run);
+    else gatedOut.push({ scope: run.child, bestId: prefixPointer(run.child, run.hits[0].pointer) });
+  }
+
+  // Fuse the survivors' scope lists (within-child fusion is left untouched —
+  // each child already ran its own per-scope RRF).
+  const docs: ScopedDoc[] = [];
+  const back = new Map<string, { child: string; hit: AskHit }>();
+  for (const { child, hits } of survivors) {
+    hits.forEach((hit, i) => {
       const scope = hit.scope ? `${child}/${hit.scope}` : child;
-      const id = `${child} ${i}`;
+      const id = `${child} ${i}`;
       docs.push({ id, scope, score: hit.score });
       back.set(id, { child, hit });
     });
@@ -221,19 +273,13 @@ export function federateAsk(
     return { ...hit, score: rd.score, scope: rd.scope, pointer: prefixPointer(child, hit.pointer) };
   });
 
+  const alsoMatched = [...fused.alsoMatched, ...gatedOut];
   const note = coverageNote(wg);
-  const result: AskResult = {
-    query,
-    mode: hits.length ? "lexical" : "empty",
-    hits,
-  };
-  if (hits.length && (fused.federated.length > 1 || fused.alsoMatched.length > 0)) {
-    result.scopes = { federated: fused.federated, alsoMatched: fused.alsoMatched };
-  } else if (hits.length) {
-    // Single contributing scope still deserves its `<child>/` label.
-    result.scopes = { federated: [...new Set(hits.map((h) => h.scope!))], alsoMatched: [] };
-  }
-  if (!hits.length) {
+  const result: AskResult = { query, mode: hits.length ? "lexical" : "empty", hits };
+  if (hits.length) {
+    const federated = fused.federated.length ? fused.federated : [...new Set(hits.map((h) => h.scope!))];
+    result.scopes = { federated, alsoMatched };
+  } else {
     result.note = `no matching nodes across ${wg.loaded.length} workspace repo(s) — try different words, or \`graft build\` at a child`;
   }
   if (note) result.note = result.note ? `${result.note}\n${note}` : note;
