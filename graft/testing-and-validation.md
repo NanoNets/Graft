@@ -80,18 +80,21 @@ covers:
   - symbol: multiScopeFixture
     kind: function
     at: 'test/ask.test.ts:L277-L310'
+  - symbol: crossSeamMonorepoFixture
+    kind: function
+    at: 'test/ask.test.ts:L346-L387'
   - symbol: siblingPrefixFixture
     kind: function
-    at: 'test/ask.test.ts:L336-L343'
+    at: 'test/ask.test.ts:L417-L424'
   - symbol: idfShiftFixture
     kind: function
-    at: 'test/ask.test.ts:L370-L381'
+    at: 'test/ask.test.ts:L451-L462'
   - symbol: rankOf
     kind: function
-    at: 'test/ask.test.ts:L388-L388'
+    at: 'test/ask.test.ts:L469-L469'
   - symbol: duplicateNameFixture
     kind: function
-    at: 'test/ask.test.ts:L555-L570'
+    at: 'test/ask.test.ts:L636-L651'
   - symbol: strip
     kind: function
     at: 'test/claude-format.test.ts:L6-L6'
@@ -107,6 +110,12 @@ covers:
   - symbol: fakeBuild
     kind: function
     at: 'test/claude-hooks.test.ts:L84-L87'
+  - symbol: writeMultiScopeWiring
+    kind: function
+    at: 'test/claude-hooks.test.ts:L126-L145'
+  - symbol: writeAskArgsStub
+    kind: function
+    at: 'test/claude-hooks.test.ts:L247-L258'
   - symbol: fresh
     kind: function
     at: 'test/claude-init.test.ts:L10-L10'
@@ -167,9 +176,15 @@ covers:
   - symbol: graphOf
     kind: function
     at: 'test/graph-map.test.ts:L55-L61'
+  - symbol: graphOfWithScopes
+    kind: function
+    at: 'test/graph-map.test.ts:L66-L70'
+  - symbol: twoScopeFixture
+    kind: function
+    at: 'test/graph-map.test.ts:L249-L264'
   - symbol: bigFixture
     kind: function
-    at: 'test/graph-map.test.ts:L240-L259'
+    at: 'test/graph-map.test.ts:L381-L400'
   - symbol: 'n'
     kind: function
     at: 'test/graph-resolve-typed.test.ts:L6-L10'

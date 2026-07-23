@@ -59,16 +59,16 @@ covers:
     at: 'src/hosts/init.ts:L37-L72'
   - symbol: instructionBody
     kind: function
-    at: 'src/hosts/instructions.ts:L6-L43'
+    at: 'src/hosts/instructions.ts:L6-L46'
   - symbol: cursorRule
     kind: function
-    at: 'src/hosts/instructions.ts:L45-L52'
+    at: 'src/hosts/instructions.ts:L48-L55'
   - symbol: kiroSteering
     kind: function
-    at: 'src/hosts/instructions.ts:L54-L60'
+    at: 'src/hosts/instructions.ts:L57-L63'
   - symbol: windsurfRule
     kind: function
-    at: 'src/hosts/instructions.ts:L62-L65'
+    at: 'src/hosts/instructions.ts:L65-L68'
   - symbol: McpWrite
     kind: interface
     at: 'src/hosts/mcp-config.ts:L10-L14'

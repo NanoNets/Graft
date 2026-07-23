@@ -1,4 +1,4 @@
 # test/ask-fusion.test.ts
 
-- scopeDocs · function · L19-L21 — function scopeDocs(scope: string, scores: number[]): ScopedDoc[]
-- makeOps · function · L120-L133 — function makeOps(bRaw: number): ScopeRankOps
+- scopeDocs · function · L21-L23 — function scopeDocs(scope: string, scores: number[]): ScopedDoc[]
+- makeOps · function · L132-L146 — function makeOps(bStrength: { coverage: number; coverageStrong: number }): ScopeRankOps
