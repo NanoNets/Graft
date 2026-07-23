@@ -68,7 +68,7 @@ test('formatRetrieval renders top hits, trims snippet, first pointer only', () =
     { kind: 'concept', title: 'PKCE', pointer: 'src/pkce.ts, src/client.ts', snippet: 'Validates   the   challenge.', score: 1 },
   ] } as any;
   const txt = strip(formatRetrieval(ask)!);
-  assert.match(txt, /likely starting points/); // pointers-only header (no inlined code)
+  assert.match(txt, /starting points for this task/); // pointers-only header (no inlined code)
   assert.match(txt, /PKCE — src\/pkce\.ts/);
   assert.match(txt, /Validates the challenge\./); // snippet trimmed, own line
   assert.doesNotMatch(txt, /client\.ts/); // only the first pointer segment
@@ -139,7 +139,9 @@ test('formatOrientation labels and truncates to budget', () => {
   const md = 'X'.repeat(3000);
   const out = strip(formatOrientation(md, 1500));
   assert.match(out, /repo map/);
-  assert.ok(out.length < 1600, 'trimmed to budget + short header');
+  assert.match(out, /reach for graft first/, 'always-on usage directive present');
+  // index truncated to budget (1500) + the fixed usage directive header (~500).
+  assert.ok(out.length < 2200, 'index trimmed to budget; only the fixed directive adds to it');
 });
 
 test('renderSubagent shows agent name and its last query', () => {
