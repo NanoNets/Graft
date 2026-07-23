@@ -92,8 +92,14 @@ export class Graft {
    * channel. Deterministic and $0: routes structural queries to the wiring
    * edges and everything else to a lexical rank over concepts + symbols.
    */
-  ask(dir: string, query: string, opts: { limit?: number; source?: boolean; full?: boolean } = {}): AskResult {
-    return ask(dir, query, { contextDir: this.cfg.contextDir, limit: opts.limit, source: opts.source, full: opts.full });
+  ask(dir: string, query: string, opts: { limit?: number; source?: boolean; full?: boolean; in?: string } = {}): AskResult {
+    return ask(dir, query, {
+      contextDir: this.cfg.contextDir,
+      limit: opts.limit,
+      source: opts.source,
+      full: opts.full,
+      in: opts.in,
+    });
   }
 
   private _chatModel?: ChatModel;

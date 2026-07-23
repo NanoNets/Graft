@@ -2,5 +2,5 @@
 
 - ToolDef · interface · L19-L23 — Defines the structure for tool definitions used in the MCP tools, ensuring consistent input schema and metadata for each tool.
 - unknownSymbolText · function · L27-L29 — Generates an error message for an unknown symbol query, guiding users to check their input or build the graph.
-- renderMatches · function · L117-L132 — Formats and renders the results of graph traversal matches, providing a structured output for users to understand symbol relationships.
-- callTool · function · L134-L215 — Handles the invocation of various tools based on user input, managing errors and returning formatted results for different graph operations.
+- renderMatches · function · L121-L136 — Formats and renders the results of graph traversal matches, providing a structured output for users to understand symbol relationships.
+- callTool · function · L138-L220 — Handles the invocation of various tools based on user input, managing errors and returning formatted results for different graph operations.

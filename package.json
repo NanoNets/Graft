@@ -1,6 +1,6 @@
 {
   "name": "@nanonets/graft",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Build a repo's context graph as a folder of linked markdown files that live in the repo and stay in sync with the code through git.",
   "keywords": [
     "ai",

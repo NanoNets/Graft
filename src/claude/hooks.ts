@@ -5,6 +5,7 @@ import { readWiring } from './stats.js';
 import { formatBlastRadius, relevantRetrieval, formatOrientation } from './format.js';
 import { patchStats, readStats, acquireLock, readSession, writeSession } from './state.js';
 import { graftCliPath, claudeScriptPath } from './paths.js';
+import { scopeOf, scopesOfGraph } from '../graph/scopes.js';
 
 /** Prompts shorter than this never trigger retrieval — they are almost always
  * conversational ("yes go ahead", "thanks") and the coverage gate can't judge
@@ -27,7 +28,12 @@ export function underGraft(dir: string, file: string): boolean {
 }
 function graftJson(dir: string, args: string[]): any | null {
   try {
-    const out = execFileSync(process.execPath, [graftCliPath(), ...args],
+    // GRAFT_TEST_CLI is a test seam (mirrors GRAFT_TEST_STDIN/GRAFT_TEST_SYNC_RUN) so
+    // tests can point the prompt hook's `graft ask`/`graft check` calls at a stub
+    // script and observe the exact args it was invoked with, instead of shelling
+    // out to the real CLI (which isn't built relative to the TS source under test).
+    const cliPath = process.env.GRAFT_TEST_CLI ?? graftCliPath();
+    const out = execFileSync(process.execPath, [cliPath, ...args],
       { cwd: dir, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
   } catch (e: any) {
@@ -54,6 +60,48 @@ async function handlePostEdit(input: any, dir: string): Promise<void> {
   patchStats(dir, { dirty: true, staleCount: checkStaleCount(dir), lastFile: basename(file) });
   const w = readWiring(dir);
   if (w) { const br = formatBlastRadius(w, file); if (br) emit('PostToolUse', br); }
+}
+
+/**
+ * The "you're working in backend/, weight it" hint: on a multi-scope repo,
+ * narrow the prompt hook's `ask` call to whatever scope the last-edited file
+ * (`stats.lastFile`, captured at {@link handlePostEdit}) sits in.
+ *
+ * `lastFile` is only a basename (not a repo-relative path — see
+ * `handlePostEdit`), so this is a best-effort lookup against the CURRENT
+ * graph: any file node whose path ends in `/<lastFile>` (or equals it, for a
+ * repo-root file). Fails soft in every direction a hook must never crash on —
+ * no graph, a single-scope graph, a lastFile no longer in the graph (moved,
+ * deleted, or edited before the first build), or a basename that lands in
+ * more than one scope (ambiguous: could be either sub-project) all skip the
+ * hint silently, logging one line to stderr so the miss is visible without
+ * ever failing the hook.
+ */
+export function lastFileScopeHint(dir: string, lastFile: string | null | undefined): string | null {
+  if (!lastFile) return null;
+  try {
+    const w = readWiring(dir);
+    if (!w) return null;
+    const scopes = scopesOfGraph(w);
+    if (scopes.length <= 1) return null; // single-scope: no hint, no --in
+    const matches = (w.nodes ?? []).filter(
+      (n) => n.kind === 'file' && (n.path === lastFile || n.path.endsWith(`/${lastFile}`)),
+    );
+    if (matches.length === 0) {
+      console.error(`[graft] prompt hook: lastFile "${lastFile}" not found in the graph — skipping scope hint`);
+      return null;
+    }
+    const prefixes = new Set(matches.map((n) => scopeOf(n.path, scopes).prefix));
+    if (prefixes.size > 1) {
+      console.error(`[graft] prompt hook: lastFile "${lastFile}" matches more than one scope — skipping scope hint`);
+      return null;
+    }
+    const [prefix] = prefixes;
+    return prefix === '' ? null : prefix; // root scope: nothing to narrow
+  } catch (e: any) {
+    console.error(`[graft] prompt hook: scope hint lookup failed (${e?.message ?? e}) — skipping`);
+    return null;
+  }
 }
 
 function handleStop(dir: string): void {
@@ -99,7 +147,12 @@ export async function main(event: string): Promise<void> {
     // pulls spans itself via `graft ask --source` when a pointer looks right.
     // relevantRetrieval then drops the pack entirely when the prompt barely
     // overlaps the top hit or when every hit was already injected this session.
-    const ask = graftJson(dir, ['ask', prompt, '.', '--json', '-n', '3']);
+    const askArgs = ['ask', prompt, '.', '--json', '-n', '3'];
+    // "You're working in backend/, weight it": only fires on a multi-scope
+    // repo whose lastFile resolves cleanly to one scope — see lastFileScopeHint.
+    const scopeHint = lastFileScopeHint(dir, readStats(dir)?.lastFile);
+    if (scopeHint) askArgs.push('--in', scopeHint);
+    const ask = graftJson(dir, askArgs);
     if (!ask) return;
     const id = input.session_id || 'default';
     const s = readSession(dir, id);

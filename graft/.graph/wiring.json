@@ -1,10 +1,19 @@
 {
   "meta": {
     "version": 1,
-    "nodeCount": 758,
-    "edgeCount": 1955,
+    "nodeCount": 798,
+    "edgeCount": 2063,
     "languages": [
       "typescript"
+    ],
+    "scopes": [
+      {
+        "prefix": "",
+        "label": "",
+        "markers": [
+          "package.json"
+        ]
+      }
     ]
   },
   "nodes": [
@@ -2096,12 +2105,12 @@
       "name": "ask.ts",
       "kind": "file",
       "path": "src/ask/ask.ts",
-      "span": "L1-L756",
+      "span": "L1-L939",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "7a50c1c1d10cf0339157147d88858dcd22a2f3fad56f426bbf75fbcff29f4538",
-      "chars": 33648,
+      "body_hash": "9b4a22ecd84021a10900b5cc6e266f8b52c261385337ec0cf8006ecae8b3d6c0",
+      "chars": 44203,
       "summary_state": "stale",
       "summary": "This module provides a mechanism to process natural language queries and return structured results from a codebase, enhancing the ability to find relevant code snippets and their relationships.",
       "crux": {
@@ -2114,12 +2123,12 @@
       "name": "ask",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L581-L611",
+      "span": "L726-L771",
       "signature": "function ask(dir: string, query: string, opts: AskOptions = {}): AskResult",
       "exported": true,
       "origin": "ast",
-      "body_hash": "a9f712f1764f9391acc161a721d4c4f944f728cb4d0df2e602126460d3321cd7",
-      "summary_state": "ready",
+      "body_hash": "fe391f9d96cb8452f28b452ec4a4bd31a6ccb13a5b3f9f1aa928ffe9c6faf0ac",
+      "summary_state": "stale",
       "summary": "Handles the main logic for processing a query against a directory, returning structured results based on the query type.",
       "crux": {
         "code": "export function ask(dir: string, query: string, opts: AskOptions = {}): AskResult {\n  const root = resolve(dir);\n  const outDir = contextDirFor(root, opts.contextDir);\n  const limit = opts.limit ?? 8;\n  const corpus = loadCorpus(outDir);\n  const graphRank = opts.graphRank ?? true;\n\n  let result: AskResult;\n  if (corpus.graph) {\n    const outcome = structural(query, corpus.graph, limit);\n    if (outcome && \"result\" in outcome) {\n      result = outcome.result;",
@@ -2131,12 +2140,12 @@
       "name": "AskHit",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L27-L40",
+      "span": "L29-L46",
       "signature": "interface AskHit",
       "exported": true,
       "origin": "ast",
-      "body_hash": "51baa90dc28b443f824809190b7bb95bd028db20b68aea518ca865769dae424c",
-      "summary_state": "ready",
+      "body_hash": "1829b4fe0563b6d00e315d91b386adc901876283c19e54738ecad4be76e9239a",
+      "summary_state": "stale",
       "summary": "Represents a hit in the query results, encapsulating details about a code symbol and its context.",
       "crux": null
     },
@@ -2145,12 +2154,12 @@
       "name": "AskOptions",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L490-L506",
+      "span": "L629-L651",
       "signature": "interface AskOptions",
       "exported": true,
       "origin": "ast",
-      "body_hash": "e43e59155824acff2cc2bc06107314506a521eba1579a9a04af4875e4736ed57",
-      "summary_state": "ready",
+      "body_hash": "352459201a57364217b351980b179879cb37170119f6953bfcc3b3cc19f01c92",
+      "summary_state": "stale",
       "summary": "Defines the options available for configuring the ask function, allowing customization of its behavior.",
       "crux": {
         "code": "export interface AskOptions {\n  contextDir?: string;\n  limit?: number;\n  /** Inline the source at each `path:Lx-Ly` hit, sliced from `dir`. Turns the\n   * pack from a locator into a retriever so the agent needn't re-open the file. */\n  source?: boolean;\n  /** Re-rank lexical hits by graph connectivity (personalized PageRank over the\n   * wiring edges), demoting same-word collisions and rescuing strongly-connected\n   * neighbours the query didn't name. On by default; set false for pure lexical. */\n  graphRank?: boolean;\n  /** With `source`: inline each hit's WHOLE definition span (capped at\n   * {@link MAX_SPAN_LINES}) instead of the default crux-first slice. The",
@@ -2162,12 +2171,12 @@
       "name": "AskResult",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L46-L63",
+      "span": "L52-L74",
       "signature": "interface AskResult",
       "exported": true,
       "origin": "ast",
-      "body_hash": "4c4d6302e47ed2207bf8ea2e976f97386aaac0470d987fe0203790fe796593d5",
-      "summary_state": "ready",
+      "body_hash": "fd79deb57128e1f4a35d9b927145648ed13bb28e2d0111b52f3375b6a29ede13",
+      "summary_state": "stale",
       "summary": "Represents the result of an 'ask' query, encapsulating the query details and the hits found.",
       "crux": {
         "code": "export interface AskResult {\n  query: string;\n  mode: \"structural\" | \"lexical\" | \"empty\";\n  /** For structural mode: the symbol whose neighbours we walked. */\n  subject?: string;\n  hits: AskHit[];\n  note?: string;\n  /** Token-saving estimate, set only in `--source` (retriever) mode: the whole\n   * size of the distinct files these hits point into, i.e. the baseline cost of\n   * reading them instead of this pack. Computed from file sizes stored at build. */\n  saved?: { files: number; baselineChars: number };\n  /** Lexical mode only: share (0..1) of the query's distinct terms the TOP hit",
@@ -2179,7 +2188,7 @@
       "name": "askSavingsFooter",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L743-L755",
+      "span": "L907-L919",
       "signature": "function askSavingsFooter(r: AskResult, body: string): string",
       "exported": false,
       "origin": "ast",
@@ -2193,7 +2202,7 @@
       "name": "baselineFor",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L575-L578",
+      "span": "L720-L723",
       "signature": "function baselineFor(hits: AskHit[], graph: GraphV1 | null): AskResult[\"saved\"] | undefined",
       "exported": false,
       "origin": "ast",
@@ -2210,7 +2219,7 @@
       "name": "bm25",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L167-L183",
+      "span": "L178-L194",
       "signature": "function bm25( query: Map<string, number>, doc: Map<string, number>, idf: Map<string, number>, dl: number, avgdl: number, ): number",
       "exported": false,
       "origin": "ast",
@@ -2227,7 +2236,7 @@
       "name": "computeIdf",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L141-L146",
+      "span": "L152-L157",
       "signature": "function computeIdf(docBags: Array<Set<string>>): Map<string, number>",
       "exported": false,
       "origin": "ast",
@@ -2244,7 +2253,7 @@
       "name": "computeIdfFromIndex",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L155-L160",
+      "span": "L166-L171",
       "signature": "function computeIdfFromIndex(index: AskIndex, conceptBags: Array<Set<string>>): Map<string, number>",
       "exported": false,
       "origin": "ast",
@@ -2261,7 +2270,7 @@
       "name": "Corpus",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L75-L82",
+      "span": "L86-L93",
       "signature": "interface Corpus",
       "exported": false,
       "origin": "ast",
@@ -2278,7 +2287,7 @@
       "name": "escalationNudge",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L731-L738",
+      "span": "L895-L902",
       "signature": "function escalationNudge(r: AskResult): string",
       "exported": false,
       "origin": "ast",
@@ -2292,7 +2301,7 @@
       "name": "fallthroughNoteFor",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L224-L229",
+      "span": "L245-L250",
       "signature": "function fallthroughNoteFor(subject: string): string",
       "exported": false,
       "origin": "ast",
@@ -2309,12 +2318,12 @@
       "name": "findSubjectNodes",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L207-L214",
-      "signature": "function findSubjectNodes(query: string, graph: GraphV1): { nodes: NodeV1[]; tried: string }",
+      "span": "L227-L235",
+      "signature": "function findSubjectNodes(query: string, graph: GraphV1, inPrefix?: string): { nodes: NodeV1[]; tried: string }",
       "exported": false,
       "origin": "ast",
-      "body_hash": "0a3f88de2d856cea23e66fd4d8ad75220907ec8ddc44e69a3bf853b37ea113f3",
-      "summary_state": "ready",
+      "body_hash": "761fdde19148564b12710387be9dc92d2fe2f61797a537dfe1d796889e313f66",
+      "summary_state": "stale",
       "summary": "Finds nodes in the graph that match the structural subject of a query, enhancing query resolution.",
       "crux": {
         "code": "function findSubjectNodes(query: string, graph: GraphV1): { nodes: NodeV1[]; tried: string } {\n  const words = subjectWords(query).sort((a, b) => b.length - a.length);\n  for (const w of words) {\n    const nodes = resolveSymbol(graph, w);\n    if (nodes.length > 0) return { nodes, tried: w };\n  }\n  return { nodes: [], tried: words[0] ?? query };\n}",
@@ -2326,7 +2335,7 @@
       "name": "firstProse",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L66-L73",
+      "span": "L77-L84",
       "signature": "function firstProse(body: string): string",
       "exported": false,
       "origin": "ast",
@@ -2343,11 +2352,11 @@
       "name": "formatAsk",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L686-L724",
+      "span": "L846-L888",
       "signature": "function formatAsk(r: AskResult): string",
       "exported": true,
       "origin": "ast",
-      "body_hash": "804ecdadf6fb746fe70ea7fa3e2f3d5f4a37e01d04a648e740d6ef7d57af593c",
+      "body_hash": "deabf4d01278ff8b1072c0f08014fbb10def94d18b3dbbec7a42d8511a66d78b",
       "summary_state": "stale",
       "summary": "Formats the results of an ask query into a string for presentation, ensuring clarity and usability.",
       "crux": {
@@ -2360,7 +2369,7 @@
       "name": "formatSkeleton",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L668-L678",
+      "span": "L828-L838",
       "signature": "function formatSkeleton(r: SkeletonResult): string",
       "exported": true,
       "origin": "ast",
@@ -2377,7 +2386,7 @@
       "name": "hasTerm",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L299-L301",
+      "span": "L320-L322",
       "signature": "function hasTerm(f: Map<string, number>, t: string): boolean",
       "exported": false,
       "origin": "ast",
@@ -2394,7 +2403,7 @@
       "name": "hitFiles",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L561-L570",
+      "span": "L706-L715",
       "signature": "function hitFiles(hits: AskHit[]): Set<string>",
       "exported": false,
       "origin": "ast",
@@ -2411,7 +2420,7 @@
       "name": "idfFromDf",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L135-L139",
+      "span": "L146-L150",
       "signature": "function idfFromDf(df: Map<string, number>, n: number): Map<string, number>",
       "exported": false,
       "origin": "ast",
@@ -2428,7 +2437,7 @@
       "name": "inlineSource",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L540-L557",
+      "span": "L685-L702",
       "signature": "function inlineSource(root: string, hits: AskHit[], graph: GraphV1 | null, full: boolean): void",
       "exported": false,
       "origin": "ast",
@@ -2445,12 +2454,12 @@
       "name": "lexical",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L326-L488",
-      "signature": "function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean): AskResult",
+      "span": "L347-L627",
+      "signature": "function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean, inPrefix?: string): AskResult",
       "exported": false,
       "origin": "ast",
-      "body_hash": "407d174feaf3c69d35c15459e96cb9c0e184097237970ecf6ec87b0e2a4e6fdd",
-      "summary_state": "ready",
+      "body_hash": "bc0d80bd39fefdc2afbe20a539235b3167cde7a91f191c830d5582322e68c769",
+      "summary_state": "stale",
       "summary": "Handles lexical queries by scoring documents based on term matches and relevance, returning structured results.",
       "crux": {
         "code": "function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean): AskResult {\n  // Binary query terms: a word repeated in a pasted issue body counts once, so a\n  // ranty description can't linearly amplify an incidental word.\n  const q = new Map([...counts(tokenize(query)).keys()].map((t) => [t, 1]));\n  const graph = corpus.graph;\n\n  // ── Pass 1: tokenize every scored field once, and collect per-document token\n  // bags so IDF can down-weight words that occur across the whole corpus. ──\n  const conceptDocs = corpus.concepts.map((c) => ({\n    c,\n    name: counts(tokenize(c.name)),\n    body: counts(tokenize(c.text)),",
@@ -2462,7 +2471,7 @@
       "name": "bodyLen",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L417-L421",
+      "span": "L463-L467",
       "signature": "bodyLen = (m: Map<string, number>)",
       "exported": false,
       "origin": "ast",
@@ -2479,7 +2488,7 @@
       "name": "loadCorpus",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L84-L109",
+      "span": "L95-L120",
       "signature": "function loadCorpus(outDir: string): Corpus",
       "exported": false,
       "origin": "ast",
@@ -2496,7 +2505,7 @@
       "name": "matchedIdfShare",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L310-L324",
+      "span": "L331-L345",
       "signature": "function matchedIdfShare( q: Map<string, number>, fields: Array<Map<string, number>>, idf: Map<string, number>, dfltIdf: number, ): number",
       "exported": false,
       "origin": "ast",
@@ -2513,7 +2522,7 @@
       "name": "parseSpan",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L510-L514",
+      "span": "L655-L659",
       "signature": "function parseSpan(pointer: string): { path: string; from: number; to: number } | null",
       "exported": false,
       "origin": "ast",
@@ -2526,11 +2535,25 @@
       }
     },
     {
+      "id": "src/ask/ask.ts#scopeFooterLines",
+      "name": "scopeFooterLines",
+      "kind": "function",
+      "path": "src/ask/ask.ts",
+      "span": "L926-L938",
+      "signature": "function scopeFooterLines(r: AskResult): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "ce03d65f9e1db5c09735d5949ee47ec715f1c7d1d231741926df77480effc349",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "src/ask/ask.ts#score",
       "name": "score",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L118-L129",
+      "span": "L129-L140",
       "signature": "function score( query: Map<string, number>, doc: Map<string, number>, idf: Map<string, number>, ): number",
       "exported": false,
       "origin": "ast",
@@ -2547,7 +2570,7 @@
       "name": "skeleton",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L635-L665",
+      "span": "L795-L825",
       "signature": "function skeleton(dir: string, file: string, opts: { contextDir?: string } = {}): SkeletonResult",
       "exported": true,
       "origin": "ast",
@@ -2564,7 +2587,7 @@
       "name": "startLine",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L652-L652",
+      "span": "L812-L812",
       "signature": "startLine = (span: string)",
       "exported": true,
       "origin": "ast",
@@ -2581,7 +2604,7 @@
       "name": "SkeletonEntry",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L615-L622",
+      "span": "L775-L782",
       "signature": "interface SkeletonEntry",
       "exported": true,
       "origin": "ast",
@@ -2598,7 +2621,7 @@
       "name": "SkeletonResult",
       "kind": "interface",
       "path": "src/ask/ask.ts",
-      "span": "L624-L630",
+      "span": "L784-L790",
       "signature": "interface SkeletonResult",
       "exported": true,
       "origin": "ast",
@@ -2615,7 +2638,7 @@
       "name": "sliceSpan",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L518-L533",
+      "span": "L663-L678",
       "signature": "function sliceSpan(root: string, path: string, from: number, to: number): string | null",
       "exported": false,
       "origin": "ast",
@@ -2632,12 +2655,12 @@
       "name": "structural",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L231-L280",
-      "signature": "function structural(query: string, graph: GraphV1, limit: number): StructuralOutcome",
+      "span": "L252-L301",
+      "signature": "function structural(query: string, graph: GraphV1, limit: number, inPrefix?: string): StructuralOutcome",
       "exported": false,
       "origin": "ast",
-      "body_hash": "882a1b72a392c807907ef0e0f699a41d2f69dacacb713a0597b310d964f5fd30",
-      "summary_state": "ready",
+      "body_hash": "28d22f391db0d7decd6c4e2e0575cb620d13a909f63583789dc5c93c9f021532",
+      "summary_state": "stale",
       "summary": "Processes a structural query to find relationships in the graph, returning relevant results or fallthrough notes.",
       "crux": {
         "code": "function structural(query: string, graph: GraphV1, limit: number): StructuralOutcome {\n  const wantsIn = INCOMING.test(query);\n  const wantsOut = OUTGOING.test(query);\n  if (!wantsIn && !wantsOut) return null;\n\n  const { nodes: subjects, tried } = findSubjectNodes(query, graph);\n  if (subjects.length === 0) return { fallthroughNote: fallthroughNoteFor(tried) };\n\n  const ids = new Set(subjects.map((n) => n.id));\n  const byId = new Map(graph.nodes.map((n) => [n.id, n]));\n  const outgoing = wantsOut && !wantsIn; // \"what does X call / import\" — else default to callers\n  const rels = new Set(outgoing ? OUTGOING_RELS : INCOMING_RELS);",
@@ -2649,7 +2672,7 @@
       "name": "StructuralOutcome",
       "kind": "type",
       "path": "src/ask/ask.ts",
-      "span": "L222-L222",
+      "span": "L243-L243",
       "signature": "type StructuralOutcome = { result: AskResult } | { fallthroughNote: string } | null;",
       "exported": false,
       "origin": "ast",
@@ -2666,7 +2689,7 @@
       "name": "subjectWords",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L195-L197",
+      "span": "L206-L208",
       "signature": "function subjectWords(query: string): string[]",
       "exported": false,
       "origin": "ast",
@@ -2683,7 +2706,7 @@
       "name": "toTokens",
       "kind": "function",
       "path": "src/ask/ask.ts",
-      "span": "L681-L683",
+      "span": "L841-L843",
       "signature": "function toTokens(chars: number): number",
       "exported": false,
       "origin": "ast",
@@ -2696,17 +2719,116 @@
       }
     },
     {
+      "id": "src/ask/fuse.ts",
+      "name": "fuse.ts",
+      "kind": "file",
+      "path": "src/ask/fuse.ts",
+      "span": "L1-L224",
+      "signature": null,
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "0b65313aa01758bbef3d80657e806c2427bbecf3d41b1d794f40372e1197a18c",
+      "chars": 9481,
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#byScore",
+      "name": "byScore",
+      "kind": "function",
+      "path": "src/ask/fuse.ts",
+      "span": "L52-L54",
+      "signature": "function byScore(a: ScopedDoc, b: ScopedDoc): number",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "2e71862b501450e9cb3bb07de26f16c01dd99618906c59c130a414e7da43a7aa",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#fuseScopes",
+      "name": "fuseScopes",
+      "kind": "function",
+      "path": "src/ask/fuse.ts",
+      "span": "L67-L130",
+      "signature": "function fuseScopes(docs: ScopedDoc[]): FusionResult",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "1fc7af0954ef0925b2932d5f741f73f4e3f24ca4d84f2f51a1f0361dd377eac4",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#FusionResult",
+      "name": "FusionResult",
+      "kind": "interface",
+      "path": "src/ask/fuse.ts",
+      "span": "L30-L40",
+      "signature": "interface FusionResult",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "4c74f3d554ecf76d50432d9c530683fbef3a6270373dc76c4cfd892c9642e16c",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#rankScopesAndFuse",
+      "name": "rankScopesAndFuse",
+      "kind": "function",
+      "path": "src/ask/fuse.ts",
+      "span": "L164-L223",
+      "signature": "function rankScopesAndFuse( scopes: string[], ops: ScopeRankOps, graphWeight: number, rescueFloor: number, ): FusionResult",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "84a89a0ba27ec0a5e74d63aa5840586fc941020843bec3f7ad7631baa04a06bd",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#ScopedDoc",
+      "name": "ScopedDoc",
+      "kind": "interface",
+      "path": "src/ask/fuse.ts",
+      "span": "L24-L28",
+      "signature": "interface ScopedDoc",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "7701e249da1aa85502adfa3140abb1817498a34d3e3d5d3982f50d0293d95051",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/ask/fuse.ts#ScopeRankOps",
+      "name": "ScopeRankOps",
+      "kind": "interface",
+      "path": "src/ask/fuse.ts",
+      "span": "L136-L143",
+      "signature": "interface ScopeRankOps",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "9238611c91e80fbdf72f0c01ee4b28169ee3ba45d8c3a7ee19afac94c1325126",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "src/ask/graphrank.ts",
       "name": "graphrank.ts",
       "kind": "file",
       "path": "src/ask/graphrank.ts",
-      "span": "L1-L102",
+      "span": "L1-L114",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "a8dfba7907ce7fea84669ddf9ca20f14392b7d1edb5b76db0acf522465078cd5",
-      "chars": 4125,
-      "summary_state": "ready",
+      "body_hash": "6f013649bbb0603d2731d19612da2905d346f86affc95e5b918f2330045ce09b",
+      "chars": 4857,
+      "summary_state": "stale",
       "summary": "This module implements a personalized PageRank algorithm to improve the ranking of code nodes based on their structural relevance rather than just lexical similarity.",
       "crux": {
         "code": " * This module runs personalized PageRank (random-walk-with-restart) over the\n * wiring graph, seeded by the lexical scores. Mass concentrates on nodes that\n * are edge-connected to the matched set; a lexically-matched but structurally\n * isolated node keeps only its own restart mass and sinks. \"Lexical proposes,\n * graph disposes.\" Deterministic, $0, no embeddings — a lexical-seed →\n * graph-rank pipeline, the established alternative to vector search for code.",
@@ -2718,12 +2840,12 @@
       "name": "PageRankOptions",
       "kind": "interface",
       "path": "src/ask/graphrank.ts",
-      "span": "L20-L26",
+      "span": "L20-L32",
       "signature": "interface PageRankOptions",
       "exported": true,
       "origin": "ast",
-      "body_hash": "214701bc4bff2de310654c772007fffb60595fa79289cec6d08de2bd084e6ebc",
-      "summary_state": "ready",
+      "body_hash": "0645c00d3cf93eb3d2194eaa5f87937bb16eff0ae937a433068aa3781b91c162",
+      "summary_state": "stale",
       "summary": "Defines options for configuring the personalized PageRank algorithm, including restart probability and iteration count.",
       "crux": null
     },
@@ -2732,12 +2854,12 @@
       "name": "personalizedPageRank",
       "kind": "function",
       "path": "src/ask/graphrank.ts",
-      "span": "L39-L101",
+      "span": "L45-L113",
       "signature": "function personalizedPageRank( graph: GraphV1, seeds: Map<string, number>, opts: PageRankOptions = {}, ): Map<string, number>",
       "exported": true,
       "origin": "ast",
-      "body_hash": "9047817eb293e393448f4c82571e0ac123573245583ec00ede7f9c621cda982d",
-      "summary_state": "ready",
+      "body_hash": "5cfcdfdadd4ab08f42acb99d706ef062ccfa94990e40d419cf7d80b9d1580603",
+      "summary_state": "stale",
       "summary": "Calculates personalized PageRank scores for nodes in a wiring graph based on provided seeds, enhancing the relevance of code suggestions.",
       "crux": {
         "code": "  let rank = new Map(restart);\n  for (let i = 0; i < iters; i++) {\n    const next = new Map<string, number>();\n    // Teleport: every step, alpha of the mass returns to the seed set.\n    for (const [id, r] of restart) next.set(id, alpha * r);\n    // Dangling mass (nodes with no walk edges) is pooled and returned to the\n    // seed set ONCE per iteration — same math as redistributing per node, but\n    // O(nodes + seeds) instead of O(dangling × seeds).\n    let dangling = 0;\n    for (const [id, mass] of rank) {\n      const nbrs = adj.get(id);\n      if (!nbrs || nbrs.length === 0) {",
@@ -2749,7 +2871,7 @@
       "name": "link",
       "kind": "function",
       "path": "src/ask/graphrank.ts",
-      "span": "L51-L53",
+      "span": "L63-L65",
       "signature": "link = (a: string, b: string)",
       "exported": true,
       "origin": "ast",
@@ -4455,12 +4577,12 @@
       "name": "cli.ts",
       "kind": "file",
       "path": "src/cli.ts",
-      "span": "L1-L460",
+      "span": "L1-L468",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "e65431a2048d2659ae9c3faaa4b5e101d85f48f80fd3a8607276259e87000b67",
-      "chars": 19707,
+      "body_hash": "85850a973f72f1744c74d4d147bf86f676dd5d17972a877ef12eb16951ccff00",
+      "chars": 20013,
       "summary_state": "stale",
       "summary": "Defines the command-line interface for the graft tool, enabling various operations on the codebase's context graph.",
       "crux": {
@@ -5334,13 +5456,13 @@
       "name": "engine.ts",
       "kind": "file",
       "path": "src/engine.ts",
-      "span": "L1-L141",
+      "span": "L1-L147",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "55e2191dd67d1e4369c2a872f1b908937bd6034ce6f8f4b03e6c86a059e271c7",
-      "chars": 5445,
-      "summary_state": "ready",
+      "body_hash": "26150fbd17e28dc95952380426b55e2a9ac25089f2fa640fd805b134e499a1fe",
+      "chars": 5506,
+      "summary_state": "stale",
       "summary": "The Graft class manages the construction and validation of a context graph from a code repository, ensuring it remains in sync with the codebase.",
       "crux": {
         "code": "  /** Build the `.context/` graph from the repo at `dir`. */\n  async init(dir: string, opts: InitOptions = {}): Promise<BuildResult> {\n    return buildContext(dir, {\n      contextDir: this.cfg.contextDir,\n      extensions: opts.extensions,\n      model: this.modelLabel(),\n      summarizer: this.summarizer(),\n      synthesizer: this.synthesizer(),\n      onProgress: opts.onProgress,\n    });\n  }\n",
@@ -5366,12 +5488,12 @@
       "name": "Graft",
       "kind": "class",
       "path": "src/engine.ts",
-      "span": "L47-L140",
+      "span": "L47-L146",
       "signature": "class Graft",
       "exported": true,
       "origin": "ast",
-      "body_hash": "adb6ec4334ba397064dea215aa67225cda0e2ae630d092cb55289a43ec5ab406",
-      "summary_state": "ready",
+      "body_hash": "d22bbb74764ee80994c72fca91ae094b550c1c77438aea072d9a87fec2ce2bb9",
+      "summary_state": "stale",
       "summary": "Manages the context graph operations, including building and checking synchronization with the codebase.",
       "crux": {
         "code": "  /** Build the `.context/` graph from the repo at `dir`. */\n  async init(dir: string, opts: InitOptions = {}): Promise<BuildResult> {\n    return buildContext(dir, {\n      contextDir: this.cfg.contextDir,\n      extensions: opts.extensions,\n      model: this.modelLabel(),\n      summarizer: this.summarizer(),\n      synthesizer: this.synthesizer(),\n      onProgress: opts.onProgress,\n    });\n  }",
@@ -5383,12 +5505,12 @@
       "name": "ask",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L95-L97",
-      "signature": "ask(dir: string, query: string, opts: { limit?: number; source?: boolean; full?: boolean } = {}): AskResult",
+      "span": "L95-L103",
+      "signature": "ask(dir: string, query: string, opts: { limit?: number; source?: boolean; full?: boolean; in?: string } = {}): AskResult",
       "exported": true,
       "origin": "ast",
-      "body_hash": "f06a9cfee7165c009dc1154af3d19c72286f5e59f5df7fd0fd096836bbc1cf90",
-      "summary_state": "ready",
+      "body_hash": "855b7e12e241b242096a3b457ea181e47e11d1613583edb30931d473d2b06bfb",
+      "summary_state": "stale",
       "summary": "Processes a query against the context graph, returning results based on structural and lexical analysis.",
       "crux": {
         "code": "  ask(dir: string, query: string, opts: { limit?: number; source?: boolean; full?: boolean } = {}): AskResult {\n    return ask(dir, query, { contextDir: this.cfg.contextDir, limit: opts.limit, source: opts.source, full: opts.full });",
@@ -5400,7 +5522,7 @@
       "name": "chatModel",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L102-L119",
+      "span": "L108-L125",
       "signature": "private chatModel(): ChatModel",
       "exported": true,
       "origin": "ast",
@@ -5468,7 +5590,7 @@
       "name": "cruxSummarizer",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L126-L128",
+      "span": "L132-L134",
       "signature": "private cruxSummarizer(): CruxSummarizer",
       "exported": true,
       "origin": "ast",
@@ -5519,7 +5641,7 @@
       "name": "modelLabel",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L135-L139",
+      "span": "L141-L145",
       "signature": "private modelLabel(): string",
       "exported": true,
       "origin": "ast",
@@ -5536,7 +5658,7 @@
       "name": "summarizer",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L130-L132",
+      "span": "L136-L138",
       "signature": "private summarizer(): Summarizer",
       "exported": true,
       "origin": "ast",
@@ -5553,7 +5675,7 @@
       "name": "synthesizer",
       "kind": "method",
       "path": "src/engine.ts",
-      "span": "L121-L123",
+      "span": "L127-L129",
       "signature": "private synthesizer(): Synthesizer",
       "exported": true,
       "origin": "ast",
@@ -5939,14 +6061,28 @@
       "name": "build.ts",
       "kind": "file",
       "path": "src/graph/build.ts",
-      "span": "L1-L184",
+      "span": "L1-L216",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "10ae2a085b299a56cb90d41289a956065dd8eef358ae2abbc39db59b82a12dc9",
-      "chars": 6887,
-      "summary_state": "ready",
+      "body_hash": "fe97252d1fd39edda75b40124928d3b820b85f148d380790db92533e5f3ad13d",
+      "chars": 8436,
+      "summary_state": "stale",
       "summary": "This file defines the logic for building a graph representation of a code repository, including parsing source files and resolving dependencies.",
+      "crux": null
+    },
+    {
+      "id": "src/graph/build.ts#applyMinSubstanceGuard",
+      "name": "applyMinSubstanceGuard",
+      "kind": "function",
+      "path": "src/graph/build.ts",
+      "span": "L32-L47",
+      "signature": "function applyMinSubstanceGuard(scopes: ScopeV1[], nodes: NodeV1[]): ScopeV1[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "ef7ca21fa81ef0b4227430f8b8310ffd8b4b056b13c21789f21461de81bfd36b",
+      "summary_state": "pending",
+      "summary": null,
       "crux": null
     },
     {
@@ -5954,12 +6090,12 @@
       "name": "buildGraph",
       "kind": "function",
       "path": "src/graph/build.ts",
-      "span": "L78-L183",
+      "span": "L104-L215",
       "signature": "async function buildGraph( dir: string, opts: GraphBuildOptions = {}, ): Promise<GraphBuildResult>",
       "exported": true,
       "origin": "ast",
-      "body_hash": "d1af486578fcbf56fba090f509e508dd3643f0b735167a7277b055e3cf16e450",
-      "summary_state": "ready",
+      "body_hash": "b8723ad9efae1fbdba009f24539b489eac1f9fa7f13848a46a828b9508cf7f20",
+      "summary_state": "stale",
       "summary": "This function orchestrates the entire graph building process, from parsing source files to writing the final graph output.",
       "crux": {
         "code": "export async function buildGraph(\n  dir: string,\n  opts: GraphBuildOptions = {},\n): Promise<GraphBuildResult> {\n  const root = resolve(dir);\n  const outDir = contextDirFor(root, opts.contextDir);\n  const files = listSourceFiles(root, outDir);\n\n  const nodes: NodeV1[] = [];\n  const rawEdges: RawEdge[] = [];\n  const sources = new Map<string, string>();\n  const langs = new Set<Language>();",
@@ -5971,7 +6107,7 @@
       "name": "GraphBuildOptions",
       "kind": "interface",
       "path": "src/graph/build.ts",
-      "span": "L23-L36",
+      "span": "L49-L62",
       "signature": "interface GraphBuildOptions",
       "exported": true,
       "origin": "ast",
@@ -5985,7 +6121,7 @@
       "name": "GraphBuildResult",
       "kind": "interface",
       "path": "src/graph/build.ts",
-      "span": "L38-L51",
+      "span": "L64-L77",
       "signature": "interface GraphBuildResult",
       "exported": true,
       "origin": "ast",
@@ -5999,7 +6135,7 @@
       "name": "listSourceFiles",
       "kind": "function",
       "path": "src/graph/build.ts",
-      "span": "L54-L56",
+      "span": "L80-L82",
       "signature": "function listSourceFiles(root: string, outDir: string): string[]",
       "exported": true,
       "origin": "ast",
@@ -6016,7 +6152,7 @@
       "name": "readGoModules",
       "kind": "function",
       "path": "src/graph/build.ts",
-      "span": "L62-L76",
+      "span": "L88-L102",
       "signature": "function readGoModules(root: string): GoModule[]",
       "exported": false,
       "origin": "ast",
@@ -7468,6 +7604,231 @@
       }
     },
     {
+      "id": "src/graph/scopes.ts",
+      "name": "scopes.ts",
+      "kind": "file",
+      "path": "src/graph/scopes.ts",
+      "span": "L1-L372",
+      "signature": null,
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "a47e2a9da9c40f42134609f13edfefd91e9d0968787b2a3972fa6d6018f840e3",
+      "chars": 15844,
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#Candidate",
+      "name": "Candidate",
+      "kind": "interface",
+      "path": "src/graph/scopes.ts",
+      "span": "L168-L171",
+      "signature": "interface Candidate",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "920700cef1ecb9fbded680bf0681df3b552cdb08a50afc945cdd6acfb06e9e3f",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#collectDirs",
+      "name": "collectDirs",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L37-L56",
+      "signature": "function collectDirs(root: string): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "478b43f13596223e67fc3f2c5b066cc5600316cdc4de6e221357326b4fdd5268",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#collectDirs.walk",
+      "name": "walk",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L39-L53",
+      "signature": "walk = (absDir: string, relDir: string): void",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "d26aac00009e7f76f7a7e1958f56bb969b377ef8c652b66dc68fc71d7cff8558",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#discoverScopes",
+      "name": "discoverScopes",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L174-L307",
+      "signature": "function discoverScopes(root: string): ScopeV1[]",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "fc453ac1d5073a3b586e525cbc660a729877e5c647b68b686c1cea8cc27d54d4",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#discoverScopes.findNearestAncestorCandidate",
+      "name": "findNearestAncestorCandidate",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L254-L264",
+      "signature": "findNearestAncestorCandidate = ( prefix: string, set: ReadonlyMap<string, Candidate>, ): string | null",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "4464e314cca7c830c5dc94dc606b8cc97716610b8bd749a852f644bc639155bc",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#discoverWorkspaceChildren",
+      "name": "discoverWorkspaceChildren",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L347-L364",
+      "signature": "function discoverWorkspaceChildren(root: string): string[]",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "ad5224035ad5f438b40bc9fc34568618b42c75024d1340fbd41641b5e15488ea",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#parsePnpmPackagesList",
+      "name": "parsePnpmPackagesList",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L60-L73",
+      "signature": "function parsePnpmPackagesList(text: string): string[] | null",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "497850dd39cb4720ad3f6b0382182385c977c2178be815689d0b09eba7b3124b",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#pathUnderPrefix",
+      "name": "pathUnderPrefix",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L341-L343",
+      "signature": "function pathUnderPrefix(path: string, prefix: string): boolean",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "8ebed46dc3e14a70b8b67191511101e049c50147e543447e6c767de9d0d17665",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#readWorkspaceGlobs",
+      "name": "readWorkspaceGlobs",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L78-L100",
+      "signature": "function readWorkspaceGlobs(root: string): string[] | null",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "a9e6972a267d58908ccacb9ef1ce561ec1954bf860ac26b1f57a733920402267",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#resolveGlob",
+      "name": "resolveGlob",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L105-L166",
+      "signature": "function resolveGlob(root: string, pattern: string): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "910ede99c36cde0402153047838f72bdc950ecffd69af1c8dcc52dfc814f5c4d",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#resolveGlob.listDirs",
+      "name": "listDirs",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L140-L150",
+      "signature": "listDirs = (absDir: string, relDir: string): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "c3df203af729650356a4e79472e0151bad1f5d5dc4dbb43016411c8e3c3c4ecf",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#scopeLabel",
+      "name": "scopeLabel",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L323-L325",
+      "signature": "function scopeLabel(prefix: string): string",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "9db6c83369a7345b2ce41c3541ed789ed91b628118ad0a2bd273a5fa6577e953",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#scopeOf",
+      "name": "scopeOf",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L312-L318",
+      "signature": "function scopeOf(path: string, scopes: ScopeV1[]): ScopeV1",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "f022d55c61cb3099f89f4a71a90e41b7227e0ad6b697dd099c5bb25d30f0d349",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#scopesHereClause",
+      "name": "scopesHereClause",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L331-L334",
+      "signature": "function scopesHereClause(scopes: ScopeV1[]): string",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "8613ad77e3818712539ed410cac6a50fa428b86c7c4463bdee0709dcba65cac8",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "src/graph/scopes.ts#scopesOfGraph",
+      "name": "scopesOfGraph",
+      "kind": "function",
+      "path": "src/graph/scopes.ts",
+      "span": "L369-L371",
+      "signature": "function scopesOfGraph(graph: GraphV1): ScopeV1[]",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "f304cd86aef7ba19e8af9543afcc01dc714d92a64570c6207f005aa1a1ddb2d9",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "src/graph/traverse-cli.ts",
       "name": "traverse-cli.ts",
       "kind": "file",
@@ -7906,13 +8267,13 @@
       "name": "types.ts",
       "kind": "file",
       "path": "src/graph/types.ts",
-      "span": "L1-L90",
+      "span": "L1-L103",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "27a9bdbef7783e5da94c860bc83525ef788e38a2176bc1184c8adbee539b1b51",
-      "chars": 3148,
-      "summary_state": "ready",
+      "body_hash": "745855a49536d9dac6a755a03cde0edff96f2acb089d14c8e4c9f2b415fc1d2e",
+      "chars": 3789,
+      "summary_state": "stale",
       "summary": "Defines the structure and relationships of a code graph schema, facilitating the representation of code elements and their interactions.",
       "crux": {
         "code": "/**\n * `graph.json` — the code graph schema (v1).\n *\n * One node per definition (file, class, function, method, interface, type, enum),\n * wired by edges (contains, imports, calls, ...). Field names follow the LSP /\n * SCIP vocabulary (`name`, `kind`, ...) rather than any one tool's conventions.\n *\n * Two tiers of data live on a node:\n *   - Tier-1 (deterministic, $0): everything from the AST. Rebuilt on every run.\n *   - Tier-2 (one LLM call, cached on `body_hash`): `summary` + `crux`.\n * M1 populates Tier-1 only; Tier-2 fields ship as `pending`/null.\n */",
@@ -7975,12 +8336,12 @@
       "name": "GraphV1",
       "kind": "interface",
       "path": "src/graph/types.ts",
-      "span": "L80-L89",
+      "span": "L90-L102",
       "signature": "interface GraphV1",
       "exported": true,
       "origin": "ast",
-      "body_hash": "fa588451b38bfa2c1ea17eeabb5cd4d18769ecbf75ba79fb160d59d2d2666e8e",
-      "summary_state": "ready",
+      "body_hash": "369c9f71b71b2f6f38cfd27efd98311d1231bec2990215a97e776d9f84281f27",
+      "summary_state": "stale",
       "summary": "Encapsulates the entire graph structure, including metadata and collections of nodes and edges.",
       "crux": {
         "code": "export interface GraphV1 {\n  meta: {\n    version: 1;\n    nodeCount: number;\n    edgeCount: number;\n    languages: string[];\n  };\n  nodes: NodeV1[];\n  edges: EdgeV1[];\n}",
@@ -8037,6 +8398,20 @@
         "code": "export type Relation =\n  | \"contains\" // file → symbol, class → method (structural)\n  | \"calls\" // function → function it invokes\n  | \"imports\" // file → module\n  | \"references\" // symbol → symbol it names but doesn't call\n  | \"implements\" // TS: class → interface\n  | \"extends\"; // class → base class",
         "span": "L57-L63"
       }
+    },
+    {
+      "id": "src/graph/types.ts#ScopeV1",
+      "name": "ScopeV1",
+      "kind": "interface",
+      "path": "src/graph/types.ts",
+      "span": "L84-L88",
+      "signature": "interface ScopeV1",
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "e9815468264f0035da829ebd87cd5b705e7bbdcccaba90ba7d9be8e0c14dc7e4",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
     },
     {
       "id": "src/graph/types.ts#SummaryState",
@@ -8859,12 +9234,12 @@
       "name": "tools.ts",
       "kind": "file",
       "path": "src/mcp/tools.ts",
-      "span": "L1-L216",
+      "span": "L1-L221",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "aaf51610f56c46c7cd820891375c55e84f2b8f107495801b825b28b29fd0636b",
-      "chars": 9754,
+      "body_hash": "c481205e1888764a7f6bba2bd2f8180aad34a26b76b770fa9eb98922095f8f37",
+      "chars": 10020,
       "summary_state": "pending",
       "summary": null,
       "crux": null
@@ -8874,11 +9249,11 @@
       "name": "callTool",
       "kind": "function",
       "path": "src/mcp/tools.ts",
-      "span": "L134-L215",
+      "span": "L138-L220",
       "signature": "function callTool( root: string, name: string, args: Record<string, unknown>, dirOverride?: string, ): { text: string; isError: boolean }",
       "exported": true,
       "origin": "ast",
-      "body_hash": "c9755bbd18f707188f094406f20f4d54b7d762683ed9561bd0b7cfc729932791",
+      "body_hash": "2b07af42cf0890c11f542f61ab35d633d359cd356837ac762eacef33eaebd660",
       "summary_state": "stale",
       "summary": "Handles the invocation of various tools based on user input, managing errors and returning formatted results for different graph operations.",
       "crux": {
@@ -8891,7 +9266,7 @@
       "name": "renderMatches",
       "kind": "function",
       "path": "src/mcp/tools.ts",
-      "span": "L117-L132",
+      "span": "L121-L136",
       "signature": "function renderMatches( direction: Direction, showDepth: boolean, matches: NodeV1[], hitsFor: (n: NodeV1) => EdgeHit[], ): string",
       "exported": false,
       "origin": "ast",
@@ -9633,6 +10008,49 @@
       "crux": null
     },
     {
+      "id": "test/ask-fusion.test.ts",
+      "name": "ask-fusion.test.ts",
+      "kind": "file",
+      "path": "test/ask-fusion.test.ts",
+      "span": "L1-L187",
+      "signature": null,
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "8a50eb2ee2a7080cec7c15cecaae2d88d544de3aa574d2964e4c7b1cd007e262",
+      "chars": 7741,
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/ask-fusion.test.ts#makeOps",
+      "name": "makeOps",
+      "kind": "function",
+      "path": "test/ask-fusion.test.ts",
+      "span": "L120-L133",
+      "signature": "function makeOps(bRaw: number): ScopeRankOps",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "f3084c8993ffa26e4eae0137380efb9b1905f1a8b20eca904db995a40a51cc02",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/ask-fusion.test.ts#scopeDocs",
+      "name": "scopeDocs",
+      "kind": "function",
+      "path": "test/ask-fusion.test.ts",
+      "span": "L19-L21",
+      "signature": "function scopeDocs(scope: string, scores: number[]): ScopedDoc[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "8d5a6b8359ac99c0090d6fe289ac6046438586342fae817aafd18bee03eb130d",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "test/ask-index.test.ts",
       "name": "ask-index.test.ts",
       "kind": "file",
@@ -9703,13 +10121,13 @@
       "name": "ask.test.ts",
       "kind": "file",
       "path": "test/ask.test.ts",
-      "span": "L1-L284",
+      "span": "L1-L651",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "3445f8b156ba6b2f0e9123e9fc45781da352ec6d5baeb985ee144fe5aecaafb3",
-      "chars": 11713,
-      "summary_state": "ready",
+      "body_hash": "8fb44f43e36a31cd9d0e517666c39bcd3db352be9b26743d67bb3a2ea3f31df9",
+      "chars": 29002,
+      "summary_state": "stale",
       "summary": "Contains tests for the `ask` functionality, validating its behavior with various options and scenarios.",
       "crux": {
         "code": "test(\"ask without source returns pointers but no inlined code\", async () => {\n  const dir = makeFixture();\n  try {\n    await buildGraph(dir); // $0, structure-only — cards + wiring.json\n    const r = ask(dir, \"addNumbers\");\n    const hit = r.hits.find((h) => h.title.startsWith(\"addNumbers\"));\n    assert.ok(hit, \"should locate the addNumbers symbol\");\n    assert.match(hit.pointer, /^math\\.ts:L\\d+-L\\d+$/);\n    assert.equal(hit.code, undefined, \"no source inlined without the option\");\n  } finally {\n    rmSync(dir, { recursive: true, force: true });\n  }",
@@ -9717,11 +10135,39 @@
       }
     },
     {
+      "id": "test/ask.test.ts#duplicateNameFixture",
+      "name": "duplicateNameFixture",
+      "kind": "function",
+      "path": "test/ask.test.ts",
+      "span": "L555-L570",
+      "signature": "function duplicateNameFixture(): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "65d26c7671c925c41a2a09cad0036295c2ad65006b7f1a58c0c460bed2b31ddd",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/ask.test.ts#idfShiftFixture",
+      "name": "idfShiftFixture",
+      "kind": "function",
+      "path": "test/ask.test.ts",
+      "span": "L370-L381",
+      "signature": "function idfShiftFixture(): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "8a01704e38cec0ac645d0230c648b406a620aabb1cb504882c8badcb533027e3",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "test/ask.test.ts#makeFixture",
       "name": "makeFixture",
       "kind": "function",
       "path": "test/ask.test.ts",
-      "span": "L16-L25",
+      "span": "L17-L26",
       "signature": "function makeFixture(): string",
       "exported": false,
       "origin": "ast",
@@ -9734,11 +10180,25 @@
       }
     },
     {
+      "id": "test/ask.test.ts#multiScopeFixture",
+      "name": "multiScopeFixture",
+      "kind": "function",
+      "path": "test/ask.test.ts",
+      "span": "L277-L310",
+      "signature": "function multiScopeFixture(): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "861ae2479922824311b7da16753f6517024cd4f5989bc02070ca3ec7d0270cf2",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "test/ask.test.ts#qualifiedFixture",
       "name": "qualifiedFixture",
       "kind": "function",
       "path": "test/ask.test.ts",
-      "span": "L189-L207",
+      "span": "L190-L208",
       "signature": "function qualifiedFixture(): string",
       "exported": false,
       "origin": "ast",
@@ -9751,11 +10211,39 @@
       }
     },
     {
+      "id": "test/ask.test.ts#rankOf",
+      "name": "rankOf",
+      "kind": "function",
+      "path": "test/ask.test.ts",
+      "span": "L388-L388",
+      "signature": "rankOf = (r: ReturnType<typeof ask>[\"hits\"], title: string)",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "c03a498c384ff31544d9daa078d91655c746bfcf8f10830ad1e4f0f720e14717",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/ask.test.ts#siblingPrefixFixture",
+      "name": "siblingPrefixFixture",
+      "kind": "function",
+      "path": "test/ask.test.ts",
+      "span": "L336-L343",
+      "signature": "function siblingPrefixFixture(): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "c852d824057f313b5bb59d469c1e04b442dc6b8a3f15e5643e8edbb98c0504f1",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "test/ask.test.ts#stampCrux",
       "name": "stampCrux",
       "kind": "function",
       "path": "test/ask.test.ts",
-      "span": "L43-L49",
+      "span": "L44-L50",
       "signature": "function stampCrux(dir: string, code: string): void",
       "exported": false,
       "origin": "ast",
@@ -10545,6 +11033,91 @@
       }
     },
     {
+      "id": "test/graph-scopes.test.ts",
+      "name": "graph-scopes.test.ts",
+      "kind": "file",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L1-L203",
+      "signature": null,
+      "exported": true,
+      "origin": "ast",
+      "body_hash": "030dea9cb5a26fac262acf50101289a62655681d7dd487a3518e59a64db209d8",
+      "chars": 8316,
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/graph-scopes.test.ts#fx",
+      "name": "fx",
+      "kind": "function",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L17-L24",
+      "signature": "function fx(layout: Record<string, string>): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "8ab0bd0d4ecd0a2c1738c41a1260ab74a8f9407edaa90b444b43b8e8180058b1",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/graph-scopes.test.ts#normalize",
+      "name": "normalize",
+      "kind": "function",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L93-L94",
+      "signature": "normalize = (prefixes: string[], siblingName: string): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "0da47baf7c1a7c14a23a56b743085bac4a9620dffbb4751e23ea705c176b3d5b",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/graph-scopes.test.ts#pyFns",
+      "name": "pyFns",
+      "kind": "function",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L159-L161",
+      "signature": "function pyFns(n: number): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "66058beee96d43f3e99600dd019dfff7771d96c51cbefa76db334ba5a08dec6f",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/graph-scopes.test.ts#run",
+      "name": "run",
+      "kind": "function",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L75-L89",
+      "signature": "run = (siblingName: string): string[]",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "1ad4b6cd5889ea9fd5db15c6aa691788477f3e18a1a38d2faaa36347ef1fab0b",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
+      "id": "test/graph-scopes.test.ts#tsFns",
+      "name": "tsFns",
+      "kind": "function",
+      "path": "test/graph-scopes.test.ts",
+      "span": "L155-L157",
+      "signature": "function tsFns(n: number): string",
+      "exported": false,
+      "origin": "ast",
+      "body_hash": "3b0fd3e3016031d46b2c8e0c42d7571ad9c0abfe7656557ae90064211618503d",
+      "summary_state": "pending",
+      "summary": null,
+      "crux": null
+    },
+    {
       "id": "test/graph-traverse-cli.test.ts",
       "name": "graph-traverse-cli.test.ts",
       "kind": "file",
@@ -10756,13 +11329,13 @@
       "name": "graphrank.test.ts",
       "kind": "file",
       "path": "test/graphrank.test.ts",
-      "span": "L1-L203",
+      "span": "L1-L257",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "9b6450a705fd5bbe7ddead7ae29f87fcb839599d34b6bd0c8ebcb0091ee70c47",
-      "chars": 8780,
-      "summary_state": "ready",
+      "body_hash": "e4e6155adc501b4d336cba4ad49192310678cf67f3547e2b362bfcb68f30a53e",
+      "chars": 11404,
+      "summary_state": "stale",
       "summary": "This file contains unit and integration tests for the personalizedPageRank function, ensuring it correctly ranks nodes based on their connectivity in a graph.",
       "crux": {
         "code": "test(\"PageRank: a seed wired to the cluster outranks an isolated seed\", () => {\n  // hub calls a, b, c; lone is a disconnected seed with equal restart weight.\n  const g = graphOf(\n    [\"hub\", \"a\", \"b\", \"c\", \"lone\"],\n    [edge(\"hub\", \"a\"), edge(\"hub\", \"b\"), edge(\"hub\", \"c\")],\n  );\n  const pr = personalizedPageRank(g, new Map([[\"hub\", 1], [\"lone\", 1]]));\n  assert.ok((pr.get(\"hub\") ?? 0) > (pr.get(\"lone\") ?? 0), \"connected seed beats isolated seed\");\n  assert.equal([...pr.values()].some((v) => v === 1), true, \"top node normalized to 1\");\n});\n\ntest(\"PageRank: neighbours of a seed accrue mass even with zero restart weight\", () => {",
@@ -10808,7 +11381,7 @@
       "name": "makeCollisionFixture",
       "kind": "function",
       "path": "test/graphrank.test.ts",
-      "span": "L128-L138",
+      "span": "L182-L192",
       "signature": "function makeCollisionFixture(): string",
       "exported": false,
       "origin": "ast",
@@ -10842,7 +11415,7 @@
       "name": "rank",
       "kind": "function",
       "path": "test/graphrank.test.ts",
-      "span": "L140-L141",
+      "span": "L194-L195",
       "signature": "rank = (dir: string, gr: boolean)",
       "exported": false,
       "origin": "ast",
@@ -11355,12 +11928,12 @@
       "name": "mcp-tools.test.ts",
       "kind": "file",
       "path": "test/mcp-tools.test.ts",
-      "span": "L1-L289",
+      "span": "L1-L301",
       "signature": null,
       "exported": true,
       "origin": "ast",
-      "body_hash": "edf9190673e0d472438bdad78bcfd03682c847a6a8f11e90f8a1425f5bcd45ef",
-      "chars": 12727,
+      "body_hash": "2241812ee605797530ebbbd0e646833ba632460cd2ce3a0b80d44cd53f6ef844",
+      "chars": 13284,
       "summary_state": "stale",
       "summary": "This test suite validates the functionality of various tools in the MCP codebase, ensuring they operate correctly on built repositories and handle errors appropriately.",
       "crux": {
@@ -14213,6 +14786,12 @@
     },
     {
       "source": "src/ask/ask.ts",
+      "target": "src/ask/ask.ts#scopeFooterLines",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/ask.ts",
       "target": "src/ask/ask.ts#score",
       "relation": "contains",
       "confidence": "extracted"
@@ -14285,6 +14864,12 @@
     },
     {
       "source": "src/ask/ask.ts",
+      "target": "src/ask/fuse.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/ask.ts",
       "target": "src/ask/graphrank.ts",
       "relation": "imports",
       "confidence": "extracted"
@@ -14310,6 +14895,12 @@
     {
       "source": "src/ask/ask.ts",
       "target": "src/graph/load.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/ask.ts",
+      "target": "src/graph/scopes.ts",
       "relation": "imports",
       "confidence": "extracted"
     },
@@ -14362,6 +14953,24 @@
       "confidence": "inferred"
     },
     {
+      "source": "src/ask/ask.ts#ask",
+      "target": "src/graph/scopes.ts#pathUnderPrefix",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#ask",
+      "target": "src/graph/scopes.ts#scopesHereClause",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#ask",
+      "target": "src/graph/scopes.ts#scopesOfGraph",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
       "source": "src/ask/ask.ts#askSavingsFooter",
       "target": "src/ask/ask.ts#toTokens",
       "relation": "calls",
@@ -14399,6 +15008,12 @@
     },
     {
       "source": "src/ask/ask.ts#findSubjectNodes",
+      "target": "src/graph/scopes.ts#pathUnderPrefix",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#findSubjectNodes",
       "target": "src/graph/traverse.ts#resolveSymbol",
       "relation": "calls",
       "confidence": "inferred"
@@ -14412,6 +15027,12 @@
     {
       "source": "src/ask/ask.ts#formatAsk",
       "target": "src/ask/ask.ts#escalationNudge",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/ask.ts#formatAsk",
+      "target": "src/ask/ask.ts#scopeFooterLines",
       "relation": "calls",
       "confidence": "extracted"
     },
@@ -14477,6 +15098,12 @@
     },
     {
       "source": "src/ask/ask.ts#lexical",
+      "target": "src/ask/fuse.ts#rankScopesAndFuse",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#lexical",
       "target": "src/ask/graphrank.ts#personalizedPageRank",
       "relation": "calls",
       "confidence": "inferred"
@@ -14490,6 +15117,30 @@
     {
       "source": "src/ask/ask.ts#lexical",
       "target": "src/ask/index-file.ts#tokenize",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#lexical",
+      "target": "src/graph/scopes.ts#pathUnderPrefix",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#lexical",
+      "target": "src/graph/scopes.ts#scopeOf",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#lexical",
+      "target": "src/graph/scopes.ts#scopesHereClause",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/ask/ask.ts#lexical",
+      "target": "src/graph/scopes.ts#scopesOfGraph",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -14522,6 +15173,12 @@
       "target": "src/ask/ask.ts#hasTerm",
       "relation": "calls",
       "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/ask.ts#scopeFooterLines",
+      "target": "src/graph/scopes.ts#scopeLabel",
+      "relation": "calls",
+      "confidence": "inferred"
     },
     {
       "source": "src/ask/ask.ts#skeleton",
@@ -14562,6 +15219,48 @@
     {
       "source": "src/ask/ask.ts#structural",
       "target": "src/ask/ask.ts#findSubjectNodes",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#byScore",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#fuseScopes",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#FusionResult",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#rankScopesAndFuse",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#ScopedDoc",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts",
+      "target": "src/ask/fuse.ts#ScopeRankOps",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/ask/fuse.ts#rankScopesAndFuse",
+      "target": "src/ask/fuse.ts#fuseScopes",
       "relation": "calls",
       "confidence": "extracted"
     },
@@ -17327,6 +18026,12 @@
     },
     {
       "source": "src/graph/build.ts",
+      "target": "src/graph/build.ts#applyMinSubstanceGuard",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/build.ts",
       "target": "src/graph/build.ts#buildGraph",
       "relation": "contains",
       "confidence": "extracted"
@@ -17411,6 +18116,12 @@
     },
     {
       "source": "src/graph/build.ts",
+      "target": "src/graph/scopes.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/build.ts",
       "target": "src/graph/types.ts",
       "relation": "imports",
       "confidence": "extracted"
@@ -17428,6 +18139,12 @@
       "confidence": "extracted"
     },
     {
+      "source": "src/graph/build.ts#applyMinSubstanceGuard",
+      "target": "src/graph/scopes.ts#scopeOf",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
       "source": "src/graph/build.ts#buildGraph",
       "target": "src/ask/index-file.ts#writeAskIndex",
       "relation": "calls",
@@ -17438,6 +18155,12 @@
       "target": "src/context/node-file.ts#contextDirFor",
       "relation": "calls",
       "confidence": "inferred"
+    },
+    {
+      "source": "src/graph/build.ts#buildGraph",
+      "target": "src/graph/build.ts#applyMinSubstanceGuard",
+      "relation": "calls",
+      "confidence": "extracted"
     },
     {
       "source": "src/graph/build.ts#buildGraph",
@@ -17490,6 +18213,12 @@
     {
       "source": "src/graph/build.ts#buildGraph",
       "target": "src/graph/resolve.ts#resolveEdges",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "src/graph/build.ts#buildGraph",
+      "target": "src/graph/scopes.ts#discoverScopes",
       "relation": "calls",
       "confidence": "inferred"
     },
@@ -18670,6 +19399,174 @@
       "confidence": "extracted"
     },
     {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#Candidate",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#collectDirs",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#discoverScopes",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#discoverWorkspaceChildren",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#parsePnpmPackagesList",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#pathUnderPrefix",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#readWorkspaceGlobs",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#resolveGlob",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#scopeLabel",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#scopeOf",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#scopesHereClause",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/scopes.ts#scopesOfGraph",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "node:fs",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "node:path",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/graph/types.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts",
+      "target": "src/ingest/fs.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#collectDirs",
+      "target": "src/graph/scopes.ts#collectDirs.walk",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#collectDirs",
+      "target": "src/graph/scopes.ts#collectDirs.walk",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#collectDirs.walk",
+      "target": "src/graph/scopes.ts#collectDirs.walk",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#discoverScopes",
+      "target": "src/graph/scopes.ts#collectDirs",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#discoverScopes",
+      "target": "src/graph/scopes.ts#discoverScopes.findNearestAncestorCandidate",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#discoverScopes",
+      "target": "src/graph/scopes.ts#readWorkspaceGlobs",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#discoverScopes",
+      "target": "src/graph/scopes.ts#resolveGlob",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#discoverScopes",
+      "target": "src/graph/scopes.ts#discoverScopes.findNearestAncestorCandidate",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#readWorkspaceGlobs",
+      "target": "src/graph/scopes.ts#parsePnpmPackagesList",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#resolveGlob",
+      "target": "src/graph/scopes.ts#resolveGlob.listDirs",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#resolveGlob",
+      "target": "src/graph/scopes.ts#resolveGlob.listDirs",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/scopes.ts#scopesHereClause",
+      "target": "src/graph/scopes.ts#scopeLabel",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
       "source": "src/graph/traverse-cli.ts",
       "target": "src/graph/traverse-cli.ts#CallersCliOptions",
       "relation": "contains",
@@ -19026,6 +19923,12 @@
     {
       "source": "src/graph/types.ts",
       "target": "src/graph/types.ts#Relation",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "src/graph/types.ts",
+      "target": "src/graph/types.ts#ScopeV1",
       "relation": "contains",
       "confidence": "extracted"
     },
@@ -20296,6 +21199,72 @@
       "confidence": "extracted"
     },
     {
+      "source": "test/ask-fusion.test.ts",
+      "target": "src/ask/ask.ts#formatAsk",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "src/ask/fuse.ts#fuseScopes",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "src/ask/fuse.ts#rankScopesAndFuse",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "test/ask-fusion.test.ts#makeOps",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "test/ask-fusion.test.ts#scopeDocs",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "test/ask-fusion.test.ts#makeOps",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "test/ask-fusion.test.ts#scopeDocs",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "node:assert/strict",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "node:test",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "src/ask/ask.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask-fusion.test.ts",
+      "target": "src/ask/fuse.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
       "source": "test/ask-index.test.ts",
       "target": "src/ask/ask.ts#ask",
       "relation": "calls",
@@ -20519,13 +21488,43 @@
     },
     {
       "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#duplicateNameFixture",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#idfShiftFixture",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
       "target": "test/ask.test.ts#makeFixture",
       "relation": "calls",
       "confidence": "extracted"
     },
     {
       "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#multiScopeFixture",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
       "target": "test/ask.test.ts#qualifiedFixture",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#rankOf",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#siblingPrefixFixture",
       "relation": "calls",
       "confidence": "extracted"
     },
@@ -20537,13 +21536,43 @@
     },
     {
       "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#duplicateNameFixture",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#idfShiftFixture",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
       "target": "test/ask.test.ts#makeFixture",
       "relation": "contains",
       "confidence": "extracted"
     },
     {
       "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#multiScopeFixture",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
       "target": "test/ask.test.ts#qualifiedFixture",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#rankOf",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "test/ask.test.ts#siblingPrefixFixture",
       "relation": "contains",
       "confidence": "extracted"
     },
@@ -20556,6 +21585,12 @@
     {
       "source": "test/ask.test.ts",
       "target": "node:assert/strict",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/ask.test.ts",
+      "target": "node:child_process",
       "relation": "imports",
       "confidence": "extracted"
     },
@@ -21925,6 +22960,192 @@
       "source": "test/graph-resolve-typed.test.ts",
       "target": "src/graph/types.ts",
       "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/build.ts#buildGraph",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/load.ts#loadGraphCached",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/scopes.ts#discoverScopes",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/scopes.ts#discoverWorkspaceChildren",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/scopes.ts#scopeOf",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/scopes.ts#scopesOfGraph",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/write.ts#readGraph",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/write.ts#wiringPath",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/write.ts#writeGraph",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#fx",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#normalize",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#pyFns",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#run",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#tsFns",
+      "relation": "calls",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#fx",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#normalize",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#pyFns",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#run",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "test/graph-scopes.test.ts#tsFns",
+      "relation": "contains",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "node:assert/strict",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "node:fs",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "node:os",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "node:path",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "node:test",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/build.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/load.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/scopes.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/types.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts",
+      "target": "src/graph/write.ts",
+      "relation": "imports",
+      "confidence": "extracted"
+    },
+    {
+      "source": "test/graph-scopes.test.ts#run",
+      "target": "src/graph/scopes.ts#discoverScopes",
+      "relation": "calls",
+      "confidence": "inferred"
+    },
+    {
+      "source": "test/graph-scopes.test.ts#run",
+      "target": "test/graph-scopes.test.ts#fx",
+      "relation": "calls",
       "confidence": "extracted"
     },
     {

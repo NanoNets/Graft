@@ -19,8 +19,10 @@ import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
 import { savingsFooter, savingsFor, type Savings } from "../context/savings.js";
 import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
+import { pathUnderPrefix, scopeLabel, scopeOf, scopesHereClause, scopesOfGraph } from "../graph/scopes.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
+import { rankScopesAndFuse } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
 
@@ -37,6 +39,10 @@ export interface AskHit {
    * This is what makes `ask` substitutive — the agent reads the span here
    * instead of opening the file, so no source read happens on top of the query. */
   code?: string;
+  /** Multi-scope repos only: the ranking scope (path prefix, "" = root) this
+   * hit was ranked within — answers "which sub-project is this from?". Drives
+   * the `[scope/] ` label in formatAsk. Absent on single-scope repos. */
+  scope?: string;
 }
 
 /** Max source lines to inline per hit — a definition longer than this is
@@ -60,6 +66,19 @@ export interface AskResult {
    * best result, i.e. the pack is probably noise for this prompt. Absent in
    * structural mode — a resolved "who calls X" is itself the relevance signal. */
   coverage?: number;
+  /** Like {@link coverage}, but the top hit's idf-weighted matched share over
+   * its NAME + PATH fields ONLY (body excluded) — a match-STRENGTH signal:
+   * "did the query hit a high-value field, or only incidental body tokens?".
+   * A body-only collision (a variable that happens to share a query word) has
+   * `coverageStrong === 0` while `coverage` can still look respectable. Used by
+   * workspace federation to gate a weak child out of the cross-repo ranking.
+   * Absent in structural mode; same lexical-only contract as `coverage`. */
+  coverageStrong?: number;
+  /** Multi-scope lexical results only: which scopes federated into the fused
+   * ranking, plus scopes that matched too weakly to federate (with their best
+   * doc id). Drives formatAsk's `matched in:` / `also matched:` footer.
+   * Absent on single-scope repos — zero output change there. */
+  scopes?: { federated: string[]; alsoMatched: { scope: string; bestId: string }[] };
 }
 
 /** First real prose line of a node body (skips headings, markers, blanks). */
@@ -203,11 +222,21 @@ function subjectWords(query: string): string[] {
  * last regardless of outcome, so a caller can name *something* in a fallthrough
  * note even when nothing resolved (e.g. `subjects.length === 0`). This is what
  * makes a qualified/dotted subject like `Cache.get` resolve, where the old
- * plain name-equality lookup (`findSubject`) never matched it. */
-function findSubjectNodes(query: string, graph: GraphV1): { nodes: NodeV1[]; tried: string } {
+ * plain name-equality lookup (`findSubject`) never matched it.
+ *
+ * `inPrefix`, when given, filters each word's `resolveSymbol` matches down to
+ * nodes under that path prefix BEFORE checking whether any survived — same
+ * "narrow the subject resolution" semantics `callers`/`callees`/`impact --in`
+ * already have (segment-aware here, via `pathUnderPrefix`). A word that
+ * resolves globally but has nothing under the prefix does NOT count as a
+ * match; the next (shorter) word is tried instead, same as an unresolved word
+ * today — and if nothing survives for ANY word, `subjects.length === 0`
+ * naturally falls through to the existing loud fallthrough note. */
+function findSubjectNodes(query: string, graph: GraphV1, inPrefix?: string): { nodes: NodeV1[]; tried: string } {
   const words = subjectWords(query).sort((a, b) => b.length - a.length);
   for (const w of words) {
-    const nodes = resolveSymbol(graph, w);
+    let nodes = resolveSymbol(graph, w);
+    if (inPrefix) nodes = nodes.filter((n) => pathUnderPrefix(n.path, inPrefix));
     if (nodes.length > 0) return { nodes, tried: w };
   }
   return { nodes: [], tried: words[0] ?? query };
@@ -228,12 +257,12 @@ function fallthroughNoteFor(subject: string): string {
   );
 }
 
-function structural(query: string, graph: GraphV1, limit: number): StructuralOutcome {
+function structural(query: string, graph: GraphV1, limit: number, inPrefix?: string): StructuralOutcome {
   const wantsIn = INCOMING.test(query);
   const wantsOut = OUTGOING.test(query);
   if (!wantsIn && !wantsOut) return null;
 
-  const { nodes: subjects, tried } = findSubjectNodes(query, graph);
+  const { nodes: subjects, tried } = findSubjectNodes(query, graph, inPrefix);
   if (subjects.length === 0) return { fallthroughNote: fallthroughNoteFor(tried) };
 
   const ids = new Set(subjects.map((n) => n.id));
@@ -307,6 +336,26 @@ function hasTerm(f: Map<string, number>, t: string): boolean {
  * "write": common → near-weightless even when they collide with a symbol name);
  * a task prompt matches exactly its rare, discriminating identifiers. Terms the
  * corpus has never seen take `dfltIdf` (the df=0 weight). */
+/** The match-STRENGTH share behind `coverageStrong`: idf-weighted share of the
+ * query matched in the node's NAME field ONLY. The PATH field is deliberately
+ * excluded — a coincidental generic directory (`gateway/`) or file basename
+ * (`gateway.ts`) in an unrelated repo would otherwise clear the strength gate
+ * and float that repo to the top; an on-topic path-organized repo is still
+ * rescued by the broad-coverage HIGH_FLOOR clause instead. For the same reason
+ * a `kind:"file"` node contributes zero strength: its `name` is a basename (a
+ * path component), not a symbol name, so a file whose basename happens to share
+ * a query word is not a strong match. */
+export function strongShare(
+  q: Map<string, number>,
+  node: NodeV1,
+  doc: { name: Map<string, number> },
+  idf: Map<string, number>,
+  dfltIdf: number,
+): number {
+  if (node.kind === "file") return 0;
+  return matchedIdfShare(q, [doc.name], idf, dfltIdf);
+}
+
 function matchedIdfShare(
   q: Map<string, number>,
   fields: Array<Map<string, number>>,
@@ -323,19 +372,24 @@ function matchedIdfShare(
   return total > 0 ? matched / total : 0;
 }
 
-function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean): AskResult {
+function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean, inPrefix?: string): AskResult {
   // Binary query terms: a word repeated in a pasted issue body counts once, so a
   // ranty description can't linearly amplify an incidental word.
   const q = new Map([...counts(tokenize(query)).keys()].map((t) => [t, 1]));
   const graph = corpus.graph;
 
   // ── Pass 1: tokenize every scored field once, and collect per-document token
-  // bags so IDF can down-weight words that occur across the whole corpus. ──
-  const conceptDocs = corpus.concepts.map((c) => ({
-    c,
-    name: counts(tokenize(c.name)),
-    body: counts(tokenize(c.text)),
-  }));
+  // bags so IDF can down-weight words that occur across the whole corpus. `--in`
+  // drops a concept unless at least one of its sources falls under the prefix —
+  // filtering happens here, before any scoring, so a narrowed query never sees
+  // an unrelated concept from outside the prefix. ──
+  const conceptDocs = corpus.concepts
+    .filter((c) => !inPrefix || c.sources.some((p) => pathUnderPrefix(p, inPrefix)))
+    .map((c) => ({
+      c,
+      name: counts(tokenize(c.name)),
+      body: counts(tokenize(c.text)),
+    }));
 
   // A build-time sidecar (`.cache/ask-index.json`) is usable only when it covers
   // every node in the current graph: `docs.length === graph.nodes.length` is a
@@ -344,6 +398,18 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   // that — missing, unparseable, unknown version, wrong count, mismatched ids —
   // falls back to live tokenization so results never depend on the sidecar
   // existing; see `readAskIndex`'s own null-on-anything-off contract.
+  //
+  // `--in` does NOT disable the sidecar here: `writeGraph` strips `body_text`
+  // from every node it serializes (see `write.ts`) — the sidecar's per-doc
+  // `docs[].body` bags are the ONLY place a symbol's body tokens survive on a
+  // graph loaded from disk. Bypassing the sidecar under `--in` would silently
+  // empty out `body` for every node (falling back to `n.body_text ?? ""`,
+  // always `""` post-slim-serialization), losing every body-only match under
+  // the filtered prefix. What DOES need bypassing under `--in` is the
+  // sidecar's GLOBAL `df`/`docCount`/`avgBodyLen` — those cover the whole
+  // corpus, not the filtered subset — so each read of those three fields below
+  // is separately gated on `!inPrefix`, while the per-doc bags (used to build
+  // `symbolDocs` right after this) are used unconditionally.
   let docById: Map<string, AskIndexDoc> | null = null;
   if (corpus.askIndex && graph && corpus.askIndex.docs.length === graph.nodes.length) {
     const map = new Map(corpus.askIndex.docs.map((d) => [d.id, d]));
@@ -354,8 +420,12 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   // Symbols AND file nodes are scored: a symbol's body_text is its definition;
   // a file's body_text is the module-level residual (imports/constants not in
   // any symbol). Including files closes the recall gap where a gold file's only
-  // query-relevant text lives outside every function/class.
-  const symbolDocs = (graph?.nodes ?? []).map((n) => {
+  // query-relevant text lives outside every function/class. `--in` filters the
+  // node set here, at the very top, before any scoring — every downstream stat
+  // (idf, avgdl, candidates, the per-scope partition below) then naturally
+  // reflects only the filtered set with no other code needing to know about it.
+  const graphNodes = inPrefix ? (graph?.nodes ?? []).filter((n) => pathUnderPrefix(n.path, inPrefix)) : (graph?.nodes ?? []);
+  const symbolDocs = graphNodes.map((n) => {
     const d = docById?.get(n.id);
     if (d) return { n, name: new Map(d.name), path: new Map(d.path), body: new Map(d.body) };
     return {
@@ -378,19 +448,26 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   // IDF must see the SAME inputs either way: with a sidecar, its `df` (stored
   // WITHOUT concepts) plus these live concept bags reproduces exactly what
   // `computeIdf` below would compute from concept+symbol bags tokenized live.
-  const idf = askIndex
+  // `askIndex.df` is a corpus-GLOBAL count, so `--in` can't use it — the
+  // filtered doc set needs its own idf, computed from (already-filtered)
+  // `symbolDocs`' own bags, regardless of where those bags came from.
+  const idf = askIndex && !inPrefix
     ? computeIdfFromIndex(askIndex, conceptBags)
     : computeIdf([...conceptBags, ...symbolDocs.map((d) => new Set([...d.name.keys(), ...d.path.keys(), ...d.body.keys()]))]);
 
   // Per-hit idf-weighted coverage, kept out of the public AskHit shape; only
   // the top hit's value survives, as `coverage` on the result. The df=0 weight
   // mirrors idfFromDf's formula at df=0 for whichever corpus size idf was
-  // computed from.
-  const nDocs = askIndex
+  // computed from. Same `--in` reasoning as `idf` above: `askIndex.docCount`
+  // is global.
+  const nDocs = askIndex && !inPrefix
     ? askIndex.docCount + conceptBags.length
     : conceptBags.length + symbolDocs.length;
   const dfltIdf = Math.log(1 + nDocs);
   const matchedOf = new Map<AskHit, number>();
+  // Parallel to matchedOf, but over NAME+PATH only (body dropped) — the
+  // match-strength signal exported as `coverageStrong`.
+  const matchedStrongOf = new Map<AskHit, number>();
 
   // ── Concepts (prose nodes; not in the wiring graph) ──
   const conceptHits: AskHit[] = [];
@@ -408,6 +485,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
         score: total,
       };
       matchedOf.set(hit, matchedIdfShare(q, [name, body], idf, dfltIdf));
+      matchedStrongOf.set(hit, matchedIdfShare(q, [name], idf, dfltIdf)); // concepts have no path field
       conceptHits.push(hit);
     }
   }
@@ -419,7 +497,108 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     for (const v of m.values()) s += v;
     return s;
   };
-  const avgBodyLen = askIndex
+  const docsById = new Map(symbolDocs.map((d) => [d.n.id, d]));
+  const symbolHits: AskHit[] = [];
+  // The single-vs-multi-scope branch keys on `scopesOfGraph` ONLY: one scope
+  // (or no graph) takes the existing path below completely untouched — that
+  // branch is a byte-level regression guarantee for single-scope repos.
+  const scopes = graph ? scopesOfGraph(graph) : null;
+  let scopeMeta: AskResult["scopes"];
+  if (scopes && scopes.length > 1) {
+    // ── Multi-scope repo: rank each sub-project against its OWN corpus (its
+    // IDF, its BM25 length prior, its subgraph walk), then fuse the per-scope
+    // orderings by reciprocal rank — the big scope can't drown the small one.
+    // Same scoring functions and blend as the single-scope path, just fed
+    // per-scope inputs; the fusion itself lives in fuse.ts. ──
+    const byScope = new Map<string, typeof symbolDocs>();
+    for (const d of symbolDocs) {
+      const s = scopeOf(d.n.path, scopes).prefix;
+      const list = byScope.get(s);
+      if (list) list.push(d);
+      else byScope.set(s, [d]);
+    }
+    const idfOf = new Map<string, { idf: Map<string, number>; dflt: number }>();
+    const fusion = rankScopesAndFuse(
+      [...byScope.keys()].sort(),
+      {
+        lex: (s) => {
+          const docs = byScope.get(s)!;
+          // Per-scope IDF/BM25 stats: concepts are repo-level so their bags
+          // fold in everywhere, symbol bags come from this scope only. (The
+          // build sidecar's df/avgBodyLen are corpus-global, so multi-scope
+          // always computes these live — from the sidecar's own token maps.)
+          const sIdf = computeIdf([
+            ...conceptBags,
+            ...docs.map((d) => new Set([...d.name.keys(), ...d.path.keys(), ...d.body.keys()])),
+          ]);
+          idfOf.set(s, { idf: sIdf, dflt: Math.log(1 + conceptBags.length + docs.length) });
+          const avg = docs.reduce((a, d) => a + bodyLen(d.body), 0) / docs.length;
+          const out = new Map<string, number>();
+          for (const { n, name, path, body } of docs) {
+            const total =
+              score(q, name, sIdf) * 3 +
+              score(q, path, sIdf) * 2 +
+              bm25(q, body, sIdf, bodyLen(body), avg);
+            if (total > 0) out.set(n.id, total);
+          }
+          return out;
+        },
+        // The participation gate's match-STRENGTH signal, evaluated once per
+        // scope on that scope's raw-lex top doc — same `strongShare`/
+        // `matchedIdfShare` functions and per-scope idf `lex` (above) just
+        // computed, so this reads the SAME strength `federateAsk` gates on
+        // (see fuse.ts's STRONG_FLOOR/HIGH_FLOOR).
+        strength: (s, id) => {
+          const d = docsById.get(id);
+          const si = idfOf.get(s);
+          if (!d || !si) return { coverage: 0, coverageStrong: 0 };
+          return {
+            coverage: matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt),
+            coverageStrong: strongShare(q, d.n, d, si.idf, si.dflt),
+          };
+        },
+        walk: (s, seeds) =>
+          graphRank
+            ? personalizedPageRank(graph!, seeds, {
+                nodeFilter: (id) => {
+                  const path = byId.get(id)?.path ?? "";
+                  return scopeOf(path, scopes).prefix === s && (!inPrefix || pathUnderPrefix(path, inPrefix));
+                },
+              })
+            : new Map<string, number>(),
+      },
+      GRAPH_WEIGHT,
+      RESCUE_FLOOR,
+    );
+    for (const rd of fusion.ranked) {
+      const n = byId.get(rd.id);
+      if (!n) continue;
+      const hit: AskHit = {
+        kind: "symbol",
+        title: `${n.name} · ${n.kind}`,
+        pointer: n.kind === "file" ? n.path : `${n.path}:${n.span}`,
+        snippet: n.summary?.split("\n")[0].trim() ?? n.signature ?? "",
+        score: rd.score,
+        scope: rd.scope,
+      };
+      const d = docsById.get(rd.id);
+      const si = idfOf.get(rd.scope);
+      matchedOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt) : 0);
+      matchedStrongOf.set(hit, d && si ? strongShare(q, n, d, si.idf, si.dflt) : 0);
+      symbolHits.push(hit);
+    }
+    // Label + footer only when federation actually happened (or a scope was
+    // gated out and is worth mentioning) — a query matching one scope of a
+    // multi-scope repo reads exactly like today.
+    if (fusion.federated.length > 1 || fusion.alsoMatched.length > 0)
+      scopeMeta = { federated: fusion.federated, alsoMatched: fusion.alsoMatched };
+  } else {
+  // Single-scope: the pre-scopes ranking path, byte-identical output when
+  // `--in` is absent (Task 3's regression guarantee: `askIndex && !inPrefix`
+  // reduces to plain `askIndex` when `inPrefix` is undefined, so this line is
+  // a no-op change for every non-`--in` caller). Under `--in`, `askIndex`'s
+  // `avgBodyLen` is corpus-global and must not be reused for the filtered set.
+  const avgBodyLen = askIndex && !inPrefix
     ? askIndex.avgBodyLen
     : symbolDocs.length
       ? symbolDocs.reduce((a, d) => a + bodyLen(d.body), 0) / symbolDocs.length
@@ -440,8 +619,11 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   }
 
   // ── Graph-rank: let connectivity to the matched set reorder and rescue ──
+  // `--in` restricts the walk itself, not just the seeds: without a nodeFilter
+  // here, a RESCUE_FLOOR-qualifying neighbour OUTSIDE the prefix could still
+  // surface, defeating the "filters before scoring" contract.
   const pr = graphRank && graph && lex.size > 0
-    ? personalizedPageRank(graph, lex)
+    ? personalizedPageRank(graph, lex, inPrefix ? { nodeFilter: (id) => pathUnderPrefix(byId.get(id)?.path ?? "", inPrefix) } : {})
     : new Map<string, number>();
 
   // Candidate symbols = everything the query word-matched, plus nodes the walk
@@ -449,8 +631,6 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   const candidates = new Set<string>(lex.keys());
   for (const [id, p] of pr) if (p >= RESCUE_FLOOR) candidates.add(id);
 
-  const docsById = new Map(symbolDocs.map((d) => [d.n.id, d]));
-  const symbolHits: AskHit[] = [];
   for (const id of candidates) {
     const n = byId.get(id);
     if (!n) continue;
@@ -468,7 +648,9 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     };
     const d = docsById.get(id);
     matchedOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path, d.body], idf, dfltIdf) : 0);
+    matchedStrongOf.set(hit, d ? strongShare(q, n, d, idf, dfltIdf) : 0);
     symbolHits.push(hit);
+  }
   }
 
   // Concepts and symbols live on comparable 0..~1.5 scales so they merge fairly:
@@ -482,8 +664,14 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     query,
     mode: scored.length ? "lexical" : "empty",
     hits: scored.slice(0, limit),
+    scopes: scopeMeta,
     coverage: scored.length && q.size > 0 ? matchedOf.get(scored[0]) ?? 0 : undefined,
-    note: scored.length ? undefined : "no matching nodes — try different words, or `graft build` if graft/ is empty",
+    coverageStrong: scored.length && q.size > 0 ? matchedStrongOf.get(scored[0]) ?? 0 : undefined,
+    // Zero hits on a genuinely multi-scope graph names the scopes that exist,
+    // so a query that missed everywhere still tells the caller where to look.
+    note: scored.length
+      ? undefined
+      : `no matching nodes — try different words, or \`graft build\` if graft/ is empty${scopesHereClause(scopes ?? [])}`,
   };
 }
 
@@ -503,6 +691,12 @@ export interface AskOptions {
    * decision point, ~10× cheaper than the full span — and the pack marks each
    * crux so the agent knows `--full` (or the file itself) has the rest. */
   full?: boolean;
+  /** Narrow the doc/node set to this path prefix BEFORE scoring (segment-aware,
+   * like `scopeOf` — "frontend" never matches "frontend-utils"). Per-scope
+   * IDF/BM25/walk come free: the filtered set is usually one scope, so the
+   * existing multi-scope machinery degrades to its single-scope passthrough
+   * with no scope labels. A prefix matching nothing indexed throws. */
+  in?: string;
 }
 
 /** Parse a `path:Lx-Ly` pointer into its parts, or null if it isn't one
@@ -584,14 +778,29 @@ export function ask(dir: string, query: string, opts: AskOptions = {}): AskResul
   const limit = opts.limit ?? 8;
   const corpus = loadCorpus(outDir);
   const graphRank = opts.graphRank ?? true;
+  // Trailing slash(es) stripped ONCE, up front, and this normalized value used
+  // everywhere below (validation, filtering, structural). `ask --in frontend/`
+  // must work exactly like `--in frontend` — `scopeLabel`/the footer's own
+  // `--in <scope>/` suggestion always includes the slash, so rejecting it
+  // would make the tool's own suggested next command fail.
+  const inPrefix = opts.in ? opts.in.replace(/\/+$/, "") : undefined;
+
+  // `--in` validated up front, before any mode runs: a prefix matching no
+  // indexed node is a caller mistake (typo, wrong sub-project), not a
+  // legitimate zero-hit query, so it's a loud error rather than an empty pack.
+  if (inPrefix && corpus.graph && !corpus.graph.nodes.some((n) => pathUnderPrefix(n.path, inPrefix))) {
+    throw new Error(
+      `nothing indexed under "${inPrefix}/"${scopesHereClause(scopesOfGraph(corpus.graph))} (or any path prefix)`,
+    );
+  }
 
   let result: AskResult;
   if (corpus.graph) {
-    const outcome = structural(query, corpus.graph, limit);
+    const outcome = structural(query, corpus.graph, limit, inPrefix);
     if (outcome && "result" in outcome) {
       result = outcome.result;
     } else {
-      result = lexical(query, corpus, limit, graphRank);
+      result = lexical(query, corpus, limit, graphRank, inPrefix);
       // A structural-intent query that couldn't be answered structurally still
       // gets a prominent note on the lexical fallback result — never silent.
       if (outcome && "fallthroughNote" in outcome) {
@@ -599,7 +808,7 @@ export function ask(dir: string, query: string, opts: AskOptions = {}): AskResul
       }
     }
   } else {
-    result = lexical(query, corpus, limit, graphRank);
+    result = lexical(query, corpus, limit, graphRank, inPrefix);
   }
   if (opts.source) {
     inlineSource(root, result.hits, corpus.graph, opts.full ?? false);
@@ -711,13 +920,17 @@ export function formatAsk(r: AskResult): string {
     }
   } else {
     r.hits.forEach((h, i) => {
-      lines.push(`${i + 1}. ${h.title}  [${h.kind}]`);
+      // Multi-scope results label each hit with its sub-project (root scope
+      // "" stays unlabeled) so a reviewer can tell WHICH codebase answered.
+      const label = r.scopes && h.scope ? `[${h.scope}/] ` : "";
+      lines.push(`${i + 1}. ${label}${h.title}  [${h.kind}]`);
       lines.push(`   ${h.pointer}`);
       if (h.snippet) lines.push(`   ${h.snippet}`);
       if (h.related?.length) lines.push(`   related: ${h.related.join(", ")}`);
       if (h.code) lines.push("", "```", h.code, "```");
       lines.push("");
     });
+    lines.push(...scopeFooterLines(r));
   }
   const body = lines.join("\n").trimEnd();
   return body + askSavingsFooter(r, body) + escalationNudge(r) + "\n";
@@ -752,4 +965,23 @@ function askSavingsFooter(r: AskResult, body: string): string {
     `${pack.toLocaleString()} tok vs reading the ${r.saved.files} source file(s) whole ≈ ` +
     `${base.toLocaleString()} tok. Estimate (baseline = those files read in full).`
   );
+}
+
+/** Multi-scope footer: answers a reviewer's two questions — "which
+ * sub-projects did this pack come from?" (`matched in:`, displayed-hit counts,
+ * biggest first) and "did anything else match that I should know about?"
+ * (`also matched:` for scopes gated out of fusion, with the flag to narrow).
+ * Empty (zero output) whenever the result isn't a federated multi-scope one. */
+function scopeFooterLines(r: AskResult): string[] {
+  if (!r.scopes) return [];
+  const perScope = new Map<string, number>();
+  for (const h of r.hits)
+    if (h.scope !== undefined) perScope.set(h.scope, (perScope.get(h.scope) ?? 0) + 1);
+  const parts = [...perScope]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([s, c]) => `${scopeLabel(s)} (${c})`);
+  const out = parts.length ? [`matched in: ${parts.join(" · ")}`] : [];
+  for (const m of r.scopes.alsoMatched)
+    out.push(`also matched: ${scopeLabel(m.scope)} — narrow with --in ${scopeLabel(m.scope)}`);
+  return out;
 }

@@ -14,6 +14,14 @@ import { savingsFooter } from '../context/savings.js';
 import { grepGraph } from '../search/grep.js';
 import { formatGrepResult, zeroHitNote } from '../search/grep-cli.js';
 import { buildRepoMap, formatRepoMap } from '../graph/map.js';
+import {
+  federateAsk,
+  federateCallers,
+  federateCheck,
+  federateGrep,
+  federateMap,
+  readWorkspace,
+} from '../graph/workspace.js';
 import type { NodeV1 } from '../graph/types.js';
 
 export interface ToolDef {
@@ -41,6 +49,10 @@ export const TOOLS: ToolDef[] = [
         full: {
           type: 'boolean',
           description: 'inline whole definition spans instead of the default ≤8-line crux excerpts',
+        },
+        in: {
+          type: 'string',
+          description: 'narrow to nodes under this path prefix, filtered before scoring (segment-aware, like scopeOf)',
         },
       },
       required: ['query'],
@@ -131,6 +143,58 @@ function renderMatches(
     .join('\n\n');
 }
 
+/** When the MCP server is rooted at a workspace parent, the ask/callers/grep/
+ * map/check tools federate across the children — identical to the CLI. Returns
+ * null for tools that don't federate (skeleton is per-file), so the caller
+ * falls through to the normal single-graph path. */
+function callWorkspaceTool(
+  root: string,
+  dirOverride: string | undefined,
+  name: string,
+  args: Record<string, unknown>,
+): { text: string; isError: boolean } | null {
+  switch (name) {
+    case 'graft_ask': {
+      const query = String(args.query ?? '');
+      if (!query) return { text: 'graft_ask requires a query', isError: true };
+      const limit = typeof args.limit === 'number' ? args.limit : 5;
+      const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
+      const r = federateAsk(root, dirOverride, query, { limit, source: true, full: args.full === true, in: inArg });
+      return { text: formatAsk(r), isError: false };
+    }
+    case 'graft_callers': {
+      const symbol = String(args.symbol ?? args.file ?? '');
+      if (!symbol) return { text: 'graft_callers requires a symbol', isError: true };
+      const { text, found } = federateCallers(root, dirOverride, symbol, {
+        direction: args.direction === 'out' ? 'out' : 'in',
+        depth: typeof args.depth === 'number' && Number.isFinite(args.depth) ? args.depth : undefined,
+        in: typeof args.in === 'string' && args.in ? args.in : undefined,
+      });
+      return { text, isError: !found };
+    }
+    case 'graft_grep': {
+      const pattern = String(args.pattern ?? '');
+      if (!pattern) return { text: 'graft_grep requires a pattern', isError: true };
+      const { result, coverage } = federateGrep(root, dirOverride, pattern, {
+        ignoreCase: typeof args.ignore_case === 'boolean' ? args.ignore_case : undefined,
+        fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
+      });
+      const text = result.totalHits === 0 ? zeroHitNote(result) : formatGrepResult(result);
+      return { text: coverage ? `${text}\n${coverage}` : text, isError: false };
+    }
+    case 'graft_map': {
+      const maxDirs = typeof args.max_dirs === 'number' && Number.isFinite(args.max_dirs) && args.max_dirs > 0 ? args.max_dirs : undefined;
+      return { text: federateMap(root, dirOverride, { maxDirs }), isError: false };
+    }
+    case 'graft_check': {
+      const { text } = federateCheck(root, dirOverride);
+      return { text, isError: false };
+    }
+    default:
+      return null;
+  }
+}
+
 export function callTool(
   root: string,
   name: string,
@@ -138,13 +202,18 @@ export function callTool(
   dirOverride?: string,
 ): { text: string; isError: boolean } {
   try {
+    if (readWorkspace(root, dirOverride)) {
+      const fed = callWorkspaceTool(root, dirOverride, name, args);
+      if (fed) return fed;
+    }
     switch (name) {
       case 'graft_ask': {
         const query = String(args.query ?? '');
         if (!query) return { text: 'graft_ask requires a query', isError: true };
         const limit = typeof args.limit === 'number' ? args.limit : 5;
         const engine = new Graft({ contextDir: dirOverride });
-        const r = engine.ask(root, query, { limit, source: true, full: args.full === true });
+        const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
+        const r = engine.ask(root, query, { limit, source: true, full: args.full === true, in: inArg });
         return { text: formatAsk(r), isError: false };
       }
       case 'graft_skeleton': {

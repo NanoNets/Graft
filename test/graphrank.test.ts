@@ -121,6 +121,60 @@ test("PageRank: broad seeds on a large mostly-dangling graph complete fast", () 
   assert.ok(ms < 3000, `took ${ms}ms — dangling redistribution must not be O(dangling × seeds)`);
 });
 
+test("PageRank: nodeFilter restricted to component A matches running on component A alone", () => {
+  // Two disjoint components: A (hub/a/b/c) and B (x/y/z). A filter that keeps
+  // only component A must produce ranks identical to a graph containing only
+  // component A — the other component's nodes and edges must not leak in.
+  const componentAIds = ["hub", "a", "b", "c"];
+  const edgesA: EdgeV1[] = [edge("hub", "a"), edge("hub", "b"), edge("hub", "c")];
+  const edgesB: EdgeV1[] = [edge("x", "y"), edge("y", "z")];
+  const full = graphOf([...componentAIds, "x", "y", "z"], [...edgesA, ...edgesB]);
+  const onlyA = graphOf(componentAIds, edgesA);
+
+  const seeds = new Map([["hub", 1], ["a", 0.5]]);
+  const filtered = personalizedPageRank(full, seeds, {
+    nodeFilter: (id) => componentAIds.includes(id),
+  });
+  const reference = personalizedPageRank(onlyA, seeds);
+
+  assert.equal(filtered.size, reference.size);
+  for (const [id, v] of reference) {
+    assert.ok(filtered.has(id), `filtered result missing ${id}`);
+    assert.equal(filtered.get(id), v, `mismatched rank for ${id}`);
+  }
+  assert.equal(filtered.has("x"), false, "filtered-out component must not appear");
+});
+
+test("PageRank: no filter (opts omitted) reproduces exact pre-existing output", () => {
+  // Snapshot of the dangling-mass fixture's known values (see the dedicated
+  // dangling-mass test above) — proves omitting nodeFilter is byte-stable.
+  const g = graphOf(["a", "b", "c", "d", "e"], [edge("a", "b"), edge("b", "c")]);
+  const seeds = new Map([["a", 2], ["d", 1]]);
+  const out = personalizedPageRank(g, seeds);
+  const EXPECTED_A = 0.9577162737326514;
+  const EXPECTED_B = 1;
+  const EXPECTED_C = 0.37462976423958994;
+  const EXPECTED_D = 0.29154325474653076;
+  assert.ok(Math.abs((out.get("a") ?? 0) - EXPECTED_A) < 1e-9, `a: ${out.get("a")}`);
+  assert.equal(out.get("b"), EXPECTED_B);
+  assert.ok(Math.abs((out.get("c") ?? 0) - EXPECTED_C) < 1e-9, `c: ${out.get("c")}`);
+  assert.ok(Math.abs((out.get("d") ?? 0) - EXPECTED_D) < 1e-9, `d: ${out.get("d")}`);
+  assert.equal(out.get("e"), undefined);
+});
+
+test("PageRank: seeds outside the filter are ignored without error", () => {
+  const g = graphOf(
+    ["hub", "a", "b", "outside"],
+    [edge("hub", "a"), edge("hub", "b")],
+  );
+  const seeds = new Map([["hub", 1], ["outside", 5]]);
+  assert.doesNotThrow(() => {
+    const pr = personalizedPageRank(g, seeds, { nodeFilter: (id) => id !== "outside" });
+    assert.equal(pr.has("outside"), false, "filtered-out seed never appears in output");
+    assert.ok((pr.get("hub") ?? 0) > 0, "in-filter seed still ranked");
+  });
+});
+
 // ── Integration: ask() with and without graph-rank ──────────────────────────
 
 /** A fixture with a same-word collision: `fooHandler` (wired to two helpers)

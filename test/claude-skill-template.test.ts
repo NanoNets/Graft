@@ -17,4 +17,6 @@ test('skill template is a well-formed SKILL.md', () => {
   assert.match(body, /truncated/i, 'body tells the agent to follow up on truncated spans');
   assert.match(body, /graft grep/, 'body routes sweeps to graft grep');
   assert.match(body, /graft map/, 'body tells the agent to orient with graft map before exploring');
+  assert.match(body, /\[scope\/\]/, 'body teaches the [scope/] label on multi-scope hits');
+  assert.match(body, /--in <scope>\//, 'body teaches narrowing with ask --in <scope>/');
 });

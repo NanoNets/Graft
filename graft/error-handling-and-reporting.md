@@ -45,7 +45,7 @@ covers:
     at: 'src/engine.ts:L39-L45'
   - symbol: Graft
     kind: class
-    at: 'src/engine.ts:L47-L140'
+    at: 'src/engine.ts:L47-L146'
   - symbol: constructor
     kind: method
     at: 'src/engine.ts:L50-L52'
@@ -63,37 +63,40 @@ covers:
     at: 'src/engine.ts:L81-L88'
   - symbol: ask
     kind: method
-    at: 'src/engine.ts:L95-L97'
+    at: 'src/engine.ts:L95-L103'
   - symbol: chatModel
     kind: method
-    at: 'src/engine.ts:L102-L119'
+    at: 'src/engine.ts:L108-L125'
   - symbol: synthesizer
     kind: method
-    at: 'src/engine.ts:L121-L123'
+    at: 'src/engine.ts:L127-L129'
   - symbol: cruxSummarizer
     kind: method
-    at: 'src/engine.ts:L126-L128'
+    at: 'src/engine.ts:L132-L134'
   - symbol: summarizer
     kind: method
-    at: 'src/engine.ts:L130-L132'
+    at: 'src/engine.ts:L136-L138'
   - symbol: modelLabel
     kind: method
-    at: 'src/engine.ts:L135-L139'
+    at: 'src/engine.ts:L141-L145'
+  - symbol: applyMinSubstanceGuard
+    kind: function
+    at: 'src/graph/build.ts:L32-L47'
   - symbol: GraphBuildOptions
     kind: interface
-    at: 'src/graph/build.ts:L23-L36'
+    at: 'src/graph/build.ts:L49-L62'
   - symbol: GraphBuildResult
     kind: interface
-    at: 'src/graph/build.ts:L38-L51'
+    at: 'src/graph/build.ts:L64-L77'
   - symbol: listSourceFiles
     kind: function
-    at: 'src/graph/build.ts:L54-L56'
+    at: 'src/graph/build.ts:L80-L82'
   - symbol: readGoModules
     kind: function
-    at: 'src/graph/build.ts:L62-L76'
+    at: 'src/graph/build.ts:L88-L102'
   - symbol: buildGraph
     kind: function
-    at: 'src/graph/build.ts:L78-L183'
+    at: 'src/graph/build.ts:L104-L215'
 ---
 <!-- context:generated:start -->
 ## Summary

@@ -189,6 +189,7 @@ graft build --extensions .ts .py     # only include these code extensions
 
 graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
 graft ask "<task>" --json            # machine-readable result
+graft ask "<task>" --in <scope>      # narrow to one sub-project of a monorepo/multi-repo folder (see below)
 
 graft callers <symbol> [dir]         # who calls/references/imports/implements/extends a symbol (no LLM, no key)
 graft callers <symbol> --direction out  # the reverse: what the symbol itself calls/references (was `graft callees`)
@@ -258,6 +259,25 @@ scripts/            2 files · 0 symbols
 
 hotspots: set · method · src/graph/bindings.ts:L21-L23 · 38←  contextDirFor · function · src/context/node-file.ts:L100-L103 · 11←  wiringPath · function · src/graph/write.ts:L20-L22 · 10←  ...
 ```
+
+## Monorepos & multi-repo folders
+
+Graft handles two shapes without any config:
+
+- **A monorepo with one `.git`** (a `pnpm-workspace.yaml`/`package.json`
+  `workspaces`, or per-package `go.mod`/`pyproject.toml`/`Cargo.toml`) —
+  `graft build` discovers each sub-project as a ranking scope. `ask`/`map`
+  rank every scope on its own terms and fuse the results, so the biggest
+  sub-project can't drown a small one; hits carry `[scope/]` labels, and
+  `graft map` groups its directory clusters by scope first.
+- **A folder of separate git repos** (no `.git` at the top) — `graft build`
+  auto-splits: each child keeps its own committable `graft/`, and the parent
+  gets a `graft/workspace.json` index. Queries from the parent federate across
+  every child, always labeled `<child>/`. Run `graft build` inside a child to
+  work on just that repo.
+
+Either way, narrow to one sub-project with `graft ask "<task>" --in <scope>/`
+once you know where you're working.
 
 ## Visualize it (`graft viz`)
 

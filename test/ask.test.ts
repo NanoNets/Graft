@@ -6,10 +6,11 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { buildGraph } from "../src/graph/build.js";
 import { ask, formatAsk, skeleton, formatSkeleton } from "../src/ask/ask.js";
 
@@ -261,6 +262,453 @@ test("formatAsk: the structural fallthrough note prints prominently, before any 
     assert.ok(noteIdx > 0, "the note is rendered");
     const firstHitIdx = out.search(/\n1\.\s/); // lexical hit numbering starts at "1. "
     assert.ok(firstHitIdx === -1 || noteIdx < firstHitIdx, "the note prints before any hit");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scope-aware ranking: per-scope rank + RRF fusion (multi-scope repos) ────
+
+/** Two sub-projects under one root: `frontend/` (ts, ~6 symbols) and
+ * `backend/` (py, ~30 symbols — 5× bigger), each with its own project marker
+ * so scope discovery splits them, and each with error-handling symbols so a
+ * "how are errors handled" query matches in BOTH scopes. Without fusion the
+ * backend's sheer size drowns the frontend's hits. */
+function multiScopeFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-scopes-"));
+  mkdirSync(join(dir, "frontend", "src"), { recursive: true });
+  mkdirSync(join(dir, "backend"), { recursive: true });
+  writeFileSync(join(dir, "frontend", "package.json"), "{}\n");
+  writeFileSync(join(dir, "backend", "pyproject.toml"), `[project]\nname = "backend"\n`);
+  writeFileSync(
+    join(dir, "frontend", "src", "errors.ts"),
+    `export function handleErrors(err: Error): string {\n` +
+      `  // errors from the ui are handled with a banner\n` +
+      `  return renderBanner(err.message);\n` +
+      `}\n\n` +
+      `export function renderBanner(msg: string): string {\n` +
+      `  return "banner: " + msg;\n` +
+      `}\n\n` +
+      `export function reportErrors(err: Error): string {\n` +
+      `  // handled errors are also reported upstream\n` +
+      `  return handleErrors(err);\n` +
+      `}\n\n` +
+      `export function clearBanner(): string {\n  return "";\n}\n\n` +
+      `export function bannerVisible(): boolean {\n  return false;\n}\n\n` +
+      `export function resetUi(): string {\n  return "reset";\n}\n`,
+  );
+  let py =
+    `def handle_errors(exc):\n` +
+    `    """errors are handled by returning a serialized problem response"""\n` +
+    `    return {"error": str(exc)}\n\n\n` +
+    `def wrap_errors(fn):\n` +
+    `    """errors raised by route handlers get handled and logged here"""\n` +
+    `    return fn\n\n\n`;
+  for (let i = 0; i < 28; i++) py += `def route_${i}(payload):\n    return payload\n\n\n`;
+  writeFileSync(join(dir, "backend", "app.py"), py);
+  return dir;
+}
+
+test("ask on a multi-scope repo: top hits federate both scopes, labeled, with a matched-in footer", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "how are errors handled", { limit: 10 });
+    const scopesHit = new Set(r.hits.map((h) => h.scope));
+    assert.ok(scopesHit.has("frontend"), "top-10 contains a frontend/ hit despite backend being 5× bigger");
+    assert.ok(scopesHit.has("backend"), "top-10 contains a backend/ hit");
+    assert.ok(r.scopes, "multi-scope result carries fusion telemetry");
+    const out = formatAsk(r);
+    assert.match(out, /\[frontend\/\] /, "frontend hits carry a scope label");
+    assert.match(out, /\[backend\/\] /, "backend hits carry a scope label");
+    assert.match(out, /matched in: .*frontend\/ \(\d+\)/, "footer reports frontend's hit count");
+    assert.match(out, /matched in: .*backend\/ \(\d+\)/, "footer reports backend's hit count");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Cross-seam repro (final-review bug): a monorepo-shaped single-graph repo
+ * with two marker-carrying sub-scopes — `api/` has REAL symbols named for the
+ * query terms; `junk/` has NO such symbol, only a body comment repeating ONE
+ * of the two query terms ("gateway", never "timeout") — an incidental
+ * single-token collision: `coverageStrong` 0 (no name/path match, file-kind
+ * node) and `coverage` well under `HIGH_FLOOR` (the missing term's absence
+ * dominates the idf-weighted share) — NOT a case the broad-coverage recall
+ * valve is meant to rescue, which requires BOTH terms to appear somewhere.
+ * The repetition is load-bearing: it inflates junk's RAW bm25 score to ~34%
+ * of api's raw best — ABOVE the OLD `0.25 × raw-lexical-best` ratio gate
+ * (the exact gate Task 5 proved "far too lenient, leaks junk" for workspace
+ * federation) — so pre-fix, `rankScopesAndFuse` let `junk/` federate beside
+ * `api/`'s genuine hits and RRF's rank-only math floated it to rank #2;
+ * post-fix, the match-STRENGTH gate (same as `federateAsk`) correctly excludes
+ * it regardless of the raw ratio. */
+function crossSeamMonorepoFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-crossseam-"));
+  mkdirSync(join(dir, "api"), { recursive: true });
+  mkdirSync(join(dir, "junk"), { recursive: true });
+  writeFileSync(join(dir, "api", "package.json"), `{ "name": "api", "version": "1.0.0" }\n`);
+  writeFileSync(join(dir, "junk", "package.json"), `{ "name": "junk", "version": "1.0.0" }\n`);
+  writeFileSync(
+    join(dir, "api", "gateway.ts"),
+    `/** Thrown when the upstream call exceeds the deadline. */\n` +
+      `export class GatewayTimeout extends Error {\n` +
+      `  constructor(public readonly ms: number) {\n` +
+      `    super(\`gateway timeout after \${ms}ms\`);\n` +
+      `  }\n` +
+      `}\n\n` +
+      `export function callUpstream(ms: number): void {\n` +
+      `  if (ms > 5000) throw new GatewayTimeout(ms);\n` +
+      `}\n\n` +
+      `export function retryUpstream(attempts: number): void {\n` +
+      `  for (let i = 0; i < attempts; i++) callUpstream(1000);\n` +
+      `}\n\n` +
+      `export class UpstreamClient {\n` +
+      `  send(payload: string): string {\n    return payload;\n  }\n` +
+      `  close(): void {}\n` +
+      `}\n\n` +
+      `export function buildClient(): UpstreamClient {\n  return new UpstreamClient();\n}\n`,
+  );
+  writeFileSync(
+    join(dir, "junk", "widget.ts"),
+    `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// unrelated helper widget — nothing to do with upstream call handling at all.\n` +
+      `export class Widget {\n` +
+      `  render(): string {\n    return "widget";\n  }\n` +
+      `  resize(w: number, h: number): void {}\n` +
+      `}\n\n` +
+      `export class Panel {\n  layout(): void {}\n}\n\n` +
+      `export function makeWidget(): Widget {\n  return new Widget();\n}\n\n` +
+      `export function makePanel(): Panel {\n  return new Panel();\n}\n`,
+  );
+  return dir;
+}
+
+test("cross-seam fix: a monorepo scope with only a body-comment collision is gated to alsoMatched, not ranked ahead of the genuine scope", async () => {
+  const dir = crossSeamMonorepoFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "gateway timeout", { limit: 10 });
+    assert.ok(
+      !r.hits.some((h) => h.scope === "junk"),
+      `junk/ must not appear in the ranked hits at all, got: ${r.hits.map((h) => `[${h.scope}] ${h.title}`).join(", ")}`,
+    );
+    assert.ok(r.hits.some((h) => h.scope === "api"), "api/'s genuine hits still rank");
+    assert.ok(r.scopes, "fusion telemetry present");
+    assert.ok(
+      r.scopes!.alsoMatched.some((m) => m.scope === "junk"),
+      "junk/ must be reported in alsoMatched instead",
+    );
+    const out = formatAsk(r);
+    assert.match(out, /also matched: junk\/ — narrow with --in junk\//, `expected an alsoMatched footer, got:\n${out}`);
+    assert.doesNotMatch(out, /\[junk\/\]/, "no junk/-labeled hit anywhere in the rendered output");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── `--in <path-prefix>`: filter docs before scoring ────────────────────────
+
+/** `prefix/docA.ts` + `prefix-sibling/docB.ts` — a plain `path.startsWith`
+ * would wrongly let "prefix" match "prefix-sibling" too; segment-aware
+ * matching (same rule as `scopeOf`) must not. */
+function siblingPrefixFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-in-sibling-"));
+  mkdirSync(join(dir, "widgets"), { recursive: true });
+  mkdirSync(join(dir, "widgets-extra"), { recursive: true });
+  writeFileSync(join(dir, "widgets", "a.ts"), `export function needlefind(): number {\n  return 1;\n}\n`);
+  writeFileSync(join(dir, "widgets-extra", "b.ts"), `export function needlefind2(): number {\n  return 2;\n}\n`);
+  return dir;
+}
+
+test("ask --in: filters to nodes under the prefix, segment-aware ('widgets' must not match 'widgets-extra')", async () => {
+  const dir = siblingPrefixFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "needlefind", { in: "widgets", limit: 20 });
+    assert.ok(r.hits.length > 0, "the widgets/ hit is still found");
+    assert.ok(
+      r.hits.every((h) => h.pointer.startsWith("widgets/")),
+      `every hit must be under widgets/, got: ${r.hits.map((h) => h.pointer).join(", ")}`,
+    );
+    assert.ok(
+      !r.hits.some((h) => h.pointer.startsWith("widgets-extra/")),
+      "widgets-extra/ must NOT be pulled in by a naive substring/prefix match",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** `filler/` (30 files) all define `zzzcommonword`, making it common GLOBALLY
+ * (low idf); `proj/` has `zzzraretoken` (+ a duplicate, so it's the common
+ * term LOCALLY once filler/ is filtered out) and `zzzcommonword_b` (rare
+ * locally, once filler/ is gone). This flips which one outranks the other
+ * between the unfiltered and `--in`-filtered corpora — proof `--in` recomputes
+ * idf over the filtered set rather than reusing the global one. */
+function idfShiftFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-in-idf-"));
+  mkdirSync(join(dir, "filler"), { recursive: true });
+  mkdirSync(join(dir, "proj"), { recursive: true });
+  for (let i = 0; i < 30; i++) {
+    writeFileSync(join(dir, "filler", `f${i}.ts`), `export function zzzcommonword(): number {\n  return ${i};\n}\n`);
+  }
+  writeFileSync(join(dir, "proj", "docA.ts"), `export function zzzraretoken(): number {\n  return 1;\n}\n`);
+  writeFileSync(join(dir, "proj", "docC.ts"), `export function zzzraretoken_dup(): number {\n  return 2;\n}\n`);
+  writeFileSync(join(dir, "proj", "docB.ts"), `export function zzzcommonword_b(): number {\n  return 3;\n}\n`);
+  return dir;
+}
+
+test("ask --in: per-scope idf differs from global — a term's rank flips relative to another between filtered and unfiltered", async () => {
+  const dir = idfShiftFixture();
+  try {
+    await buildGraph(dir);
+    const query = "zzzraretoken zzzcommonword";
+    const rankOf = (r: ReturnType<typeof ask>["hits"], title: string) => r.findIndex((h) => h.title.startsWith(title));
+
+    const global = ask(dir, query, { limit: 40 });
+    const rareGlobal = rankOf(global.hits, "zzzraretoken ");
+    const commonBGlobal = rankOf(global.hits, "zzzcommonword_b");
+    assert.ok(rareGlobal >= 0 && commonBGlobal >= 0, "both candidates present globally");
+    assert.ok(rareGlobal < commonBGlobal, "globally, the rare term (high idf) outranks the diluted common term");
+
+    const filtered = ask(dir, query, { limit: 40, in: "proj" });
+    const rareFiltered = rankOf(filtered.hits, "zzzraretoken ");
+    const commonBFiltered = rankOf(filtered.hits, "zzzcommonword_b");
+    assert.ok(rareFiltered >= 0 && commonBFiltered >= 0, "both candidates present filtered");
+    assert.ok(
+      commonBFiltered < rareFiltered,
+      "filtered to proj/, zzzcommonword_b (now the locally-rare term) overtakes zzzraretoken (now locally-common)",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask --in: unknown/no-match prefix throws a scope-enumerating error", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    assert.throws(
+      () => ask(dir, "how are errors handled", { in: "wrong" }),
+      /nothing indexed under "wrong\/" — scopes here: .*frontend\/.*backend\/.* \(or any path prefix\)/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask --in: unknown prefix on a single-scope repo throws without a scopes-here clause", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    assert.throws(() => ask(dir, "addNumbers", { in: "nosuchdir" }), /nothing indexed under "nosuchdir\/"/);
+    assert.throws(() => ask(dir, "addNumbers", { in: "nosuchdir" }), (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.doesNotMatch(err.message, /scopes here:/);
+      assert.match(err.message, /\(or any path prefix\)/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: `graft ask --in <unknown>` exits 1 with the scope-enumerating error on stderr", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    let threw: (Error & { status?: number; stderr?: string }) | undefined;
+    try {
+      execFileSync(
+        process.execPath,
+        ["--import", "tsx", "src/cli.ts", "ask", "how are errors handled", dir, "--in", "wrong"],
+        { encoding: "utf8", stdio: "pipe" },
+      );
+    } catch (err) {
+      threw = err as Error & { status?: number; stderr?: string };
+    }
+    assert.ok(threw, "the CLI must exit non-zero");
+    assert.equal(threw!.status, 1);
+    assert.match(threw!.stderr ?? "", /✗ nothing indexed under "wrong\/"/);
+    assert.match(threw!.stderr ?? "", /scopes here:.*frontend\/.*backend\//);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask: a zero-hit query on a multi-scope graph appends scope enumeration to the empty note", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "zzzznomatchatallxyz");
+    assert.equal(r.mode, "empty");
+    assert.match(r.note ?? "", /no matching nodes — try different words/);
+    assert.match(r.note ?? "", /scopes here: .*frontend\/.*backend\//);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask --in on the multi-scope fixture: filtering to one scope carries no scope labels, even though the repo is multi-scope", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "how are errors handled", { limit: 10, in: "frontend" });
+    assert.ok(r.hits.length > 0);
+    assert.ok(
+      r.hits.every((h) => h.scope === "frontend"),
+      "only frontend/ hits survive the filter",
+    );
+    assert.equal(r.scopes, undefined, "single scope remaining under the prefix — no fusion metadata");
+    const out = formatAsk(r);
+    assert.doesNotMatch(out, /\[frontend\/\] |\[backend\/\] |matched in:|also matched:/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Review fix: `--in` must not blind the sidecar's per-doc body bags ──────
+
+/** A term that appears ONLY in a function's body (never its name/signature),
+ * same shape as the pre-existing body-indexing test — but the node lives
+ * inside a directory that IS the `--in` prefix, so this catches the sidecar
+ * bypass bug: a build writes `body_text` into `.cache/ask-index.json` and
+ * then strips it from `wiring.json` (see `write.ts`), so a graph loaded from
+ * disk has NO other source for body tokens. Disabling the sidecar under
+ * `--in` (rather than just its global df/avgdl) silently empties every
+ * node's body bag, making a body-only term unfindable everywhere, including
+ * under its own directory. */
+test("ask --in: a body-only term is still found when filtered to its own directory (sidecar body bags must survive --in)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-in-body-"));
+  try {
+    mkdirSync(join(dir, "widgets"), { recursive: true });
+    writeFileSync(
+      join(dir, "widgets", "pay.ts"),
+      `export function checkout(amount: number): string {\n` +
+        `  const token = createStripeCharge(amount);\n` +
+        `  return token;\n` +
+        `}\n`,
+    );
+    await buildGraph(dir);
+    // Unfiltered: sanity-check the term is findable at all (pins the existing
+    // body-indexing contract this test's fixture depends on).
+    const unfiltered = ask(dir, "stripe");
+    assert.ok(unfiltered.hits.some((h) => h.title.startsWith("checkout")), "sanity: findable unfiltered");
+
+    const r = ask(dir, "stripe", { in: "widgets" });
+    const hit = r.hits.find((h) => h.title.startsWith("checkout"));
+    assert.ok(hit, "checkout must still be findable via its body-only term when --in filters to its OWN directory");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Review fix: `--in` accepts a trailing slash ─────────────────────────────
+
+test("ask --in: a trailing slash is accepted — `--in frontend/` behaves exactly like `--in frontend`", async () => {
+  const dir = multiScopeFixture();
+  try {
+    await buildGraph(dir);
+    const withSlash = ask(dir, "how are errors handled", { limit: 10, in: "frontend/" });
+    const withoutSlash = ask(dir, "how are errors handled", { limit: 10, in: "frontend" });
+    assert.ok(withSlash.hits.length > 0, "the tool's own suggested `--in scope/` (with slash) must not come up empty");
+    assert.deepEqual(
+      withSlash.hits.map((h) => h.pointer),
+      withoutSlash.hits.map((h) => h.pointer),
+      "trailing slash must not change which hits are returned",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Review fix: `--in` must also narrow structural queries, not silently no-op ──
+
+/** Same symbol NAME (`handle`) defined independently in two directories, each
+ * with its own distinct caller — `resolveSymbol` matches both by name alone,
+ * so without `--in` a structural query's subject is ambiguous (both nodes),
+ * and both callers show up. `--in` must narrow the SUBJECT resolution to the
+ * one under the prefix (same "narrow resolveSymbol" semantics
+ * `callers`/`callees`/`impact --in` already have), not just filter docs. */
+function duplicateNameFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-in-structural-"));
+  mkdirSync(join(dir, "frontend"), { recursive: true });
+  mkdirSync(join(dir, "backend"), { recursive: true });
+  writeFileSync(
+    join(dir, "frontend", "a.ts"),
+    `export function handle(): number {\n  return 1;\n}\n\n` +
+      `export function frontendCaller(): number {\n  return handle();\n}\n`,
+  );
+  writeFileSync(
+    join(dir, "backend", "b.ts"),
+    `export function handle(): number {\n  return 2;\n}\n\n` +
+      `export function backendCaller(): number {\n  return handle();\n}\n`,
+  );
+  return dir;
+}
+
+test("ask --in: structural queries narrow the resolved subject by prefix, not just the lexical docs", async () => {
+  const dir = duplicateNameFixture();
+  try {
+    await buildGraph(dir);
+
+    const unfiltered = ask(dir, "who calls handle");
+    assert.equal(unfiltered.mode, "structural");
+    assert.ok(unfiltered.hits.some((h) => h.title === "frontendCaller"), "sanity: both callers show up unfiltered");
+    assert.ok(unfiltered.hits.some((h) => h.title === "backendCaller"), "sanity: both callers show up unfiltered");
+
+    const r = ask(dir, "who calls handle", { in: "frontend" });
+    assert.equal(r.mode, "structural", "still resolves structurally once narrowed to frontend's handle");
+    assert.ok(r.hits.some((h) => h.title === "frontendCaller"), "frontend's caller must be found");
+    assert.ok(
+      !r.hits.some((h) => h.title === "backendCaller"),
+      "backend's handle/caller must not leak in when --in=frontend",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask --in: a structural subject that exists ONLY outside the prefix falls through loudly, never a silent no-op", async () => {
+  const dir = duplicateNameFixture();
+  try {
+    await buildGraph(dir);
+    // "handle" only resolves under backend/ once frontend/ is filtered out via
+    // an --in that excludes it entirely (a prefix with no "handle" at all).
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "docs", "readme.ts"), `export function docsOnly(): number {\n  return 0;\n}\n`);
+    await buildGraph(dir);
+    const r = ask(dir, "who calls handle", { in: "docs" });
+    assert.notEqual(r.mode, "structural", "no `handle` under docs/ — must fall through, not silently return nothing");
+    assert.ok(r.note, "a fallthrough note must be set");
+    assert.match(r.note!, /structural index: no entries for 'handle'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** The regression pin Task 7's cross-version gate relies on: on a single-scope
+ * graph the fusion code paths must be completely inert. `meta.scopes` hand-set
+ * to the canonical single form vs deleted (an old graph) must produce
+ * byte-identical `formatAsk` output — the early branch keys on
+ * `scopesOfGraph(graph).length <= 1`, and both forms take it. */
+test("regression pin: single-scope ask output is byte-equal with canonical meta.scopes vs no meta.scopes", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const p = join(dir, "graft", ".graph", "wiring.json");
+    const g = JSON.parse(readFileSync(p, "utf8"));
+    delete g.meta.scopes;
+    writeFileSync(p, JSON.stringify(g));
+    const absent = formatAsk(ask(dir, "addNumbers", { source: true }));
+    g.meta.scopes = [{ prefix: "", label: "", markers: [] }];
+    writeFileSync(p, JSON.stringify(g));
+    const canonical = formatAsk(ask(dir, "addNumbers", { source: true }));
+    assert.equal(canonical, absent, "single-scope output must not drift by a byte");
+    assert.doesNotMatch(absent, /matched in:|also matched:|\[\w+\/\] /, "zero new output on single-scope");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

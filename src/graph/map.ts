@@ -21,6 +21,7 @@
 import type { GraphV1, NodeV1 } from "./types.js";
 import { languageOf } from "./extract.js";
 import { WALK_RELATIONS } from "./relations.js";
+import { scopeLabel, scopeOf, scopesOfGraph } from "./scopes.js";
 import { savingsFooter, savingsFor, type Savings } from "../context/savings.js";
 
 export interface Hub {
@@ -39,13 +40,34 @@ export interface DirEntry {
   hubs: Hub[];
 }
 
-export interface RepoMap {
-  totals: { files: number; symbols: number; edges: number; languages: string[] };
+/** One scope's own directory breakdown — same shape a single-scope `buildRepoMap`
+ * would produce for that scope's nodes alone, dir paths repo-rooted (not
+ * scope-relative) so a hit is directly openable without mentally re-prefixing. */
+export interface ScopeGroup {
+  /** Display label via `scopeLabel` — "(root)" or "backend/". */
+  scope: string;
   /** Sorted by symbol count desc (ties by path asc), capped at `maxDirs`. */
   dirs: DirEntry[];
+  /** This scope's directory groups beyond the `maxDirs` cap. */
+  dropped: number;
+}
+
+export interface RepoMap {
+  totals: { files: number; symbols: number; edges: number; languages: string[] };
+  /** Single-scope repos: sorted by symbol count desc (ties by path asc), capped
+   * at `maxDirs`. Multi-scope repos: empty — use `scopes` instead (see below). */
+  dirs: DirEntry[];
+  /** Multi-scope repos ONLY (`scopesOfGraph(graph).length > 1`): one entry per
+   * scope, scope label as the top-level group key, that scope's own dirs
+   * second — a monorepo's sub-projects each read like their own little map
+   * instead of being pooled by raw first-path-segment. Absent on single-scope
+   * repos (the byte-identical-output regression guarantee: same
+   * `scopesOfGraph(g).length <= 1` early branch `ask.ts` uses). */
+  scopes?: ScopeGroup[];
   /** Global top hubs by inDegree, ties by name asc then path asc. */
   hotspots: Hub[];
-  /** Directory groups beyond the `maxDirs` cap — never silently dropped. */
+  /** Directory groups beyond the `maxDirs` cap — never silently dropped.
+   * Multi-scope repos: always 0 here; see each `ScopeGroup.dropped` instead. */
   dropped: number;
   /** Tokens-saved baseline: every indexed file read whole — the cost of
    * orienting by reading the repo instead of this map. */
@@ -109,23 +131,35 @@ function sortedLanguages(paths: string[]): string[] {
 }
 
 /**
- * Build the repo map from an already-loaded `GraphV1`. Deterministic: same
- * graph in → byte-identical `RepoMap` out (modulo insertion order, which is
- * never observed — everything meaningful is sorted).
+ * The directory-clustering core, factored out so it can run once over the
+ * whole graph (single-scope) or once per scope's own node subset
+ * (multi-scope) with identical grouping/splitting/sorting rules.
+ *
+ * `stripPrefix` is the scope prefix to strip before computing depth/split
+ * ("" for single-scope / the root scope — a no-op, `relPath` is then the
+ * identity function). Reported `DirEntry.path`s are always repo-rooted
+ * (the prefix is reattached), never scope-relative — a hit stays directly
+ * openable without mentally re-prefixing it.
  */
-export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): RepoMap {
-  const maxDirs = opts.maxDirs ?? DEFAULT_MAX_DIRS;
-  const hubsPerDir = opts.hubsPerDir ?? DEFAULT_HUBS_PER_DIR;
-  const hotspotsN = opts.hotspots ?? DEFAULT_HOTSPOTS;
-
-  const fileNodes = graph.nodes.filter((n) => n.kind === "file");
+function computeDirEntries(
+  nodes: NodeV1[],
+  inDegree: Map<string, number>,
+  maxDirs: number,
+  hubsPerDir: number,
+  stripPrefix: string,
+): { dirs: DirEntry[]; dropped: number } {
+  const fileNodes = nodes.filter((n) => n.kind === "file");
   const totalFiles = fileNodes.length;
 
-  // Pass 1: depth-1 file counts, to find (at most one) group over the
-  // split threshold — two groups can't both exceed 60% of the same total.
+  const relPath = (path: string): string =>
+    stripPrefix === "" ? path : path === stripPrefix ? "" : path.slice(stripPrefix.length + 1);
+
+  // Pass 1: depth-1 file counts (relative to `stripPrefix`), to find (at most
+  // one) group over the split threshold — two groups can't both exceed 60%
+  // of the same total.
   const depth1FileCounts = new Map<string, number>();
   for (const n of fileNodes) {
-    const key = dirKey(n.path, 1);
+    const key = dirKey(relPath(n.path), 1);
     depth1FileCounts.set(key, (depth1FileCounts.get(key) ?? 0) + 1);
   }
   let splitSegment: string | null = null;
@@ -138,12 +172,13 @@ export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): Re
     }
   }
 
-  const depthFor = (path: string): number => (splitSegment !== null && dirKey(path, 1) === splitSegment ? 2 : 1);
+  const depthFor = (rp: string): number => (splitSegment !== null && dirKey(rp, 1) === splitSegment ? 2 : 1);
 
   // Pass 2: assign every node (file and symbol alike) to its group.
   const groups = new Map<string, { files: NodeV1[]; symbols: NodeV1[] }>();
-  for (const n of graph.nodes) {
-    const key = dirKey(n.path, depthFor(n.path));
+  for (const n of nodes) {
+    const rp = relPath(n.path);
+    const key = dirKey(rp, depthFor(rp));
     let g = groups.get(key);
     if (!g) {
       g = { files: [], symbols: [] };
@@ -153,10 +188,11 @@ export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): Re
     else g.symbols.push(n);
   }
 
-  const inDegree = computeInDegree(graph);
+  const fullPath = (relKey: string): string =>
+    stripPrefix === "" ? relKey : relKey === "" ? stripPrefix : `${stripPrefix}/${relKey}`;
 
-  const dirEntries: DirEntry[] = [...groups.entries()].map(([path, g]) => ({
-    path,
+  const dirEntries: DirEntry[] = [...groups.entries()].map(([relKey, g]) => ({
+    path: fullPath(relKey),
     files: g.files.length,
     symbols: g.symbols.length,
     languages: sortedLanguages(g.files.map((f) => f.path)),
@@ -166,6 +202,53 @@ export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): Re
   dirEntries.sort((a, b) => b.symbols - a.symbols || a.path.localeCompare(b.path));
   const dropped = Math.max(0, dirEntries.length - maxDirs);
   const dirs = dirEntries.slice(0, maxDirs);
+  return { dirs, dropped };
+}
+
+/**
+ * Build the repo map from an already-loaded `GraphV1`. Deterministic: same
+ * graph in → byte-identical `RepoMap` out (modulo insertion order, which is
+ * never observed — everything meaningful is sorted).
+ *
+ * Single-scope repos (`scopesOfGraph(graph).length <= 1`, the overwhelming
+ * majority) take the exact pre-scope-awareness path below — same branch guard
+ * `ask.ts` uses, so this is a byte-level regression guarantee. Multi-scope
+ * repos group `dirs` by scope FIRST (see `scopes` on `RepoMap`); `dirs` itself
+ * is then empty and `scopes` carries the breakdown instead.
+ */
+export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): RepoMap {
+  const maxDirs = opts.maxDirs ?? DEFAULT_MAX_DIRS;
+  const hubsPerDir = opts.hubsPerDir ?? DEFAULT_HUBS_PER_DIR;
+  const hotspotsN = opts.hotspots ?? DEFAULT_HOTSPOTS;
+
+  const fileNodes = graph.nodes.filter((n) => n.kind === "file");
+  const totalFiles = fileNodes.length;
+  const inDegree = computeInDegree(graph);
+
+  const scopes = scopesOfGraph(graph);
+  let dirs: DirEntry[];
+  let dropped: number;
+  let scopeGroups: ScopeGroup[] | undefined;
+
+  if (scopes.length <= 1) {
+    const computed = computeDirEntries(graph.nodes, inDegree, maxDirs, hubsPerDir, "");
+    dirs = computed.dirs;
+    dropped = computed.dropped;
+  } else {
+    // Multi-scope: each scope gets its OWN dir breakdown, computed exactly
+    // like the single-scope path above but fed only that scope's node
+    // subset (prefix stripped for depth/split math, reattached on output).
+    // Grouping by raw first-path-segment instead would pool every scope
+    // nested more than one segment deep (e.g. two workspace packages both
+    // under `packages/`) into one shared bucket, losing the split entirely.
+    dirs = [];
+    dropped = 0;
+    scopeGroups = scopes.map((s) => {
+      const nodesInScope = graph.nodes.filter((n) => scopeOf(n.path, scopes).prefix === s.prefix);
+      const computed = computeDirEntries(nodesInScope, inDegree, maxDirs, hubsPerDir, s.prefix);
+      return { scope: scopeLabel(s.prefix), dirs: computed.dirs, dropped: computed.dropped };
+    });
+  }
 
   const allSymbols = graph.nodes.filter((n) => n.kind !== "file");
   const hotspots = topHubs(allSymbols, inDegree, hotspotsN);
@@ -178,6 +261,7 @@ export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): Re
       languages: sortedLanguages(fileNodes.map((f) => f.path)),
     },
     dirs,
+    scopes: scopeGroups,
     hotspots,
     dropped,
     saved: savingsFor(graph, fileNodes.map((f) => f.path)),
@@ -206,6 +290,12 @@ function formatHotspot(h: Hub): string {
   return `${h.name} · ${h.kind} · ${h.path}:${h.span} · ${h.inDegree}←`;
 }
 
+/** The "+N more directories not shown" note, or null when nothing was dropped. */
+function droppedNote(dropped: number): string | null {
+  if (dropped <= 0) return null;
+  return `… +${dropped} more director${dropped === 1 ? "y" : "ies"} not shown (raise max-dirs to see more)`;
+}
+
 /**
  * Render a `RepoMap` as the human report. Deterministic (same map in → same
  * string out) and targets <= 6000 chars for a typical repo (the `maxDirs`/
@@ -217,11 +307,22 @@ export function formatRepoMap(map: RepoMap): string {
   const header = `repo map — ${totals.files} files · ${totals.symbols} symbols · ${totals.edges} edges · ${totals.languages.join(", ")}`;
 
   const lines: string[] = [header, ""];
-  for (const d of map.dirs) lines.push(formatDirLine(d));
-  if (map.dropped > 0) {
-    lines.push(`… +${map.dropped} more director${map.dropped === 1 ? "y" : "ies"} not shown (raise max-dirs to see more)`);
+  if (map.scopes) {
+    // Multi-scope: scope label as the top-level group heading, that scope's
+    // own dirs listed under it — `map.dirs` is empty here, see `buildRepoMap`.
+    for (const sg of map.scopes) {
+      lines.push(`## ${sg.scope}`);
+      for (const d of sg.dirs) lines.push(formatDirLine(d));
+      const note = droppedNote(sg.dropped);
+      if (note) lines.push(note);
+      lines.push("");
+    }
+  } else {
+    for (const d of map.dirs) lines.push(formatDirLine(d));
+    const note = droppedNote(map.dropped);
+    if (note) lines.push(note);
+    lines.push("");
   }
-  lines.push("");
   lines.push(`hotspots: ${map.hotspots.map(formatHotspot).join("  ")}`);
 
   const body = lines.join("\n");

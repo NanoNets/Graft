@@ -1,20 +1,8 @@
 #!/usr/bin/env node
 /**
- * `graft` CLI. Commands:
- *
- *   build   build graft/ from your code (structural graph; --deep adds LLM summaries).
- *   ask     query the graph ($0, no LLM).
- *   check   fail if graft/ has drifted from the code — for CI.
- *   viz     serve the interactive graph viewer.
- *   mcp     serve the graph over MCP (stdio) for coding agents.
- *   callers precise graph traversal for a symbol ($0, no LLM); --direction out = callees, --depth N = blast radius.
- *   skeleton signatures-only view of one file ($0, no LLM).
- *   grep    regex search over indexed files, grouped by enclosing symbol, ranked by coupling ($0, no LLM).
- *   map     token-budgeted repo orientation — dir clusters, hubs, hotspots ($0, no LLM).
- *   init    set up the Claude Code integration (.claude/ statusline + hooks + MCP) in this repo.
- *
- * Git is the sync: commit graft/ and anyone who clones the repo has the
- * graph, with no setup.
+ * `graft` CLI. Commands: build, ask, check, viz, mcp, callers, skeleton, grep,
+ * map, init. Git is the sync: commit graft/ and a clone has the graph. A
+ * workspace parent (≥2 git children) federates query commands across children.
  */
 import "dotenv/config";
 import { Command } from "commander";
@@ -30,6 +18,15 @@ import { runHostsInit } from "./hosts/init.js";
 import { hostIds } from "./hosts/registry.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
+import { isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
+import {
+  runWorkspaceAsk,
+  runWorkspaceBuild,
+  runWorkspaceCallers,
+  runWorkspaceCheck,
+  runWorkspaceGrep,
+  runWorkspaceMap,
+} from "./graph/workspace-cli.js";
 import { formatInitEpilogue } from "./cli-epilogue.js";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
 
@@ -66,10 +63,7 @@ function cliConfig(): EngineConfig {
   };
 }
 
-function engineFrom(): Graft {
-  return new Graft(cliConfig());
-}
-
+const engineFrom = (): Graft => new Graft(cliConfig());
 program
   .command("version")
   .description("Print the installed version and the latest published on npm")
@@ -110,8 +104,7 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
-    // --deep needs a key; without one, degrade to the $0 structural build
-    // rather than failing — the wiring graph is still worth having.
+    // --deep needs a key; without one, degrade to the $0 structural build.
     let deep = opts.deep;
     const resolved = resolveConfig(cliConfig());
     if (deep && !resolved.apiKey) {
@@ -128,8 +121,21 @@ program
       );
     }
 
-    // --deep: concept nodes first (they're LLM prose; the wiring cards link up to
-    // them), then the wiring graph rewrites the cards + INDEX with those up-links.
+    // Workspace parent: build each child into its OWN graft/ + a workspace index.
+    const buildRoot = resolve(dir);
+    const buildGlobalDir = program.opts<GlobalOpts>().dir;
+    if (isWorkspaceBuildRoot(buildRoot, buildGlobalDir)) {
+      await runWorkspaceBuild(buildRoot, {
+        deep: !!deep,
+        extensions: opts.extensions,
+        concurrency,
+        childConfig: cliConfig(),
+        override: buildGlobalDir,
+      });
+      return;
+    }
+
+    // --deep: concept nodes first, then the wiring graph links cards up to them.
     if (deep) {
       const c = await engine.init(dir, {
         extensions: opts.extensions,
@@ -145,7 +151,7 @@ program
       for (const e of c.errors) console.error(`✗ ${e}`);
     }
 
-    // Wiring graph (Tier-2 cards + Tier-3 wiring.json) — always. LLM meaning only with --deep.
+    // Wiring graph — always; LLM meaning only with --deep.
     const g = await engine.graph(dir, {
       llm: deep,
       concurrency,
@@ -175,10 +181,25 @@ program
   .option("-n, --limit <n>", "max results", "8")
   .option("--source", "inline the source at each file:line hit (retriever mode — the pack IS the answer, no need to re-open files)")
   .option("--full", "with --source: inline whole definition spans instead of the default ≤8-line crux excerpts")
+  .option("--in <path>", "narrow to nodes under this path prefix, filtered before scoring (segment-aware, like scopeOf)")
   .option("--json", "output the result as JSON")
-  .action(async (query: string, dir: string, opts: { limit: string; source?: boolean; full?: boolean; json?: boolean }) => {
+  .action(async (query: string, dir: string, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean }) => {
+    const askGlobalDir = program.opts<GlobalOpts>().dir;
+    if (readWorkspace(resolve(dir), askGlobalDir)) {
+      runWorkspaceAsk(resolve(dir), askGlobalDir, query, {
+        limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, json: opts.json,
+      });
+      return;
+    }
     const engine = engineFrom();
-    const r = engine.ask(dir, query, { limit: Number(opts.limit), source: opts.source, full: opts.full });
+    let r;
+    try {
+      r = engine.ask(dir, query, { limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in });
+    } catch (err) {
+      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+      return;
+    }
     if (opts.json) {
       console.log(JSON.stringify(r, null, 2));
     } else {
@@ -208,15 +229,18 @@ program
   .option("-e, --extensions <exts...>", "code extensions to include")
   .option("--json", "output the drift as JSON")
   .action((dir: string, opts: { extensions?: string[]; json?: boolean }) => {
+    const checkGlobalDir = program.opts<GlobalOpts>().dir;
+    if (readWorkspace(resolve(dir), checkGlobalDir)) {
+      runWorkspaceCheck(resolve(dir), checkGlobalDir);
+      return;
+    }
     const engine = engineFrom();
     const r = engine.check(dir, { extensions: opts.extensions });
     const g = engine.checkGraph(dir); // graph.json is only judged when it exists
 
-    // Neither layer has ever been built → nothing to check.
+    // A layer that IS present must be in sync; a never-built layer (keyless
+    // build skips the markdown layer) is informational, not a failure.
     const bothMissing = r.missing && g.missing;
-    // A layer that IS present must be in sync; a layer that was never built
-    // (keyless `graft build` skips the markdown/concept layer) is informational,
-    // not a failure — the wiring graph stands on its own.
     const markdownFail = !r.missing && !r.ok;
     const wiringFail = !g.missing && !g.ok;
 
@@ -259,8 +283,7 @@ program
       console.error(`✗ no context graph at ${contextDir} — run \`graft build --deep\` first`);
       process.exit(1);
     }
-    // dist/cli.js → dist/viewer/ (prebuilt at package build time)
-    const viewerDir = fileURLToPath(new URL("./viewer/", import.meta.url));
+    const viewerDir = fileURLToPath(new URL("./viewer/", import.meta.url)); // prebuilt
     const srv = await startVizServer({
       contextDir,
       viewerDir,
@@ -302,8 +325,16 @@ program
       dir: string,
       opts: { direction?: string; depth?: string; in?: string; json?: boolean },
     ) => {
-      const { runCallersCommand } = await import("./graph/traverse-cli.js");
       const globalOpts = program.opts<{ dir?: string }>();
+      if (!opts.json && readWorkspace(resolve(dir), globalOpts.dir)) {
+        runWorkspaceCallers(resolve(dir), globalOpts.dir, symbol, {
+          direction: opts.direction === "out" ? "out" : "in",
+          depth: opts.depth ? Number(opts.depth) : undefined,
+          in: opts.in,
+        });
+        return;
+      }
+      const { runCallersCommand } = await import("./graph/traverse-cli.js");
       runCallersCommand(symbol, dir, {
         direction: opts.direction,
         depth: opts.depth,
@@ -329,8 +360,14 @@ program
       dir: string,
       opts: { ignoreCase?: boolean; fixed?: boolean; in?: string; json?: boolean },
     ) => {
-      const { runGrepCommand } = await import("./search/grep-cli.js");
       const globalOpts = program.opts<{ dir?: string }>();
+      if (readWorkspace(resolve(dir), globalOpts.dir)) {
+        runWorkspaceGrep(resolve(dir), globalOpts.dir, pattern, {
+          ignoreCase: opts.ignoreCase, fixed: opts.fixed, json: opts.json,
+        });
+        return;
+      }
+      const { runGrepCommand } = await import("./search/grep-cli.js");
       runGrepCommand(pattern, dir, {
         ignoreCase: opts.ignoreCase,
         fixed: opts.fixed,
@@ -350,17 +387,9 @@ program
   .option("--max-dirs <n>", "max directory entries shown, rest counted into dropped (default 16)")
   .option("--json", "output as JSON")
   .action(async (dir: string, opts: { json?: boolean; maxDirs?: string }) => {
-    const { buildRepoMap, formatRepoMap } = await import("./graph/map.js");
     const root = resolve(dir);
     const globalOpts = program.opts<{ dir?: string }>();
-    const contextDir = contextDirFor(root, globalOpts.dir);
-    const graph = loadGraphCached(contextDir);
-    if (!graph) {
-      console.error("✗ no graph — run graft build first");
-      process.exit(1);
-      return;
-    }
-    let maxDirs: number | undefined;
+    let maxDirsW: number | undefined;
     if (opts.maxDirs !== undefined) {
       const n = parseInt(opts.maxDirs, 10);
       if (!Number.isFinite(n) || n <= 0) {
@@ -368,9 +397,21 @@ program
         process.exit(1);
         return;
       }
-      maxDirs = n;
+      maxDirsW = n;
     }
-    const map = buildRepoMap(graph, { maxDirs });
+    if (!opts.json && readWorkspace(root, globalOpts.dir)) {
+      runWorkspaceMap(root, globalOpts.dir, { maxDirs: maxDirsW });
+      return;
+    }
+    const { buildRepoMap, formatRepoMap } = await import("./graph/map.js");
+    const contextDir = contextDirFor(root, globalOpts.dir);
+    const graph = loadGraphCached(contextDir);
+    if (!graph) {
+      console.error("✗ no graph — run graft build first");
+      process.exit(1);
+      return;
+    }
+    const map = buildRepoMap(graph, { maxDirs: maxDirsW });
     if (opts.json) {
       console.log(JSON.stringify(map, null, 2));
       return;
@@ -435,7 +476,6 @@ program
       for (const w of r.written) console.error(`✓ ${w.id}: ${w.path} (${w.action})`);
       if (!explicit && !opts.allAgents && r.written.length === 0)
         console.error("· no other agents detected (see --list-agents / --all-agents)");
-      // r.unknown is always empty here — ids are validated above, before any writes.
       for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
       for (const h of r.hooks) console.error(`✓ hook ${h.id}: ${h.path} (${h.action})`);
     }

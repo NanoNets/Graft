@@ -23,6 +23,12 @@ export interface PageRankOptions {
   alpha?: number;
   /** Power-iteration count. 25 is plenty to converge on graphs this size. */
   iters?: number;
+  /** Restrict the walk to a subgraph: when present, an edge counts only when
+   * BOTH endpoints pass, and only passing ids can hold rank mass or seed
+   * weight. Seeds outside the filter are silently ignored (same as a seed
+   * naming a non-existent node). Omit for the full-graph walk (unchanged
+   * behavior). */
+  nodeFilter?: (id: string) => boolean;
 }
 
 /**
@@ -44,7 +50,13 @@ export function personalizedPageRank(
   const alpha = opts.alpha ?? 0.25;
   const iters = opts.iters ?? 25;
 
-  const ids = new Set(graph.nodes.map((n) => n.id));
+  // Real node ids, restricted to the subgraph when a filter is given. Every
+  // downstream `ids.has(...)` check (edge endpoints, seeds) then naturally
+  // stays within the filtered subgraph, so no other site needs to know about
+  // `nodeFilter` — the walk simply never sees the excluded nodes or edges.
+  const ids = new Set(
+    graph.nodes.map((n) => n.id).filter((id) => !opts.nodeFilter || opts.nodeFilter(id)),
+  );
 
   // Undirected adjacency over walk relations, endpoints restricted to real nodes.
   const adj = new Map<string, string[]>();

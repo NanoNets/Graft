@@ -101,6 +101,18 @@ test('graft_ask returns ranked hits for a built repo', () => {
   assert.match(r.text, /src\/math\.ts/);
 });
 
+test('graft_ask: `in` arg round-trips — narrows results to the prefix and is a soft isError on an unknown one', () => {
+  const d = builtRepo();
+  const ok = callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'src' });
+  assert.equal(ok.isError, false);
+  assert.match(ok.text, /src\/math\.ts/);
+
+  const miss = callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'nosuchdir' });
+  assert.equal(miss.isError, true);
+  assert.match(miss.text, /nothing indexed under "nosuchdir\/"/);
+  assert.match(miss.text, /or any path prefix/);
+});
+
 test('graft_check reports the wiring state', () => {
   const d = builtRepo();
   const r = callTool(d, 'graft_check', {});

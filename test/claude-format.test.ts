@@ -142,6 +142,10 @@ test('formatOrientation labels and truncates to budget', () => {
   assert.match(out, /reach for graft first/, 'always-on usage directive present');
   // index truncated to budget (1500) + the fixed usage directive header (~500).
   assert.ok(out.length < 2200, 'index trimmed to budget; only the fixed directive adds to it');
+  // Regression: `graft impact` was folded into `graft callers --depth` in 0.6.0 —
+  // the always-on directive must teach the current command, not a dead one.
+  assert.doesNotMatch(out, /graft impact\b/, 'does not teach the removed `graft impact` command');
+  assert.match(out, /graft callers .*--depth/, 'teaches blast radius via callers --depth instead');
 });
 
 test('renderSubagent shows agent name and its last query', () => {
