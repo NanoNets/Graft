@@ -328,6 +328,87 @@ test("ask on a multi-scope repo: top hits federate both scopes, labeled, with a 
   }
 });
 
+/** Cross-seam repro (final-review bug): a monorepo-shaped single-graph repo
+ * with two marker-carrying sub-scopes — `api/` has REAL symbols named for the
+ * query terms; `junk/` has NO such symbol, only a body comment repeating ONE
+ * of the two query terms ("gateway", never "timeout") — an incidental
+ * single-token collision: `coverageStrong` 0 (no name/path match, file-kind
+ * node) and `coverage` well under `HIGH_FLOOR` (the missing term's absence
+ * dominates the idf-weighted share) — NOT a case the broad-coverage recall
+ * valve is meant to rescue, which requires BOTH terms to appear somewhere.
+ * The repetition is load-bearing: it inflates junk's RAW bm25 score to ~34%
+ * of api's raw best — ABOVE the OLD `0.25 × raw-lexical-best` ratio gate
+ * (the exact gate Task 5 proved "far too lenient, leaks junk" for workspace
+ * federation) — so pre-fix, `rankScopesAndFuse` let `junk/` federate beside
+ * `api/`'s genuine hits and RRF's rank-only math floated it to rank #2;
+ * post-fix, the match-STRENGTH gate (same as `federateAsk`) correctly excludes
+ * it regardless of the raw ratio. */
+function crossSeamMonorepoFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-crossseam-"));
+  mkdirSync(join(dir, "api"), { recursive: true });
+  mkdirSync(join(dir, "junk"), { recursive: true });
+  writeFileSync(join(dir, "api", "package.json"), `{ "name": "api", "version": "1.0.0" }\n`);
+  writeFileSync(join(dir, "junk", "package.json"), `{ "name": "junk", "version": "1.0.0" }\n`);
+  writeFileSync(
+    join(dir, "api", "gateway.ts"),
+    `/** Thrown when the upstream call exceeds the deadline. */\n` +
+      `export class GatewayTimeout extends Error {\n` +
+      `  constructor(public readonly ms: number) {\n` +
+      `    super(\`gateway timeout after \${ms}ms\`);\n` +
+      `  }\n` +
+      `}\n\n` +
+      `export function callUpstream(ms: number): void {\n` +
+      `  if (ms > 5000) throw new GatewayTimeout(ms);\n` +
+      `}\n\n` +
+      `export function retryUpstream(attempts: number): void {\n` +
+      `  for (let i = 0; i < attempts; i++) callUpstream(1000);\n` +
+      `}\n\n` +
+      `export class UpstreamClient {\n` +
+      `  send(payload: string): string {\n    return payload;\n  }\n` +
+      `  close(): void {}\n` +
+      `}\n\n` +
+      `export function buildClient(): UpstreamClient {\n  return new UpstreamClient();\n}\n`,
+  );
+  writeFileSync(
+    join(dir, "junk", "widget.ts"),
+    `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// gateway gateway gateway gateway gateway gateway gateway gateway gateway\n` +
+      `// unrelated helper widget — nothing to do with upstream call handling at all.\n` +
+      `export class Widget {\n` +
+      `  render(): string {\n    return "widget";\n  }\n` +
+      `  resize(w: number, h: number): void {}\n` +
+      `}\n\n` +
+      `export class Panel {\n  layout(): void {}\n}\n\n` +
+      `export function makeWidget(): Widget {\n  return new Widget();\n}\n\n` +
+      `export function makePanel(): Panel {\n  return new Panel();\n}\n`,
+  );
+  return dir;
+}
+
+test("cross-seam fix: a monorepo scope with only a body-comment collision is gated to alsoMatched, not ranked ahead of the genuine scope", async () => {
+  const dir = crossSeamMonorepoFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "gateway timeout", { limit: 10 });
+    assert.ok(
+      !r.hits.some((h) => h.scope === "junk"),
+      `junk/ must not appear in the ranked hits at all, got: ${r.hits.map((h) => `[${h.scope}] ${h.title}`).join(", ")}`,
+    );
+    assert.ok(r.hits.some((h) => h.scope === "api"), "api/'s genuine hits still rank");
+    assert.ok(r.scopes, "fusion telemetry present");
+    assert.ok(
+      r.scopes!.alsoMatched.some((m) => m.scope === "junk"),
+      "junk/ must be reported in alsoMatched instead",
+    );
+    const out = formatAsk(r);
+    assert.match(out, /also matched: junk\/ — narrow with --in junk\//, `expected an alsoMatched footer, got:\n${out}`);
+    assert.doesNotMatch(out, /\[junk\/\]/, "no junk/-labeled hit anywhere in the rendered output");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── `--in <path-prefix>`: filter docs before scoring ────────────────────────
 
 /** `prefix/docA.ts` + `prefix-sibling/docB.ts` — a plain `path.startsWith`

@@ -345,7 +345,7 @@ function hasTerm(f: Map<string, number>, t: string): boolean {
  * a `kind:"file"` node contributes zero strength: its `name` is a basename (a
  * path component), not a symbol name, so a file whose basename happens to share
  * a query word is not a strong match. */
-function strongShare(
+export function strongShare(
   q: Map<string, number>,
   node: NodeV1,
   doc: { name: Map<string, number> },
@@ -542,6 +542,20 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
             if (total > 0) out.set(n.id, total);
           }
           return out;
+        },
+        // The participation gate's match-STRENGTH signal, evaluated once per
+        // scope on that scope's raw-lex top doc — same `strongShare`/
+        // `matchedIdfShare` functions and per-scope idf `lex` (above) just
+        // computed, so this reads the SAME strength `federateAsk` gates on
+        // (see fuse.ts's STRONG_FLOOR/HIGH_FLOOR).
+        strength: (s, id) => {
+          const d = docsById.get(id);
+          const si = idfOf.get(s);
+          if (!d || !si) return { coverage: 0, coverageStrong: 0 };
+          return {
+            coverage: matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt),
+            coverageStrong: strongShare(q, d.n, d, si.idf, si.dflt),
+          };
         },
         walk: (s, seeds) =>
           graphRank

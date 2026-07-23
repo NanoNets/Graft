@@ -11,11 +11,17 @@
  * with RRF — rank positions are comparable across corpora where raw scores
  * are not, so the tiny scope's best hit lands next to the huge scope's best.
  *
- * Soft federation: a scope whose best score is far below the global best
- * (< {@link PARTICIPATION_RATIO} ×) is probably an incidental word collision,
- * not a second home for the query — it is left out of the fused order and
- * reported in `alsoMatched` instead, so the output can say "also matched:
- * docs/ — narrow with --in docs/" rather than diluting the pack.
+ * Soft federation: a scope whose top hit is probably an incidental word
+ * collision, not a second home for the query, is left out of the fused order
+ * and reported in `alsoMatched` instead, so the output can say "also matched:
+ * docs/ — narrow with --in docs/" rather than diluting the pack. The REAL
+ * participation gate — used by both `rankScopesAndFuse` here and `federateAsk`
+ * (workspace federation) — is the match-STRENGTH signal in {@link
+ * STRONG_FLOOR}/{@link HIGH_FLOOR}: a scope's top hit must have matched a
+ * query term in a NAME/PATH field, or have broad enough overall coverage to be
+ * real even body-only. `fuseScopes`'s own {@link PARTICIPATION_RATIO} gate is
+ * a separate, cruder ratio check that still runs internally as a
+ * post-normalization safety net, not the primary defense.
  */
 
 /** One scored document, attributed to the ranking scope (path prefix, "" =
@@ -44,8 +50,33 @@ export interface FusionResult {
 export const RRF_K = 60;
 
 /** A scope federates only when its best doc scores at least this share of the
- * global best — below it the match is reported, not fused. */
+ * global best — below it the match is reported, not fused. Used by
+ * `fuseScopes`'s own internal gate (a post-normalization safety net once a
+ * caller has already applied the real match-strength gate — see
+ * {@link STRONG_FLOOR}/{@link HIGH_FLOOR}). */
 export const PARTICIPATION_RATIO = 0.25;
+
+/** The single source of truth for the cross-scope participation gate shared
+ * by `rankScopesAndFuse` (single-graph multi-scope) and `federateAsk`
+ * (workspace federation, `src/graph/workspace.ts`) — the two paths that solve
+ * the identical "a weak scope must not federate beside a strong one" problem.
+ * They MUST use the same floors so they can never drift into inconsistent
+ * behavior again.
+ *
+ * A scope federates iff its top hit matched a query term in a NAME/PATH field
+ * at all (any strength ≥ `STRONG_FLOOR`) — the primary gate. Well below every
+ * genuine fixture (≥0.45) yet strictly above a body-only collision's 0, so a
+ * real partial-relevance hit on a common/low-idf term is never overcorrected
+ * out. */
+export const STRONG_FLOOR = 0.1;
+/** …OR the overall (name+path+body) coverage is broad enough to be real even
+ * body-only. A single incidental body-token collision measures ~0.29 and RISES
+ * with corpus size (0.30+ at 200 nodes) but never approaches this, while a
+ * genuinely broad match clears it. This is why the gate is on absolute,
+ * scale-invariant floors, NOT a raw-lexical-score ratio (which — calibrated for
+ * raw-lexical-SCORE space — was far too lenient in coverage/matched-fraction
+ * space and leaked junk, worsening as the corpus grew). */
+export const HIGH_FLOOR = 0.5;
 
 /** Score-desc, id-asc ordering — the id tiebreak is what makes fusion
  * deterministic under input shuffle. */
@@ -137,6 +168,14 @@ export interface ScopeRankOps {
   /** Lexical scores for the scope's own docs (positive entries only),
    * computed against the scope's OWN corpus statistics. */
   lex(scope: string): Map<string, number>;
+  /** The match-STRENGTH signal for the participation gate, evaluated at one
+   * doc id within `scope` (always called on that scope's raw-lex top doc):
+   * `coverage` is the idf-weighted matched share over name+path+body;
+   * `coverageStrong` is the same over NAME only, with file-kind nodes
+   * contributing zero (see `strongShare` in `src/ask/ask.ts`, the function
+   * this must be backed by). Computed against the scope's own per-scope idf,
+   * same as `lex`. */
+  strength(scope: string, id: string): { coverage: number; coverageStrong: number };
   /** Graph walk restricted to the scope's subgraph, seeded by that scope's
    * lexical scores; returns top-normalized centrality (or an empty map). */
   walk(scope: string, seeds: Map<string, number>): Map<string, number>;
@@ -144,22 +183,23 @@ export interface ScopeRankOps {
 
 /**
  * Multi-scope orchestration for `ask`'s symbol ranking: for each scope, score
- * lexically, gate by soft federation on the RAW lexical scores, walk the
- * scope's subgraph, blend exactly like the single-scope path (`lexN +
+ * lexically, gate by match STRENGTH (not a lenient ratio), walk the scope's
+ * subgraph, blend exactly like the single-scope path (`lexN +
  * graphWeight·pr`, both per-scope-normalized; walk-rescued nodes join above
  * `rescueFloor`), then fuse the surviving scopes' blended lists with
  * {@link fuseScopes}. A scope with zero lexical matches contributes nothing
  * (no seeds → no walk → no docs).
  *
- * The gate MUST run on raw (pre-normalization) lexical scores. `fuseScopes`'s
- * own gate compares its input scores, but this function's input to
- * `fuseScopes` is already per-scope-normalized (`lexN`, each scope's own max
- * → ~1.0) — gating on THAT would make the 0.25×global-best participation gate
- * vacuous: any scope with even one scoring doc, however weak, normalizes to
- * the same ceiling as every other scope and always clears it. So the gate is
- * applied here, before normalization, and gated-out scopes never enter the
- * walk/blend/fuse pipeline at all — they go straight to `alsoMatched` with
- * their best RAW-lex doc.
+ * The gate is the SAME two-floor signal `federateAsk` (workspace federation,
+ * `src/graph/workspace.ts`) uses: a scope participates iff its top hit's
+ * `coverageStrong` ≥ {@link STRONG_FLOOR} OR its `coverage` ≥
+ * {@link HIGH_FLOOR}. It is evaluated here, on each scope's raw-lex top doc,
+ * BEFORE normalization/walk/blend — gated-out scopes never enter the
+ * walk/blend/fuse pipeline at all, they go straight to `alsoMatched` with
+ * their best raw-lex doc id. (`fuseScopes`'s own internal ratio gate still
+ * runs on the survivors' already-normalized input afterward, but since every
+ * survivor's blended top is ~1.0 by construction, that gate is now just a
+ * no-op safety net rather than the real gate — the real gate is this one.)
  */
 export function rankScopesAndFuse(
   scopes: string[],
@@ -167,18 +207,14 @@ export function rankScopesAndFuse(
   graphWeight: number,
   rescueFloor: number,
 ): FusionResult {
-  // Pass 1: lexical scoring only, per scope — cheap, and needed up front to
-  // compute the global raw best the gate compares against.
+  // Pass 1: lexical scoring only, per scope.
   const lexByScope = new Map<string, Map<string, number>>();
-  let globalRawBest = 0;
   for (const scope of scopes) {
     const lex = ops.lex(scope);
     if (lex.size === 0) continue;
     lexByScope.set(scope, lex);
-    for (const v of lex.values()) if (v > globalRawBest) globalRawBest = v;
   }
 
-  const gate = PARTICIPATION_RATIO * globalRawBest;
   const alsoMatched: FusionResult["alsoMatched"] = [];
   const scoped: ScopedDoc[] = [];
 
@@ -195,7 +231,8 @@ export function rankScopesAndFuse(
     }
     if (maxLex <= 0) continue; // no positive-scoring doc — contributes nothing
 
-    if (maxLex < gate) {
+    const { coverage, coverageStrong } = ops.strength(scope, bestId);
+    if (coverageStrong < STRONG_FLOOR && coverage < HIGH_FLOOR) {
       alsoMatched.push({ scope, bestId });
       continue; // excluded from fusion — no walk, no blend
     }

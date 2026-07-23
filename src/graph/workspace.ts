@@ -34,7 +34,7 @@ import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
 import { wiringPath } from "./write.js";
 import type { GraphV1 } from "./types.js";
 import { ask, type AskHit, type AskResult } from "../ask/ask.js";
-import { fuseScopes, type ScopedDoc } from "../ask/fuse.js";
+import { fuseScopes, STRONG_FLOOR, HIGH_FLOOR, type ScopedDoc } from "../ask/fuse.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "../search/grep.js";
 import { formatGrepResult, zeroHitNote } from "../search/grep-cli.js";
 import { savingsFooter, type Savings } from "../context/savings.js";
@@ -185,19 +185,13 @@ interface ChildRun {
   coverageStrong: number;
 }
 
-/** A child federates if a query term hit a NAME/PATH field at all (any strength
- * ≥ this) — the primary gate. Well below every genuine fixture (≥0.45) yet
- * strictly above a body-only collision's 0, so a real partial-relevance hit on
- * a common/low-idf term is never overcorrected out. */
-const STRONG_FLOOR = 0.1;
-/** …OR the overall (name+path+body) coverage is broad enough to be real even
- * body-only. A single incidental body-token collision measures ~0.29 and RISES
- * with corpus size (0.30+ at 200 nodes) but never approaches this, while a
- * genuinely broad match clears it. This is why the gate is on absolute,
- * scale-invariant floors, NOT the prior 0.25×best ratio (which — calibrated for
- * raw-lexical-SCORE space — was far too lenient in coverage/matched-fraction
- * space and leaked junk, worsening as the corpus grew). */
-const HIGH_FLOOR = 0.5;
+// STRONG_FLOOR / HIGH_FLOOR (a child federates if its top hit matched a
+// query term in a NAME/PATH field ≥ STRONG_FLOOR, OR its overall name+path+
+// body coverage is broad enough to be real even body-only, ≥ HIGH_FLOOR) are
+// defined ONCE in `../ask/fuse.js` and imported here — `rankScopesAndFuse`
+// (single-graph multi-scope, `src/ask/fuse.ts`) gates on the exact same two
+// floors, so the two paths that solve the identical "a weak scope must not
+// federate beside a strong one" problem can never drift apart again.
 
 /**
  * Federated `ask` across a workspace: run each child's own per-scope ask
