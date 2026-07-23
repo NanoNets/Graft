@@ -66,6 +66,14 @@ export interface AskResult {
    * best result, i.e. the pack is probably noise for this prompt. Absent in
    * structural mode — a resolved "who calls X" is itself the relevance signal. */
   coverage?: number;
+  /** Like {@link coverage}, but the top hit's idf-weighted matched share over
+   * its NAME + PATH fields ONLY (body excluded) — a match-STRENGTH signal:
+   * "did the query hit a high-value field, or only incidental body tokens?".
+   * A body-only collision (a variable that happens to share a query word) has
+   * `coverageStrong === 0` while `coverage` can still look respectable. Used by
+   * workspace federation to gate a weak child out of the cross-repo ranking.
+   * Absent in structural mode; same lexical-only contract as `coverage`. */
+  coverageStrong?: number;
   /** Multi-scope lexical results only: which scopes federated into the fused
    * ranking, plus scopes that matched too weakly to federate (with their best
    * doc id). Drives formatAsk's `matched in:` / `also matched:` footer.
@@ -437,6 +445,9 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     : conceptBags.length + symbolDocs.length;
   const dfltIdf = Math.log(1 + nDocs);
   const matchedOf = new Map<AskHit, number>();
+  // Parallel to matchedOf, but over NAME+PATH only (body dropped) — the
+  // match-strength signal exported as `coverageStrong`.
+  const matchedStrongOf = new Map<AskHit, number>();
 
   // ── Concepts (prose nodes; not in the wiring graph) ──
   const conceptHits: AskHit[] = [];
@@ -454,6 +465,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
         score: total,
       };
       matchedOf.set(hit, matchedIdfShare(q, [name, body], idf, dfltIdf));
+      matchedStrongOf.set(hit, matchedIdfShare(q, [name], idf, dfltIdf)); // concepts have no path field
       conceptHits.push(hit);
     }
   }
@@ -538,6 +550,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       const d = docsById.get(rd.id);
       const si = idfOf.get(rd.scope);
       matchedOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt) : 0);
+      matchedStrongOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path], si.idf, si.dflt) : 0);
       symbolHits.push(hit);
     }
     // Label + footer only when federation actually happened (or a scope was
@@ -601,6 +614,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     };
     const d = docsById.get(id);
     matchedOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path, d.body], idf, dfltIdf) : 0);
+    matchedStrongOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path], idf, dfltIdf) : 0);
     symbolHits.push(hit);
   }
   }
@@ -618,6 +632,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     hits: scored.slice(0, limit),
     scopes: scopeMeta,
     coverage: scored.length && q.size > 0 ? matchedOf.get(scored[0]) ?? 0 : undefined,
+    coverageStrong: scored.length && q.size > 0 ? matchedStrongOf.get(scored[0]) ?? 0 : undefined,
     // Zero hits on a genuinely multi-scope graph names the scopes that exist,
     // so a query that missed everywhere still tells the caller where to look.
     note: scored.length

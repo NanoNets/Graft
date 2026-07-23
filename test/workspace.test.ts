@@ -46,6 +46,14 @@ const REPOS = {
   repoB: { "b.ts": "export function betaHandler() { return 2; }\n" },
 };
 
+/** N unrelated functions, to pad a child's corpus to a realistic size so
+ * coverage/idf reflect scale (junk coverage rises with corpus size). */
+function pad(n: number): string {
+  let s = "";
+  for (let i = 0; i < n; i++) s += `export function pad${i}Widget() { const v${i} = ${i}; return v${i}; }\n`;
+  return s;
+}
+
 test("isWorkspaceBuildRoot: ≥2 git children, no own .git → workspace", () => {
   const p = workspaceFx(REPOS);
   assert.equal(isWorkspaceBuildRoot(p), true);
@@ -228,6 +236,52 @@ test("federated ask: --in <child> narrows to that child; --in <unknown> errors l
     () => federateAsk(p, undefined, "handler", { in: "nope" }),
     /no workspace repo "nope".*repoA.*repoB/s,
   );
+  rmSync(p, { recursive: true, force: true });
+});
+
+for (const padN of [0, 200]) {
+  test(`strength gate: body-only junk (\`position\`) gated out at ${padN ? "~200" : "~30"}-node scale`, async () => {
+    const strongPad = padN ? { "pad.ts": pad(padN) } : {};
+    const p = workspaceFx({
+      repoStrong: { "m.ts": "export function scrollbarOverlay() { return computeThumb(); }\nfunction computeThumb() { return 1; }\n", ...strongPad },
+      repoJunk: { "m.ts": "export function drawFrame() { const position = 0; return position; }\nfunction helper() { return 1; }\n", ...strongPad },
+    });
+    await buildWorkspace(p);
+    const r = federateAsk(p, undefined, "scrollbar overlay position", { limit: 8 });
+    const titles = r.hits.map((h) => h.title);
+    assert.ok(titles.some((t) => t.startsWith("scrollbarOverlay")), "name-match child federates");
+    assert.ok(!titles.some((t) => t.startsWith("drawFrame")), `body-only junk must NOT federate:\n${titles.join("\n")}`);
+    assert.ok(r.hits.every((h) => h.scope!.startsWith("repoStrong")), "only the strong child federates");
+    assert.deepEqual(r.scopes?.alsoMatched.map((m) => m.scope), ["repoJunk"], "junk reported in alsoMatched");
+    rmSync(p, { recursive: true, force: true });
+  });
+}
+
+test("strength gate: 3-child payment/gateway/refund — strong + mid federate, incidental-var junk gated out", async () => {
+  const p = workspaceFx({
+    repoStrong: { "m.ts": "export function paymentGatewayRefund() { return 1; }\n", "pad.ts": pad(25) },
+    repoMid: { "m.ts": "export function refundPayment() { return 1; }\n", "pad.ts": pad(25) }, // partial name match
+    repoJunk: { "m.ts": "export function renderList() { const gateway = 0; return gateway; }\n", "pad.ts": pad(25) },
+  });
+  await buildWorkspace(p);
+  const r = federateAsk(p, undefined, "payment gateway refund", { limit: 8 });
+  const scopes = new Set(r.hits.map((h) => h.scope!.split("/")[0]));
+  assert.ok(scopes.has("repoStrong") && scopes.has("repoMid"), "genuine name matches federate");
+  assert.ok(!scopes.has("repoJunk"), "incidental-var junk excluded from the ranking");
+  assert.ok(r.scopes?.alsoMatched.some((m) => m.scope === "repoJunk"), "junk reported in alsoMatched");
+  rmSync(p, { recursive: true, force: true });
+});
+
+test("strength gate: a legit COMMON-term (low-idf) name match is NOT overcorrected out", async () => {
+  let cfg = "export function loadConfig() { return 1; }\n";
+  for (let i = 0; i < 15; i++) cfg += `export function config${i}Reader() { return ${i}; }\n`; // "config" common → low idf
+  const p = workspaceFx({
+    repoConfig: { "m.ts": cfg, "pad.ts": pad(25) },
+    repoOther: { "m.ts": "export function unrelatedThing() { return 0; }\n", "pad.ts": pad(25) },
+  });
+  await buildWorkspace(p);
+  const r = federateAsk(p, undefined, "config loader", { limit: 8 });
+  assert.ok(r.hits.some((h) => h.scope!.startsWith("repoConfig")), "real partial-relevance (low-idf name hit) must still federate");
   rmSync(p, { recursive: true, force: true });
 });
 

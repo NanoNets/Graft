@@ -34,7 +34,7 @@ import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
 import { wiringPath } from "./write.js";
 import type { GraphV1 } from "./types.js";
 import { ask, type AskHit, type AskResult } from "../ask/ask.js";
-import { fuseScopes, PARTICIPATION_RATIO, type ScopedDoc } from "../ask/fuse.js";
+import { fuseScopes, type ScopedDoc } from "../ask/fuse.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "../search/grep.js";
 import { formatGrepResult, zeroHitNote } from "../search/grep-cli.js";
 import { savingsFooter, type Savings } from "../context/savings.js";
@@ -177,10 +177,27 @@ export interface FederateAskOptions {
 interface ChildRun {
   child: string;
   hits: AskHit[];
-  /** The child's top-hit idf-weighted matched share — a RAW, cross-child-
-   * comparable magnitude (NOT per-child normalized), used for the gate. */
+  /** The child's top-hit idf-weighted matched share over name+path+body — a
+   * RAW, cross-child-comparable magnitude (NOT per-child normalized). */
   coverage: number;
+  /** Same, but over name+path ONLY (body dropped) — the match-STRENGTH signal.
+   * A body-only incidental collision has `coverageStrong === 0`. */
+  coverageStrong: number;
 }
+
+/** A child federates if a query term hit a NAME/PATH field at all (any strength
+ * ≥ this) — the primary gate. Well below every genuine fixture (≥0.45) yet
+ * strictly above a body-only collision's 0, so a real partial-relevance hit on
+ * a common/low-idf term is never overcorrected out. */
+const STRONG_FLOOR = 0.1;
+/** …OR the overall (name+path+body) coverage is broad enough to be real even
+ * body-only. A single incidental body-token collision measures ~0.29 and RISES
+ * with corpus size (0.30+ at 200 nodes) but never approaches this, while a
+ * genuinely broad match clears it. This is why the gate is on absolute,
+ * scale-invariant floors, NOT the prior 0.25×best ratio (which — calibrated for
+ * raw-lexical-SCORE space — was far too lenient in coverage/matched-fraction
+ * space and leaked junk, worsening as the corpus grew). */
+const HIGH_FLOOR = 0.5;
 
 /**
  * Federated `ask` across a workspace: run each child's own per-scope ask
@@ -236,21 +253,22 @@ export function federateAsk(
       continue; // corrupt child, or a sub-scope --in matching nothing here
     }
     if (r.hits.length === 0) continue;
-    runs.push({ child, hits: r.hits, coverage: r.coverage ?? 0 });
+    runs.push({ child, hits: r.hits, coverage: r.coverage ?? 0, coverageStrong: r.coverageStrong ?? 0 });
   }
 
-  // Cross-child participation gate on RAW coverage: per-child scores are each
-  // normalized (top ~1.0 everywhere), which makes fuseScopes's own gate vacuous
-  // across repos. coverage (the top hit's idf-weighted matched share) is NOT
-  // per-child normalized and IS comparable across corpora, so a child below
-  // 0.25x the best is reported in alsoMatched, not fused — this keeps a junk
-  // body-token collision in one repo out of another repo's genuine ranking.
-  const bestCoverage = runs.reduce((m, r) => Math.max(m, r.coverage), 0);
-  const gate = PARTICIPATION_RATIO * bestCoverage;
+  // Cross-child participation gate on match STRENGTH, not a lenient ratio.
+  // Per-child hit scores are each per-child-normalized (top ~1.0 everywhere),
+  // so feeding them to fuseScopes makes its gate vacuous across repos — a junk
+  // body-token collision would federate beside another repo's genuine hits.
+  // Gate: a child federates iff its top hit matched a query term in a NAME/PATH
+  // field (coverageStrong ≥ STRONG_FLOOR — not just an incidental body token)
+  // OR its overall coverage is broad enough to be real (≥ HIGH_FLOOR). A
+  // body-only collision has coverageStrong 0 and coverage ~0.3 → gated to
+  // alsoMatched. Both floors are absolute + scale-invariant (see their docs).
   const gatedOut: { scope: string; bestId: string }[] = [];
   const survivors: ChildRun[] = [];
   for (const run of runs) {
-    if (run.coverage >= gate) survivors.push(run);
+    if (run.coverageStrong >= STRONG_FLOOR || run.coverage >= HIGH_FLOOR) survivors.push(run);
     else gatedOut.push({ scope: run.child, bestId: prefixPointer(run.child, run.hits[0].pointer) });
   }
 
