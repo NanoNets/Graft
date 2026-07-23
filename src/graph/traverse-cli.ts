@@ -1,60 +1,74 @@
 /**
- * CLI wiring for `graft callers` / `callees` / `impact`.
+ * CLI wiring for `graft callers` and its `--direction` / `--depth` flags.
  *
- * The three commands are one implementation with a direction flag: they all
- * resolve a symbol via `resolveSymbol`, walk edges via `callersOf` /
- * `calleesOf` / `impactOf`, and share the same resolve-or-die flow, human
- * formatter, and --json shape. Kept out of cli.ts so that file stays thin
- * (argument wiring only) and this logic stays unit-testable without shelling
- * out to the CLI on every case.
+ * One command, one implementation: resolve a symbol via `resolveSymbol`, walk
+ * edges via `edgeWalk` (incoming or outgoing, depth 1 or a BFS), and share the
+ * same resolve-or-die flow, human formatter, and --json shape. Kept out of
+ * cli.ts so that file stays thin (argument wiring only) and this logic stays
+ * unit-testable without shelling out to the CLI on every case.
+ *
+ * `--direction out` subsumes the old `graft callees`; `--depth N` subsumes the
+ * old `graft impact`. Exported formatters are reused by the MCP `graft_callers`
+ * tool (`src/mcp/tools.ts`), so both surfaces render identical reports.
  */
 import { resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
+import { savingsFooter, savingsFor, type Savings } from "../context/savings.js";
 import { loadGraphCached } from "./load.js";
-import { resolveSymbol, callersOf, calleesOf, impactOf, type EdgeHit } from "./traverse.js";
+import { resolveSymbol, edgeWalk, type Direction, type EdgeHit } from "./traverse.js";
 import type { GraphV1, NodeV1 } from "./types.js";
 
-export type TraverseKind = "callers" | "callees" | "impact";
-
-export interface TraverseCliOptions {
+export interface CallersCliOptions {
   in?: string;
   json?: boolean;
-  /** impact only: max BFS depth, as the raw --depth string (validated here). */
+  /** walk direction; defaults to "in" (callers). "out" gives callees. */
+  direction?: string;
+  /** max BFS depth, as the raw --depth string (validated here); defaults to 1. */
   depth?: string;
   /** the top-level `--dir` override, so this command respects it like every other. */
   globalDir?: string;
 }
 
-const ARROW: Record<TraverseKind, "←" | "→"> = { callers: "←", impact: "←", callees: "→" };
-const DEFAULT_IMPACT_DEPTH = 2;
+const ARROW: Record<Direction, "←" | "→"> = { in: "←", out: "→" };
+const DEFAULT_DEPTH = 1;
 
-function edgesFor(kind: TraverseKind, graph: GraphV1, node: NodeV1, depth: number): EdgeHit[] {
-  if (kind === "callers") return callersOf(graph, node);
-  if (kind === "callees") return calleesOf(graph, node);
-  return impactOf(graph, node, depth);
-}
-
-/** Exported so the MCP tools (`graft_callers`/`graft_callees`/`graft_blast_radius`
- * in `src/mcp/tools.ts`) can render the same human report format as the CLI,
- * rather than re-implementing it — both surfaces walk the same edges via the
- * same `resolveSymbol`/`callersOf`/`calleesOf`/`impactOf` core. */
+/** Exported so the MCP `graft_callers` tool (`src/mcp/tools.ts`) can render the
+ * same human report format as the CLI, rather than re-implementing it — both
+ * surfaces walk the same edges via the same `resolveSymbol` / `edgeWalk` core. */
 export function headerOf(n: NodeV1): string {
   return `${n.name} · ${n.kind} · ${n.path}:${n.span}`;
 }
 
-export function hitLine(kind: TraverseKind, hit: EdgeHit): string {
-  const arrow = ARROW[kind];
-  const depthTag = kind === "impact" ? ` [depth ${hit.depth}]` : "";
+/** `showDepth` is set for multi-hop walks (depth > 1), matching the old
+ * `graft impact` output which tagged every hit with its BFS depth. */
+export function hitLine(direction: Direction, hit: EdgeHit, showDepth: boolean): string {
+  const arrow = ARROW[direction];
+  const depthTag = showDepth ? ` [depth ${hit.depth}]` : "";
   const label = hit.node ? `${hit.node.name} (${hit.node.path}:${hit.node.span})` : `${hit.id} (unresolved import)`;
   return `  ${hit.relation} ${arrow} ${label}${depthTag}`;
 }
 
-/** Loud, actionable empty-result note — never a bare empty list. `callers` and
- * `impact` both walk incoming edges, so they share the "callers" wording. */
-export function looseNoteFor(kind: TraverseKind, name: string): string {
-  const label = kind === "callees" ? "callees" : "callers";
-  const direction = kind === "callees" ? "outgoing" : "incoming";
-  return `  no indexed ${label} — the graph has no ${direction} call/reference edges for this symbol; try grep -rn "${name}"`;
+/** Tokens-saved baseline for a callers/callees walk: the files of the matched
+ * symbols plus every resolved edge endpoint, read whole — the files you'd open
+ * to trace these edges by hand. Shared by the CLI and the MCP tool so both
+ * surfaces report the same number. */
+export function callersSavings(
+  graph: GraphV1,
+  results: { symbol: NodeV1; hits: EdgeHit[] }[],
+): Savings | undefined {
+  const paths: string[] = [];
+  for (const { symbol, hits } of results) {
+    paths.push(symbol.path);
+    for (const h of hits) if (h.node) paths.push(h.node.path);
+  }
+  return savingsFor(graph, paths);
+}
+
+/** Loud, actionable empty-result note — never a bare empty list. */
+export function looseNoteFor(direction: Direction, name: string): string {
+  const label = direction === "out" ? "callees" : "callers";
+  const dir = direction === "out" ? "outgoing" : "incoming";
+  return `  no indexed ${label} — the graph has no ${dir} call/reference edges for this symbol; try grep -rn "${name}"`;
 }
 
 interface SymbolJson {
@@ -96,13 +110,21 @@ function hitJson(hit: EdgeHit): HitJson {
   return out;
 }
 
+/** Parse and validate the raw `--direction` string; exits (code 1) on garbage. */
+function resolveDirection(raw: string | undefined): Direction {
+  if (raw === undefined) return "in";
+  if (raw === "in" || raw === "out") return raw;
+  console.error(`✗ --direction must be "in" or "out", got "${raw}"`);
+  process.exit(1);
+}
+
 /**
- * Resolve `query` in the graph at `dir` (respecting `--dir`/`--in`), walk
- * edges per `kind`, and print either the human report or `--json`. Exits the
- * process (code 1) when there's no graph at all or the symbol is unknown —
- * both are caller-facing mistakes, not recoverable states.
+ * Resolve `query` in the graph at `dir` (respecting `--dir`/`--in`), walk edges
+ * per `--direction`/`--depth`, and print either the human report or `--json`.
+ * Exits the process (code 1) when there's no graph at all or the symbol is
+ * unknown — both are caller-facing mistakes, not recoverable states.
  */
-export function runTraverseCommand(kind: TraverseKind, query: string, dir: string, opts: TraverseCliOptions): void {
+export function runCallersCommand(query: string, dir: string, opts: CallersCliOptions): void {
   const root = resolve(dir);
   const contextDir = contextDirFor(root, opts.globalDir);
   const graph = loadGraphCached(contextDir);
@@ -117,17 +139,20 @@ export function runTraverseCommand(kind: TraverseKind, query: string, dir: strin
     process.exit(1);
   }
 
-  let depth = DEFAULT_IMPACT_DEPTH;
-  if (kind === "impact" && opts.depth !== undefined) {
+  const direction = resolveDirection(opts.direction);
+  let depth = DEFAULT_DEPTH;
+  if (opts.depth !== undefined) {
     const d = Number(opts.depth);
     if (!Number.isFinite(d) || d < 1) {
       console.error(`✗ --depth must be a positive number, got "${opts.depth}"`);
       process.exit(1);
     }
-    depth = d;
+    depth = Math.floor(d);
   }
+  const showDepth = depth > 1;
 
-  const results = matches.map((symbol) => ({ symbol, hits: edgesFor(kind, graph, symbol, depth) }));
+  const results = matches.map((symbol) => ({ symbol, hits: edgeWalk(graph, symbol, direction, depth) }));
+  const saved = callersSavings(graph, results);
 
   if (opts.json) {
     const payload = {
@@ -135,10 +160,11 @@ export function runTraverseCommand(kind: TraverseKind, query: string, dir: strin
       matches: results.map((r): MatchJson => {
         const m: MatchJson = { symbol: symbolJson(r.symbol), hits: r.hits.map(hitJson) };
         if (r.hits.length === 0) {
-          m.note = looseNoteFor(kind, r.symbol.name);
+          m.note = looseNoteFor(direction, r.symbol.name);
         }
         return m;
       }),
+      saved,
     };
     console.log(JSON.stringify(payload, null, 2));
     return;
@@ -147,9 +173,10 @@ export function runTraverseCommand(kind: TraverseKind, query: string, dir: strin
   const lines: string[] = [];
   for (const { symbol, hits } of results) {
     lines.push(headerOf(symbol));
-    if (hits.length === 0) lines.push(looseNoteFor(kind, symbol.name));
-    else for (const h of hits) lines.push(hitLine(kind, h));
+    if (hits.length === 0) lines.push(looseNoteFor(direction, symbol.name));
+    else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     lines.push("");
   }
-  process.stdout.write(lines.join("\n").replace(/\n+$/, "\n"));
+  const body = lines.join("\n").replace(/\n+$/, "\n");
+  process.stdout.write(body + savingsFooter(body, saved));
 }

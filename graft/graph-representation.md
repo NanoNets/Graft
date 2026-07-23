@@ -41,9 +41,12 @@ covers:
   - symbol: EdgeV1
     kind: interface
     at: 'src/graph/types.ts:L73-L78'
+  - symbol: ScopeV1
+    kind: interface
+    at: 'src/graph/types.ts:L84-L88'
   - symbol: GraphV1
     kind: interface
-    at: 'src/graph/types.ts:L80-L89'
+    at: 'src/graph/types.ts:L90-L102'
 ---
 <!-- context:generated:start -->
 ## Summary

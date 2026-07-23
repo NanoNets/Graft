@@ -118,15 +118,15 @@ test("loadAskIndexCached: caches and invalidates the same way as the graph loade
   assert.equal(__parseCount.askIndex, 2);
 });
 
-test("callTool: graft_blast_radius on the same dir twice doesn't reparse the graph", () => {
+test("callTool: graft_callers on the same dir twice doesn't reparse the graph", () => {
   const dir = fixtureDir();
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "math.ts"), "export function add() { return 1; }\n");
   const graph: GraphV1 = {
     version: 1,
     // A real `buildGraph` always emits a `kind: "file"` node per source file;
-    // include one here too so `graft_blast_radius` (now a `resolveSymbol` +
-    // `impactOf` walk, same as `graft impact`) can resolve the filename-shaped
+    // include one here too so `graft_callers` with depth (a `resolveSymbol` +
+    // `edgeWalk` walk, the old `graft impact`) can resolve the filename-shaped
     // query the way it would against a real build.
     nodes: [
       { ...node("src/math.ts#add"), path: "src/math.ts" },
@@ -134,7 +134,7 @@ test("callTool: graft_blast_radius on the same dir twice doesn't reparse the gra
     ],
     edges: [],
   } as GraphV1;
-  // graft_blast_radius reads through `contextDirFor(root)`, i.e. `<root>/graft`
+  // graft_callers reads through `contextDirFor(root)`, i.e. `<root>/graft`
   // by default — write the graph there directly rather than round-tripping
   // through a real `graft build`.
   const outDir = join(dir, "graft");
@@ -142,11 +142,11 @@ test("callTool: graft_blast_radius on the same dir twice doesn't reparse the gra
   writeGraph(graph, outDir);
   __resetParseCounts();
 
-  const r1 = callTool(dir, "graft_blast_radius", { file: "src/math.ts" });
+  const r1 = callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r1.isError, false);
   assert.equal(__parseCount.graph, 1);
 
-  const r2 = callTool(dir, "graft_blast_radius", { file: "src/math.ts" });
+  const r2 = callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r2.isError, false);
   assert.equal(__parseCount.graph, 1, "second call on the same dir must not reparse");
 });

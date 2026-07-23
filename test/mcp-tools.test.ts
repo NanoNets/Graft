@@ -72,14 +72,12 @@ function multiDirRepo(): string {
   return d;
 }
 
-test('TOOLS lists all eight tools with schemas', () => {
+test('TOOLS lists the six tools with schemas', () => {
   assert.deepEqual(TOOLS.map((t) => t.name), [
     'graft_ask',
     'graft_skeleton',
     'graft_check',
-    'graft_blast_radius',
     'graft_callers',
-    'graft_callees',
     'graft_grep',
     'graft_map',
   ]);
@@ -87,11 +85,12 @@ test('TOOLS lists all eight tools with schemas', () => {
     assert.ok(t.description.length > 0);
     assert.equal((t.inputSchema as { type: string }).type, 'object');
   }
-  // graft_blast_radius accepts `symbol` as an alternative to `file` (callTool
-  // does `args.symbol ?? args.file`) — the schema must document it too.
-  const blastRadius = TOOLS.find((t) => t.name === 'graft_blast_radius')!;
-  const props = (blastRadius.inputSchema as { properties: Record<string, unknown> }).properties;
-  assert.ok('symbol' in props, 'graft_blast_radius schema should document `symbol`');
+  // graft_callers absorbed callees (direction) and blast radius (depth) — the
+  // schema must document both flags.
+  const callers = TOOLS.find((t) => t.name === 'graft_callers')!;
+  const props = (callers.inputSchema as { properties: Record<string, unknown> }).properties;
+  assert.ok('direction' in props, 'graft_callers schema should document `direction`');
+  assert.ok('depth' in props, 'graft_callers schema should document `depth`');
 });
 
 test('graft_ask returns ranked hits for a built repo', () => {
@@ -121,16 +120,16 @@ test('graft_check reports the wiring state', () => {
   assert.match(r.text, /graph check: OK/);
 });
 
-test('graft_blast_radius names dependents of a file', () => {
+test('graft_callers with depth names dependents of a file (blast radius)', () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_blast_radius', { file: 'src/math.ts' });
+  const r = callTool(d, 'graft_callers', { symbol: 'src/math.ts', depth: 2 });
   assert.equal(r.isError, false);
   assert.ok(r.text.length > 0);
 });
 
 test('unbuilt repo and unknown tool are soft errors', () => {
   const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-bare-'));
-  const r1 = callTool(bare, 'graft_blast_radius', { file: 'x.ts' });
+  const r1 = callTool(bare, 'graft_callers', { symbol: 'x.ts', depth: 2 });
   assert.equal(r1.isError, true);
   assert.match(r1.text, /graft build/);
   const r2 = callTool(bare, 'nope', {});
@@ -156,39 +155,39 @@ test('graft_callers: qualified/--in narrowing still resolves through the shared 
   assert.match(miss.text, /no symbol "add" in the graph/);
 });
 
-test('graft_callees round-trips a callee, and reports a loud note when there are none', () => {
+test('graft_callers direction:out round-trips a callee, and reports a loud note when there are none', () => {
   const d = builtRepo();
-  const callee = callTool(d, 'graft_callees', { symbol: 'sub' });
+  const callee = callTool(d, 'graft_callers', { symbol: 'sub', direction: 'out' });
   assert.equal(callee.isError, false);
   assert.match(callee.text, /calls → add \(src\/math\.ts:/);
 
   // `add` calls nothing, so its callees are empty — must be a loud note, not silence.
-  const empty = callTool(d, 'graft_callees', { symbol: 'add' });
+  const empty = callTool(d, 'graft_callers', { symbol: 'add', direction: 'out' });
   assert.equal(empty.isError, false);
   assert.match(empty.text, /no indexed callees/);
   assert.match(empty.text, /grep -rn "add"/);
 });
 
-test('graft_callers/graft_callees: unknown symbol is a soft isError', () => {
+test('graft_callers: unknown symbol / missing symbol are soft isErrors', () => {
   const d = builtRepo();
   const r1 = callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere' });
   assert.equal(r1.isError, true);
   assert.match(r1.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r1.text, /check spelling|graft build/);
 
-  const r2 = callTool(d, 'graft_callees', {});
+  const r2 = callTool(d, 'graft_callers', {});
   assert.equal(r2.isError, true);
   assert.match(r2.text, /requires a symbol/);
 });
 
-test('graft_blast_radius: depth param is honored (default 2 reaches further than depth 1)', () => {
+test('graft_callers: depth param is honored (depth 2 reaches further than depth 1)', () => {
   const d = chainRepo();
-  const shallow = callTool(d, 'graft_blast_radius', { file: 'add', depth: 1 });
+  const shallow = callTool(d, 'graft_callers', { symbol: 'add', depth: 1 });
   assert.equal(shallow.isError, false);
   assert.match(shallow.text, /← sub \(/);
   assert.doesNotMatch(shallow.text, /compute/);
 
-  const deeper = callTool(d, 'graft_blast_radius', { file: 'add' });
+  const deeper = callTool(d, 'graft_callers', { symbol: 'add', depth: 2 });
   assert.equal(deeper.isError, false);
   assert.match(deeper.text, /← sub \(/);
   assert.match(deeper.text, /\[depth 1\]/);
@@ -196,20 +195,20 @@ test('graft_blast_radius: depth param is honored (default 2 reaches further than
   assert.match(deeper.text, /\[depth 2\]/);
 });
 
-test('graft_blast_radius: file-scope match aggregates dependents that call into a symbol the file defines, not just file-level imports', () => {
+test('graft_callers depth>1 on a file aggregates dependents that call into a symbol the file defines, not just file-level imports', () => {
   const d = fileScopeRepo();
-  const r = callTool(d, 'graft_blast_radius', { file: 'src/a.ts' });
+  const r = callTool(d, 'graft_callers', { symbol: 'src/a.ts', depth: 2 });
   assert.equal(r.isError, false);
-  // Old behavior (walking only the FILE node's incoming edges) found b.ts via
-  // `imports` but silently dropped it via `calls`, since a `calls` edge
-  // targets the SYMBOL id (`src/a.ts#helper`), never the FILE id.
+  // Walking only the FILE node's incoming edges would find b.ts via `imports`
+  // but drop it via `calls`, since a `calls` edge targets the SYMBOL id
+  // (`src/a.ts#helper`), never the FILE id. edgeWalk aggregates over both.
   assert.match(r.text, /imports ← b\.ts \(src\/b\.ts/);
   assert.match(r.text, /calls ← useB \(src\/b\.ts/);
 });
 
-test('graft_blast_radius: unknown symbol is a soft isError with the check-spelling message', () => {
+test('graft_callers: unknown symbol is a soft isError with the check-spelling message', () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_blast_radius', { file: 'noSuchSymbolAnywhere' });
+  const r = callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere', depth: 2 });
   assert.equal(r.isError, true);
   assert.match(r.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r.text, /check spelling/);

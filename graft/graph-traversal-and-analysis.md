@@ -22,138 +22,144 @@ links:
 generator:
   version: 1
 covers:
-  - symbol: TraverseKind
-    kind: type
-    at: 'src/graph/traverse-cli.ts:L17-L17'
-  - symbol: TraverseCliOptions
+  - symbol: CallersCliOptions
     kind: interface
-    at: 'src/graph/traverse-cli.ts:L19-L26'
-  - symbol: edgesFor
-    kind: function
-    at: 'src/graph/traverse-cli.ts:L31-L35'
+    at: 'src/graph/traverse-cli.ts:L21-L30'
   - symbol: headerOf
     kind: function
-    at: 'src/graph/traverse-cli.ts:L41-L43'
+    at: 'src/graph/traverse-cli.ts:L38-L40'
   - symbol: hitLine
     kind: function
-    at: 'src/graph/traverse-cli.ts:L45-L50'
+    at: 'src/graph/traverse-cli.ts:L44-L49'
+  - symbol: callersSavings
+    kind: function
+    at: 'src/graph/traverse-cli.ts:L55-L65'
   - symbol: looseNoteFor
     kind: function
-    at: 'src/graph/traverse-cli.ts:L54-L58'
+    at: 'src/graph/traverse-cli.ts:L68-L72'
   - symbol: SymbolJson
     kind: interface
-    at: 'src/graph/traverse-cli.ts:L60-L66'
+    at: 'src/graph/traverse-cli.ts:L74-L80'
   - symbol: MatchJson
     kind: interface
-    at: 'src/graph/traverse-cli.ts:L68-L72'
+    at: 'src/graph/traverse-cli.ts:L82-L86'
   - symbol: HitJson
     kind: interface
-    at: 'src/graph/traverse-cli.ts:L74-L82'
+    at: 'src/graph/traverse-cli.ts:L88-L96'
   - symbol: symbolJson
     kind: function
-    at: 'src/graph/traverse-cli.ts:L84-L86'
+    at: 'src/graph/traverse-cli.ts:L98-L100'
   - symbol: hitJson
     kind: function
-    at: 'src/graph/traverse-cli.ts:L88-L97'
-  - symbol: runTraverseCommand
+    at: 'src/graph/traverse-cli.ts:L102-L111'
+  - symbol: resolveDirection
     kind: function
-    at: 'src/graph/traverse-cli.ts:L105-L155'
+    at: 'src/graph/traverse-cli.ts:L114-L119'
+  - symbol: runCallersCommand
+    kind: function
+    at: 'src/graph/traverse-cli.ts:L127-L182'
+  - symbol: Direction
+    kind: type
+    at: 'src/graph/traverse.ts:L21-L21'
   - symbol: SymbolMatch
     kind: interface
-    at: 'src/graph/traverse.ts:L19-L21'
+    at: 'src/graph/traverse.ts:L25-L27'
   - symbol: ResolveSymbolOptions
     kind: interface
-    at: 'src/graph/traverse.ts:L23-L26'
+    at: 'src/graph/traverse.ts:L29-L32'
   - symbol: resolveSymbol
     kind: function
-    at: 'src/graph/traverse.ts:L47-L72'
+    at: 'src/graph/traverse.ts:L53-L78'
   - symbol: symbolMatches
     kind: function
-    at: 'src/graph/traverse.ts:L74-L83'
+    at: 'src/graph/traverse.ts:L80-L89'
   - symbol: EdgeHit
     kind: interface
-    at: 'src/graph/traverse.ts:L88-L93'
+    at: 'src/graph/traverse.ts:L94-L99'
   - symbol: callersOf
     kind: function
-    at: 'src/graph/traverse.ts:L96-L104'
+    at: 'src/graph/traverse.ts:L102-L110'
   - symbol: calleesOf
     kind: function
-    at: 'src/graph/traverse.ts:L107-L115'
+    at: 'src/graph/traverse.ts:L113-L121'
   - symbol: impactOf
     kind: function
-    at: 'src/graph/traverse.ts:L123-L125'
+    at: 'src/graph/traverse.ts:L129-L131'
   - symbol: impactOfMany
     kind: function
-    at: 'src/graph/traverse.ts:L141-L172'
+    at: 'src/graph/traverse.ts:L149-L184'
   - symbol: symbolsInFile
     kind: function
-    at: 'src/graph/traverse.ts:L176-L178'
+    at: 'src/graph/traverse.ts:L188-L190'
   - symbol: impactOfFile
     kind: function
-    at: 'src/graph/traverse.ts:L189-L191'
+    at: 'src/graph/traverse.ts:L201-L203'
+  - symbol: edgeWalk
+    kind: function
+    at: 'src/graph/traverse.ts:L218-L222'
   - symbol: GrepCliOptions
     kind: interface
-    at: 'src/search/grep-cli.ts:L15-L22'
+    at: 'src/search/grep-cli.ts:L16-L23'
   - symbol: groupHeader
     kind: function
-    at: 'src/search/grep-cli.ts:L24-L27'
+    at: 'src/search/grep-cli.ts:L25-L28'
   - symbol: formatGroup
     kind: function
-    at: 'src/search/grep-cli.ts:L29-L33'
+    at: 'src/search/grep-cli.ts:L30-L34'
   - symbol: formatGrepHeader
     kind: function
-    at: 'src/search/grep-cli.ts:L36-L39'
+    at: 'src/search/grep-cli.ts:L37-L40'
   - symbol: truncationNote
     kind: function
-    at: 'src/search/grep-cli.ts:L42-L49'
+    at: 'src/search/grep-cli.ts:L43-L50'
   - symbol: formatGrepResult
     kind: function
-    at: 'src/search/grep-cli.ts:L53-L59'
+    at: 'src/search/grep-cli.ts:L54-L62'
   - symbol: zeroHitNote
     kind: function
-    at: 'src/search/grep-cli.ts:L69-L74'
+    at: 'src/search/grep-cli.ts:L72-L77'
   - symbol: runGrepCommand
     kind: function
-    at: 'src/search/grep-cli.ts:L83-L112'
+    at: 'src/search/grep-cli.ts:L86-L115'
   - symbol: GrepHit
     kind: interface
-    at: 'src/search/grep.ts:L17-L21'
+    at: 'src/search/grep.ts:L18-L22'
   - symbol: GrepSymbolRef
     kind: interface
-    at: 'src/search/grep.ts:L23-L31'
+    at: 'src/search/grep.ts:L24-L32'
   - symbol: GrepGroup
     kind: interface
-    at: 'src/search/grep.ts:L33-L42'
+    at: 'src/search/grep.ts:L34-L43'
   - symbol: GrepResult
     kind: interface
-    at: 'src/search/grep.ts:L44-L58'
+    at: 'src/search/grep.ts:L45-L62'
   - symbol: GrepOptions
     kind: interface
-    at: 'src/search/grep.ts:L60-L69'
+    at: 'src/search/grep.ts:L64-L73'
   - symbol: escapeRegExp
     kind: function
-    at: 'src/search/grep.ts:L75-L77'
+    at: 'src/search/grep.ts:L79-L81'
   - symbol: spanBounds
     kind: function
-    at: 'src/search/grep.ts:L79-L83'
+    at: 'src/search/grep.ts:L83-L87'
   - symbol: SymbolSpan
     kind: interface
-    at: 'src/search/grep.ts:L85-L89'
+    at: 'src/search/grep.ts:L89-L93'
   - symbol: symbolsOf
     kind: function
-    at: 'src/search/grep.ts:L93-L102'
+    at: 'src/search/grep.ts:L97-L106'
   - symbol: enclosingSymbol
     kind: function
-    at: 'src/search/grep.ts:L108-L115'
+    at: 'src/search/grep.ts:L112-L119'
   - symbol: computeInDegree
     kind: function
-    at: 'src/search/grep.ts:L119-L126'
+    at: 'src/search/grep.ts:L123-L130'
   - symbol: toSymbolRef
     kind: function
-    at: 'src/search/grep.ts:L128-L131'
+    at: 'src/search/grep.ts:L132-L135'
   - symbol: grepGraph
     kind: function
-    at: 'src/search/grep.ts:L133-L195'
+    at: 'src/search/grep.ts:L137-L200'
 ---
 <!-- context:generated:start -->
 ## Summary

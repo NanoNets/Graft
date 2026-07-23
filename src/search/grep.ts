@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GraphV1, NodeV1 } from "../graph/types.js";
 import { WALK_RELATIONS } from "../graph/relations.js";
+import { savingsFor, type Savings } from "../context/savings.js";
 
 export interface GrepHit {
   line: number;
@@ -55,6 +56,9 @@ export interface GrepResult {
    * couldn't be read from disk. `hits`: matches found beyond `maxHits`,
    * counted but not collected. */
   truncated: { files: number; hits: number };
+  /** Tokens-saved baseline: the files that had hits, read whole. Undefined
+   * when there were no hits or the graph predates file sizing. */
+  saved?: Savings;
 }
 
 export interface GrepOptions {
@@ -191,5 +195,6 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
     totalHits: collected,
     groups: sortedGroups,
     truncated: { files: truncatedFiles, hits: truncatedHits },
+    saved: savingsFor(graph, sortedGroups.map((g) => g.path)),
   };
 }

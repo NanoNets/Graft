@@ -21,6 +21,7 @@
 import type { GraphV1, NodeV1 } from "./types.js";
 import { languageOf } from "./extract.js";
 import { WALK_RELATIONS } from "./relations.js";
+import { savingsFooter, savingsFor, type Savings } from "../context/savings.js";
 
 export interface Hub {
   name: string;
@@ -46,6 +47,9 @@ export interface RepoMap {
   hotspots: Hub[];
   /** Directory groups beyond the `maxDirs` cap — never silently dropped. */
   dropped: number;
+  /** Tokens-saved baseline: every indexed file read whole — the cost of
+   * orienting by reading the repo instead of this map. */
+  saved?: Savings;
 }
 
 export interface BuildRepoMapOptions {
@@ -176,6 +180,7 @@ export function buildRepoMap(graph: GraphV1, opts: BuildRepoMapOptions = {}): Re
     dirs,
     hotspots,
     dropped,
+    saved: savingsFor(graph, fileNodes.map((f) => f.path)),
   };
 }
 
@@ -219,5 +224,6 @@ export function formatRepoMap(map: RepoMap): string {
   lines.push("");
   lines.push(`hotspots: ${map.hotspots.map(formatHotspot).join("  ")}`);
 
-  return lines.join("\n") + "\n";
+  const body = lines.join("\n");
+  return body + savingsFooter(body, map.saved) + "\n";
 }

@@ -9,6 +9,7 @@
  */
 import { resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
+import { savingsFooter } from "../context/savings.js";
 import { loadGraphCached } from "../graph/load.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "./grep.js";
 
@@ -55,6 +56,8 @@ export function formatGrepResult(result: GrepResult): string {
   let out = blocks.join("\n").replace(/\n+$/, "\n");
   const note = truncationNote(result);
   if (note) out += note + "\n";
+  const footer = savingsFooter(out, result.saved);
+  if (footer) out += footer + "\n";
   return out;
 }
 

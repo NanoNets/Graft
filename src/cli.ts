@@ -7,10 +7,11 @@
  *   check   fail if graft/ has drifted from the code — for CI.
  *   viz     serve the interactive graph viewer.
  *   mcp     serve the graph over MCP (stdio) for coding agents.
- *   callers / callees / impact   precise graph traversal for a symbol ($0, no LLM).
+ *   callers precise graph traversal for a symbol ($0, no LLM); --direction out = callees, --depth N = blast radius.
+ *   skeleton signatures-only view of one file ($0, no LLM).
  *   grep    regex search over indexed files, grouped by enclosing symbol, ranked by coupling ($0, no LLM).
  *   map     token-budgeted repo orientation — dir clusters, hubs, hotspots ($0, no LLM).
- *   init    set up the Claude Code integration (.claude/ statusline + hooks) in this repo.
+ *   init    set up the Claude Code integration (.claude/ statusline + hooks + MCP) in this repo.
  *
  * Git is the sync: commit graft/ and anyone who clones the repo has the
  * graph, with no setup.
@@ -283,7 +284,7 @@ program
 
 program
   .command("mcp")
-  .description("Serve the graph over MCP (stdio) — exposes graft_ask / graft_check / graft_blast_radius as tools")
+  .description("Serve the graph over MCP (stdio) — exposes graft_ask, graft_callers, graft_grep, graft_skeleton, graft_map and graft_check as tools")
   .argument("[dir]", "repository root", ".")
   .action(async (dir: string) => {
     const { resolve } = await import("node:path");
@@ -292,41 +293,34 @@ program
     startMcpServer(resolve(dir), globalOpts.dir);
   });
 
-function traverseAction(kind: import("./graph/traverse-cli.js").TraverseKind) {
-  return async (symbol: string, dir: string, opts: { in?: string; json?: boolean; depth?: string }) => {
-    const { runTraverseCommand } = await import("./graph/traverse-cli.js");
-    const globalOpts = program.opts<{ dir?: string }>();
-    runTraverseCommand(kind, symbol, dir, { in: opts.in, json: opts.json, depth: opts.depth, globalDir: globalOpts.dir });
-  };
-}
-
 program
   .command("callers")
-  .description("Who calls/references/imports/implements/extends a symbol ($0, no LLM)")
+  .description(
+    "Who calls/references a symbol ($0, no LLM). --direction out gives callees (what it calls); --depth N walks transitively for full blast radius",
+  )
   .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
   .argument("[dir]", "repository root", ".")
+  .option("--direction <in|out>", 'edge direction: "in" = callers (default), "out" = callees')
+  .option("-d, --depth <n>", "walk transitively up to N hops for blast radius (default 1)")
   .option("--in <path>", "narrow matches to nodes whose path contains this substring")
   .option("--json", "output as JSON")
-  .action(traverseAction("callers"));
-
-program
-  .command("callees")
-  .description("What a symbol calls/references/imports/implements/extends ($0, no LLM)")
-  .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
-  .argument("[dir]", "repository root", ".")
-  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
-  .option("--json", "output as JSON")
-  .action(traverseAction("callees"));
-
-program
-  .command("impact")
-  .description("BFS over incoming edges — who breaks if this symbol changes ($0, no LLM)")
-  .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
-  .argument("[dir]", "repository root", ".")
-  .option("-d, --depth <n>", "max BFS depth (default 2)")
-  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
-  .option("--json", "output as JSON")
-  .action(traverseAction("impact"));
+  .action(
+    async (
+      symbol: string,
+      dir: string,
+      opts: { direction?: string; depth?: string; in?: string; json?: boolean },
+    ) => {
+      const { runCallersCommand } = await import("./graph/traverse-cli.js");
+      const globalOpts = program.opts<{ dir?: string }>();
+      runCallersCommand(symbol, dir, {
+        direction: opts.direction,
+        depth: opts.depth,
+        in: opts.in,
+        json: opts.json,
+        globalDir: globalOpts.dir,
+      });
+    },
+  );
 
 program
   .command("grep")
@@ -394,7 +388,7 @@ program
 
 program
   .command("init")
-  .description("Wire Graft into the AI coding agents used with this repo (instruction files; full hooks + statusline for Claude Code)")
+  .description("Wire Graft into the AI coding agents used with this repo (instruction files + MCP server; full hooks + statusline + MCP for Claude Code)")
   .argument("[dir]", "target repo directory", ".")
   .option("--no-build", "skip building the graph (wire files only)")
   .option("--agents <ids...>", `only these agents (${hostIds().join(", ")}, claude)`)
@@ -428,6 +422,12 @@ program
       console.error(`✓ wrote ${res.settingsPath}`);
       for (const s of res.shims) console.error(`✓ wrote ${s}`);
       console.error(`✓ wrote ${res.skill}`);
+      if (res.mcp.action === "skipped-unparseable")
+        console.error(`⚠ .mcp.json: ${res.mcp.path} left unchanged (not valid JSON) — add the graft server manually`);
+      else if (res.mcp.action === "unchanged")
+        console.error(`· mcp claude: ${res.mcp.path} (already registered)`);
+      else
+        console.error(`✓ mcp claude: ${res.mcp.path} (${res.mcp.action}) — restart Claude Code to load the graft MCP server`);
       console.error(res.built ? "✓ built the graph (graft build)" : "· skipped graph build");
       for (const w of res.warnings) console.error(`⚠ ${w}`);
     }

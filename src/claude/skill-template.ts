@@ -18,24 +18,30 @@ explaining one part in plain prose and naming the exact files and line-spans it
 covers. Reading a node costs a few hundred tokens; reading source to rebuild the
 same understanding costs thousands.
 
-**Get context from graft first — two ways, both land here:**
+**Choose the graft tool by task shape — pick the one that answers in a single call:**
 
-- Ask: \`graft ask "<your task, in plain words>"\` — returns the relevant nodes,
-  ranked, with file:line pointers. Add \`--source\` to inline the actual code at
-  each span, so the result IS the code you need — no separate file read. By
-  default \`--source\` inlines each hit's crux (the ≤8-line core of the
-  definition, marked as such); add \`--full\` only when the crux isn't enough.
-  Ask is cheap (<1s) — re-ask with different phrasings for each sub-question,
-  and use structural forms too: \`graft ask "who calls <symbol>"\`.
-- Skim a file's API without reading it: \`graft skeleton <file>\` — every
-  definition's signature + span in ~200 tokens, ~10× cheaper than the file.
-- Or explore as usual: grep / ls / cat inside \`graft/\`. A grep for any concept,
-  symbol, or filename hits the node that covers it; \`graft/INDEX.md\` lists them
-  all.
+- **Locate / understand / "how does X work"** → \`graft ask "<task>" --source\` —
+  ranked nodes with the code inlined (\`--source\` gives each hit's ≤8-line crux;
+  add \`--full\` only if the crux isn't enough). For a genuinely multi-part
+  question, ask once per distinct sub-aspect. **But if an ask returns few or
+  weak hits, do NOT re-ask with reworded phrasings — switch tool** (below). The
+  ask output tells you when to switch.
+- **Every occurrence / "all the X" / a symbol or literal everywhere** →
+  \`graft grep "<literal>"\` — exhaustive, grouped by enclosing symbol. Ranked
+  ask is top-N and WILL miss instances; grep is the tool for "find them all".
+- **A file's whole API surface** → \`graft skeleton <file>\` — every signature in
+  ~200 tokens. One call beats several asks when you just need "what's in here".
+- **Who uses / what breaks if I change X** → \`graft callers <symbol>\` (add
+  \`--depth N\` to walk transitively for the full blast radius); what X itself
+  depends on → \`graft callers <symbol> --direction out\`. Run one before
+  editing a symbol.
+- **First contact with an unfamiliar repo** → \`graft map\` — token-budgeted
+  orientation (dir clusters, hubs, hotspots). Read the hub cards it names rather
+  than asking per subsystem.
 
-**First contact with an unfamiliar repo:** run \`graft map\` before exploring —
-a token-budgeted orientation (dir clusters, hubs, hotspots) built straight from
-the wiring graph, no LLM, no key.
+You can also grep / ls / cat inside \`graft/\` directly (the nodes are plain
+markdown; \`graft/INDEX.md\` lists them) — but the commands above are faster and
+exhaustive where it matters, so reach for them first.
 
 **Match the tool to the task shape:**
 
@@ -57,13 +63,19 @@ the wiring graph, no LLM, no key.
   that is expected, not a graft failure.
 
 **Precise graph modes** — for structural questions, skip ranking and go
-straight to precomputed edges:
+straight to precomputed edges. It's all one command, \`graft callers\`:
 
-- \`graft callers <symbol>\` / \`graft callees <symbol>\` — who breaks if this
-  changes / what does this call — precomputed edges, exact answers; structural
-  phrasing inside ask ("who calls X") routes here too.
-- \`graft impact <symbol> [-d N]\` — BFS over incoming edges out to depth N: the
-  full blast radius of a change.
+- \`graft callers <symbol>\` — who calls/references this (exact edges, not text);
+  structural phrasing inside ask ("who calls X") routes here too.
+- \`graft callers <symbol> --direction out\` — the reverse: what this symbol
+  itself calls/depends on (the old \`callees\`).
+- \`graft callers <symbol> --depth N\` — walk transitively out to depth N for the
+  full blast radius of a change (the old \`impact\`).
+
+When the graft MCP server is connected, the same operations are exposed as
+tools — \`graft_ask\`, \`graft_callers\` (with \`direction\`/\`depth\`),
+\`graft_grep\`, \`graft_skeleton\`, \`graft_map\` — prefer whichever surface is
+available.
 
 If a returned span is truncated ("+N more lines"), open the file at that exact
 range before finalizing.

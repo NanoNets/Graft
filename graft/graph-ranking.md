@@ -26,10 +26,10 @@ covers:
     at: 'test/graphrank.test.ts:L42-L48'
   - symbol: makeCollisionFixture
     kind: function
-    at: 'test/graphrank.test.ts:L128-L138'
+    at: 'test/graphrank.test.ts:L182-L192'
   - symbol: rank
     kind: function
-    at: 'test/graphrank.test.ts:L140-L141'
+    at: 'test/graphrank.test.ts:L194-L195'
 ---
 <!-- context:generated:start -->
 ## Summary

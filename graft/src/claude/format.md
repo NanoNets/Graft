@@ -14,5 +14,5 @@ This file contains functions and types for formatting and rendering status infor
 - retrievalTokensSaved · function · L111-L117 — Calculates the number of tokens saved by using a retrieval pack instead of reading files in full, based on the hits and baseline size.
 - formatRetrieval · function · L119-L132 — Formats the retrieval results into a string, including details about tokens saved and the estimated size of the retrieval pack.
 - relevantRetrieval · function · L152-L163 — Determines if a retrieval pack should be injected based on relevance and novelty, returning the formatted text or null if not applicable.
-- formatOrientation · function · L165-L167 — Creates a formatted string representing the orientation of the repository map, limited to a specified byte budget.
-- renderSubagent · function · L169-L173 — Generates a string representation of a subagent's status, including its query if available, for display purposes.
+- formatOrientation · function · L165-L176 — Creates a formatted string representing the orientation of the repository map, limited to a specified byte budget.
+- renderSubagent · function · L178-L182 — Generates a string representation of a subagent's status, including its query if available, for display purposes.

@@ -70,13 +70,28 @@ covers:
     at: 'test/ask-index.test.ts:L106-L106'
   - symbol: makeFixture
     kind: function
-    at: 'test/ask.test.ts:L16-L25'
+    at: 'test/ask.test.ts:L17-L26'
   - symbol: stampCrux
     kind: function
-    at: 'test/ask.test.ts:L43-L49'
+    at: 'test/ask.test.ts:L44-L50'
   - symbol: qualifiedFixture
     kind: function
-    at: 'test/ask.test.ts:L189-L207'
+    at: 'test/ask.test.ts:L190-L208'
+  - symbol: multiScopeFixture
+    kind: function
+    at: 'test/ask.test.ts:L277-L310'
+  - symbol: siblingPrefixFixture
+    kind: function
+    at: 'test/ask.test.ts:L336-L343'
+  - symbol: idfShiftFixture
+    kind: function
+    at: 'test/ask.test.ts:L370-L381'
+  - symbol: rankOf
+    kind: function
+    at: 'test/ask.test.ts:L388-L388'
+  - symbol: duplicateNameFixture
+    kind: function
+    at: 'test/ask.test.ts:L555-L570'
   - symbol: strip
     kind: function
     at: 'test/claude-format.test.ts:L6-L6'
@@ -160,10 +175,10 @@ covers:
     at: 'test/graph-resolve-typed.test.ts:L6-L10'
   - symbol: builtRepo
     kind: function
-    at: 'test/graph-traverse-cli.test.ts:L16-L27'
+    at: 'test/graph-traverse-cli.test.ts:L17-L28'
   - symbol: runCli
     kind: function
-    at: 'test/graph-traverse-cli.test.ts:L29-L40'
+    at: 'test/graph-traverse-cli.test.ts:L30-L41'
 ---
 <!-- context:generated:start -->
 ## Summary

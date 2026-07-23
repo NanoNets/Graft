@@ -5,11 +5,14 @@ import { mergeGraftSettings } from './settings-merge.js';
 import { statuslineShim, hooksShim } from './shim-template.js';
 import { skillTemplate } from './skill-template.js';
 import { claudeDistDir } from './paths.js';
+import { mergeJsonKey, SERVER_ENTRY, type McpWrite } from '../hosts/mcp-config.js';
 
 export interface InitResult {
   settingsPath: string;
   shims: string[];
   skill: string;
+  /** the `.mcp.json` write registering the graft MCP server for Claude Code. */
+  mcp: McpWrite;
   warnings: string[];
   built: boolean;
 }
@@ -37,6 +40,11 @@ export function runInit(dir: string, opts: { build?: boolean; cliPath?: string }
   const skillPath = join(skillDir, 'SKILL.md');
   writeFileSync(skillPath, skillTemplate());
 
+  // Register the graft MCP server in the project's .mcp.json so Claude Code
+  // exposes graft_ask/graft_callers/etc. as tools — the same keyed merge the
+  // other hosts use (existing servers preserved; unparseable files skipped).
+  const mcp = mergeJsonKey('claude', join(dir, '.mcp.json'), 'mcpServers', SERVER_ENTRY);
+
   let built = false;
   const wiring = join(dir, 'graft', '.graph', 'wiring.json');
   if (opts.build !== false && opts.cliPath && !existsSync(wiring)) {
@@ -45,5 +53,5 @@ export function runInit(dir: string, opts: { build?: boolean; cliPath?: string }
       built = true;
     } catch { /* build best-effort; user can run `graft build` manually */ }
   }
-  return { settingsPath, shims: [sl, hk], skill: skillPath, warnings, built };
+  return { settingsPath, shims: [sl, hk], skill: skillPath, mcp, warnings, built };
 }

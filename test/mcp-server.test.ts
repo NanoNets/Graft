@@ -34,7 +34,7 @@ test('initialize → tools/list → tools/call round-trip', async () => {
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
       { jsonrpc: '2.0', method: 'notifications/initialized' },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'graft_blast_radius', arguments: { file: 'x.ts' } } },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'graft_callers', arguments: { symbol: 'x.ts', depth: 2 } } },
     ],
     dir,
     3,
@@ -49,9 +49,7 @@ test('initialize → tools/list → tools/call round-trip', async () => {
     'graft_ask',
     'graft_skeleton',
     'graft_check',
-    'graft_blast_radius',
     'graft_callers',
-    'graft_callees',
     'graft_grep',
     'graft_map',
   ]);

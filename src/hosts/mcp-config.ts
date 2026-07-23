@@ -13,14 +13,14 @@ export interface McpWrite {
   action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable';
 }
 
-const SERVER_ENTRY = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
+export const SERVER_ENTRY = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
 const OPENCODE_ENTRY = { type: 'local', command: ['npx', '-y', '@nanonets/graft', 'mcp'], enabled: true };
 
 function dirExists(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
-function mergeJsonKey(id: string, path: string, topKey: string, entry: object): McpWrite {
+export function mergeJsonKey(id: string, path: string, topKey: string, entry: object): McpWrite {
   let root: Record<string, any> = {};
   const existed = existsSync(path);
   if (existed) {

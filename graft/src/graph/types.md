@@ -9,4 +9,5 @@ Defines the structure and relationships of a code graph schema, facilitating the
 - NodeV1 · interface · L38-L63 — Describes the properties of a node in the code graph, encapsulating its identity, location, and meaning for effective graph representation.
 - Relation · type · L65-L71 — Defines the types of relationships between nodes in the graph, clarifying how symbols interact.
 - EdgeV1 · interface · L73-L78 — Describes the edges connecting nodes in the graph, detailing the source, target, and relationship type.
-- GraphV1 · interface · L80-L89 — Encapsulates the entire graph structure, including metadata and collections of nodes and edges.
+- ScopeV1 · interface · L84-L88 — interface ScopeV1
+- GraphV1 · interface · L90-L102 — Encapsulates the entire graph structure, including metadata and collections of nodes and edges.

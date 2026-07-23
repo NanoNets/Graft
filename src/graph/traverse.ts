@@ -1,11 +1,12 @@
 /**
- * Pure graph-traversal core shared by `graft callers` / `callees` / `impact`,
- * their MCP equivalents, and `ask`'s structural intent path.
+ * Pure graph-traversal core shared by `graft callers` (its `--direction`/
+ * `--depth` flags), the MCP `graft_callers` tool, and `ask`'s structural
+ * intent path.
  *
  * Centralizes the symbol-resolution contract (bare name, qualified id-suffix,
- * last-segment fallback, `--in` narrowing) so all three surfaces agree on what
- * a query like `Cache.get` or `hashstructure.Hash` means, and the depth-1
- * (callers/callees) and BFS (impact) edge walks over the wiring graph.
+ * last-segment fallback, `--in` narrowing) so all surfaces agree on what a
+ * query like `Cache.get` or `hashstructure.Hash` means, and the direction-aware
+ * (incoming/outgoing) depth-1 and BFS edge walks over the wiring graph.
  *
  * No I/O here: callers pass in an already-loaded `GraphV1` (via
  * `loadGraphCached`), which keeps this module trivially unit-testable against
@@ -13,6 +14,11 @@
  */
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "./types.js";
 import { WALK_RELATIONS } from "./relations.js";
+
+/** Which way to walk the wiring graph: `in` = incoming edges (who points at
+ * the symbol — callers / blast radius), `out` = outgoing edges (what the symbol
+ * points at — callees). */
+export type Direction = "in" | "out";
 
 /** A resolved symbol-search hit. Reserved for future disambiguation metadata
  * (e.g. why a query matched); today it wraps the node 1:1. */
@@ -125,30 +131,36 @@ export function impactOf(graph: GraphV1, symbol: NodeV1, maxDepth = 2): EdgeHit[
 }
 
 /**
- * BFS over INCOMING walk-relation edges from *multiple* seed nodes at once —
- * the multi-seed generalization of {@link impactOf} (`impactOf(g, n, d)` is
- * exactly `impactOfMany(g, [n], d)`). Used when one logical unit spans several
- * graph node ids — e.g. a file plus every symbol defined in it, since a
- * `calls`/`references`/etc. edge from another file always targets the SYMBOL
- * id, never the FILE id, so walking the file node alone misses dependents that
- * call into it rather than merely importing it.
+ * BFS over walk-relation edges from *multiple* seed nodes at once, in the given
+ * `direction` (`in` = incoming, the default — "who breaks if this changes";
+ * `out` = outgoing — "what this reaches"). The multi-seed generalization of
+ * {@link impactOf} (`impactOf(g, n, d)` is exactly `impactOfMany(g, [n], d)`).
+ * Used when one logical unit spans several graph node ids — e.g. a file plus
+ * every symbol defined in it, since a `calls`/`references`/etc. edge from
+ * another file always targets the SYMBOL id, never the FILE id, so walking the
+ * file node alone misses dependents that call into it rather than merely
+ * importing it.
  *
  * Every seed is pre-marked visited (so a seed can never appear as its own
  * hit, and an edge between two seeds is never reported), then the walk
  * proceeds exactly like `impactOf`'s: each reached node deduped by id and
  * reported once, at the depth it was first reached from *any* seed.
  */
-export function impactOfMany(graph: GraphV1, seeds: NodeV1[], maxDepth = 2): EdgeHit[] {
+export function impactOfMany(graph: GraphV1, seeds: NodeV1[], maxDepth = 2, direction: Direction = "in"): EdgeHit[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
 
-  // target id → incoming {source, relation} pairs, restricted to walk relations.
-  const incoming = new Map<string, { source: string; relation: Relation }[]>();
+  // Adjacency keyed for the walk direction, restricted to walk relations:
+  //   'in'  → key = edge.target, neighbour = edge.source (who points AT key)
+  //   'out' → key = edge.source, neighbour = edge.target (what key points TO)
+  const adj = new Map<string, { other: string; relation: Relation }[]>();
   for (const e of graph.edges as EdgeV1[]) {
     if (!WALK_RELATIONS.has(e.relation)) continue;
-    const arr = incoming.get(e.target);
-    const entry = { source: e.source, relation: e.relation };
+    const key = direction === "in" ? e.target : e.source;
+    const other = direction === "in" ? e.source : e.target;
+    const entry = { other, relation: e.relation };
+    const arr = adj.get(key);
     if (arr) arr.push(entry);
-    else incoming.set(e.target, [entry]);
+    else adj.set(key, [entry]);
   }
 
   const visited = new Set<string>(seeds.map((s) => s.id));
@@ -158,11 +170,11 @@ export function impactOfMany(graph: GraphV1, seeds: NodeV1[], maxDepth = 2): Edg
   for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
     const next: string[] = [];
     for (const current of frontier) {
-      for (const { source, relation } of incoming.get(current) ?? []) {
-        if (visited.has(source)) continue;
-        visited.add(source);
-        hits.push({ node: byId.get(source) ?? null, id: source, relation, depth });
-        next.push(source);
+      for (const { other, relation } of adj.get(current) ?? []) {
+        if (visited.has(other)) continue;
+        visited.add(other);
+        hits.push({ node: byId.get(other) ?? null, id: other, relation, depth });
+        next.push(other);
       }
     }
     frontier = next;
@@ -186,6 +198,25 @@ function symbolsInFile(graph: GraphV1, fileNode: NodeV1): NodeV1[] {
  * see this module's header and `impactOfMany`'s doc for why. Symbol-kind
  * queries keep using plain `impactOf`; this is only for file-kind matches.
  */
-export function impactOfFile(graph: GraphV1, fileNode: NodeV1, maxDepth = 2): EdgeHit[] {
-  return impactOfMany(graph, [fileNode, ...symbolsInFile(graph, fileNode)], maxDepth);
+export function impactOfFile(graph: GraphV1, fileNode: NodeV1, maxDepth = 2, direction: Direction = "in"): EdgeHit[] {
+  return impactOfMany(graph, [fileNode, ...symbolsInFile(graph, fileNode)], maxDepth, direction);
+}
+
+/**
+ * The single entry point behind `graft callers` and the MCP `graft_callers`
+ * tool, covering all of what were once three commands:
+ *   - `direction:in,  depth:1`  → callers      (who calls/references this)
+ *   - `direction:out, depth:1`  → callees      (what this calls/references)
+ *   - `direction:in,  depth>1`  → blast radius  (transitive dependents)
+ *   - `direction:out, depth>1`  → transitive dependencies
+ *
+ * Depth 1 uses the plain single-hop scan ({@link callersOf}/{@link calleesOf})
+ * so `graft callers <symbol>` output is unchanged. Depth >1 runs the BFS, and
+ * for a `kind: 'file'` seed aggregates over the symbols the file defines (see
+ * {@link impactOfMany}) so file-level dependents aren't silently dropped.
+ */
+export function edgeWalk(graph: GraphV1, node: NodeV1, direction: Direction, depth: number): EdgeHit[] {
+  if (depth <= 1) return direction === "in" ? callersOf(graph, node) : calleesOf(graph, node);
+  if (node.kind === "file") return impactOfFile(graph, node, depth, direction);
+  return impactOfMany(graph, [node], depth, direction);
 }

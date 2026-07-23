@@ -1,7 +1,8 @@
 /**
- * CLI tests for `graft callers` / `callees` / `impact` — the three commands
- * that wire src/graph/traverse.ts's pure resolver + edge-walkers into the
- * `graft` binary. Runs the real CLI via execFileSync (same pattern as
+ * CLI tests for `graft callers` and its `--direction`/`--depth` flags — the one
+ * command that wires src/graph/traverse.ts's pure resolver + edge-walkers into
+ * the `graft` binary (`--direction out` is the old `callees`; `--depth N` is the
+ * old `impact`). Runs the real CLI via execFileSync (same pattern as
  * test/mcp-tools.test.ts's `builtRepo` helper) against a built fixture repo,
  * so these tests exercise the actual process boundary: exit codes, stdout vs
  * stderr, and --json shape.
@@ -75,20 +76,28 @@ test('graft callers: unknown symbol exits 1 with a stderr message', () => {
   assert.equal(r.stdout, '');
 });
 
-test('graft callees: zero-edge symbol prints a loud note and still exits 0', () => {
+test('graft callers --direction out: happy path shows the outgoing (callee) hit', () => {
+  const d = builtRepo();
+  // `sub` calls `add`, so its outgoing edge points at add with a `→` arrow.
+  const r = runCli(['callers', 'sub', d, '--direction', 'out']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /sub · function · src\/math\.ts:/);
+  assert.match(r.stdout, /calls → add \(src\/math\.ts:/);
+});
+
+test('graft callers --direction out: zero-edge symbol prints a loud callees note and still exits 0', () => {
   const d = builtRepo();
   // `add` calls nothing, so its callees are empty — must not be a silent list.
-  const r = runCli(['callees', 'add', d]);
+  const r = runCli(['callers', 'add', d, '--direction', 'out']);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /add · function · src\/math\.ts:/);
   assert.match(r.stdout, /no indexed callees/);
   assert.match(r.stdout, /grep -rn "add"/);
 });
 
-test('graft callees --json: zero-edge symbol includes a note field', () => {
+test('graft callers --direction out --json: zero-edge symbol includes a note field', () => {
   const d = builtRepo();
-  // `add` calls nothing, so its callees are empty — JSON must include the note.
-  const r = runCli(['callees', 'add', d, '--json']);
+  const r = runCli(['callers', 'add', d, '--direction', 'out', '--json']);
   assert.equal(r.status, 0);
   const parsed = JSON.parse(r.stdout);
   assert.equal(parsed.query, 'add');
@@ -100,21 +109,29 @@ test('graft callees --json: zero-edge symbol includes a note field', () => {
   assert.match(m.note, /try grep -rn/);
 });
 
-test('graft impact -d: depth flag limits the BFS, default reaches further', () => {
+test('graft callers --depth: depth flag walks the BFS transitively (blast radius)', () => {
   const d = builtRepo();
-  // compute -> sub -> add: impact of `add` at depth 1 is just `sub`;
-  // the default depth (2) also reaches `compute`.
-  const shallow = runCli(['impact', 'add', d, '-d', '1']);
+  // compute -> sub -> add: callers of `add` at depth 1 is just `sub`;
+  // depth 2 also reaches `compute` and tags each hit with its depth.
+  const shallow = runCli(['callers', 'add', d, '--depth', '1']);
   assert.equal(shallow.status, 0);
   assert.match(shallow.stdout, /← sub \(/);
   assert.doesNotMatch(shallow.stdout, /compute/);
+  assert.doesNotMatch(shallow.stdout, /\[depth/); // depth 1 → no depth tags
 
-  const deeper = runCli(['impact', 'add', d]);
+  const deeper = runCli(['callers', 'add', d, '--depth', '2']);
   assert.equal(deeper.status, 0);
   assert.match(deeper.stdout, /← sub \(/);
   assert.match(deeper.stdout, /\[depth 1\]/);
   assert.match(deeper.stdout, /← compute \(/);
   assert.match(deeper.stdout, /\[depth 2\]/);
+});
+
+test('graft callers --direction: rejects a bad value with exit 1', () => {
+  const d = builtRepo();
+  const r = runCli(['callers', 'add', d, '--direction', 'sideways']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--direction must be "in" or "out"/);
 });
 
 test('graft callers: no graph at all is a stderr error, exit 1', () => {

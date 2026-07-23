@@ -27,9 +27,10 @@ hotspots), no LLM, no key.
   to raw \`grep -rn\` only for unindexed files.
 - \`graft skeleton <file>\` → every definition's signature + span, ~10× cheaper
   than reading the file; use it to skim an API surface.
-- \`graft callers/callees <symbol>\` and \`graft impact <symbol> [-d N]\` give
-  precomputed, exact edges — who calls/is called by a symbol, and the full
-  blast radius — for structural questions, skip ranking and use these directly.
+- \`graft callers <symbol>\` gives precomputed, exact edges — who calls this.
+  Add \`--direction out\` for what it calls, or \`--depth N\` to walk
+  transitively for the full blast radius. For structural questions, skip
+  ranking and use this directly.
 - Or browse: \`graft/INDEX.md\` lists every node; follow the links.
 
 If a returned span is truncated ("+N more lines"), open the file at that exact

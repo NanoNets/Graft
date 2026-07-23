@@ -71,9 +71,11 @@ npx @nanonets/graft init
 ### MCP server
 
 `graft init` also registers Graft's MCP server with agents that support it, so
-`graft_ask`, `graft_check`, and `graft_blast_radius` appear as native tools —
-no shell required. Skip with `--no-mcp`. Run it manually with `graft mcp [dir]`,
-or register it by hand:
+`graft_ask`, `graft_callers`, `graft_grep`, `graft_skeleton`, `graft_map`, and
+`graft_check` appear as native tools — no shell required. Claude Code now gets
+this too: `graft init` writes the server into the project's `.mcp.json` (restart
+Claude Code to load it). Skip with `--no-mcp`. Run it manually with
+`graft mcp [dir]`, or register it by hand:
 
 ```json
 { "mcpServers": { "graft": { "command": "npx", "args": ["-y", "@nanonets/graft", "mcp"] } } }
@@ -189,8 +191,8 @@ graft ask "<task>" [dir]             # query the graph — ranked nodes + exact 
 graft ask "<task>" --json            # machine-readable result
 
 graft callers <symbol> [dir]         # who calls/references/imports/implements/extends a symbol (no LLM, no key)
-graft callees <symbol> [dir]         # what a symbol calls/references/imports/implements/extends (no LLM, no key)
-graft impact <symbol> [dir] -d N     # BFS over incoming edges — who breaks if this symbol changes (no LLM, no key)
+graft callers <symbol> --direction out  # the reverse: what the symbol itself calls/references (was `graft callees`)
+graft callers <symbol> -d N          # walk transitively out to depth N — full blast radius (was `graft impact`)
 
 graft grep "<regex>" [dir]           # exhaustive regex search over indexed files, grouped by enclosing symbol (no LLM, no key)
 graft grep "<regex>" --in <path>     # narrow to files whose path contains this substring
@@ -205,7 +207,7 @@ graft check --json                   # print the drift report as JSON
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
 
-graft init [dir]                     # wire Graft into the coding agents detected in this repo (Claude Code always gets full hooks + statusline)
+graft init [dir]                     # wire Graft into the coding agents detected in this repo (Claude Code always gets full hooks + statusline + MCP)
 graft init --no-build                # wire the files only; don't build the graph
 graft init --agents cursor kiro      # wire only these agents (ids: agents, cursor, gemini, copilot, kiro, windsurf, claude)
 graft init --all-agents              # wire every known agent, detected or not
@@ -221,7 +223,7 @@ graft --version, -v                  # print the installed version and exit
 
 Method calls resolve through the receiver's type — constructor assignments
 (`self.router = APIRouter()`) and type annotations, not just the call-site
-name — so `callers`/`impact`/`grep --in` return calls bound to the right
+name — so `callers`/`grep --in` return calls bound to the right
 type on method-heavy code, not every method anywhere with that name.
 
 ## Search & orient (`graft grep` / `graft map`)
