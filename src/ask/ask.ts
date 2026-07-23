@@ -707,7 +707,7 @@ export function formatAsk(r: AskResult): string {
         .join("\n")
     : "";
   if (r.hits.length === 0) {
-    return `${head}\n\n${noteBlock || "no matches."}`;
+    return `${head}\n\n${noteBlock || "no matches."}${escalationNudge(r)}\n`;
   }
   const lines = noteBlock ? [head, "", noteBlock, ""] : [head, ""];
   if (r.mode === "structural") {
@@ -727,7 +727,21 @@ export function formatAsk(r: AskResult): string {
     });
   }
   const body = lines.join("\n").trimEnd();
-  return body + savingsFooter(r, body) + "\n";
+  return body + savingsFooter(r, body) + escalationNudge(r) + "\n";
+}
+
+/** When a lexical `ask` returns thin/no results, the productive next move is a
+ * different TOOL, not a re-phrased ask — re-asking is the "over-ask" trap that
+ * inflates cost. Surface the escalation in the output so the agent switches to
+ * grep/skeleton/callers instead. Silent when the result is already rich (>3
+ * hits) or in structural mode (a resolved who-calls IS the answer). */
+function escalationNudge(r: AskResult): string {
+  if ((r.mode !== "lexical" && r.mode !== "empty") || r.hits.length > 3) return "";
+  const n = r.hits.length;
+  return (
+    `\n\n[graft] ${n === 0 ? "no hits" : `only ${n} hit${n === 1 ? "" : "s"}`} — don't re-ask with new wording; switch tool: ` +
+    "`graft grep \"<literal>\"` for every occurrence · `graft skeleton <file>` for a file's full API · `graft callers <symbol>` for who-uses."
+  );
 }
 
 /** The one-line token-saving estimate `ask` appends in retriever mode, so the

@@ -103,7 +103,7 @@ function retrievalBody(hits: AskJson['hits']): string {
   // tokens are always fresh full-price input, so the pack stays tiny).
   const header = hits.some((h) => h.code)
     ? '[graft] retrieved context — read these spans, do not re-open the files:'
-    : '[graft] likely starting points — if relevant, open the pointer or run `graft ask "<task>" --source` for the code:';
+    : '[graft] starting points for this task — pull the code inline with `graft ask "<what you need>" --source`, trace impact with `graft callers <symbol>`, or search with `graft grep "<literal>"`:';
   return `${header}\n${blocks.join('\n')}`;
 }
 
@@ -163,7 +163,16 @@ export function relevantRetrieval(ask: AskJson, s: SessionState, cap = 3): strin
 }
 
 export function formatOrientation(indexMd: string, budgetBytes = 1500): string {
-  return `[graft] repo map (graft/INDEX.md):\n${indexMd.slice(0, budgetBytes)}`;
+  // Always-on directive (cached, seen turn 0) so the agent reaches for graft's
+  // commands without waiting for the discretionary skill to load. Positive only
+  // — names the tools, forbids nothing.
+  const directive =
+    `[graft] This repo is indexed by graft. To find or understand code, reach for graft first — it cites exact file:line and is faster than grep/read:\n` +
+    `  • graft ask "<task>" --source   — the relevant code, inline (skip the file read)\n` +
+    `  • graft callers <sym> · graft impact <sym>   — who/what breaks if it changes\n` +
+    `  • graft grep "<literal>"   — exhaustive search, grouped by enclosing symbol\n` +
+    `  • graft skeleton <file> · graft map   — a file's API · whole-repo orientation\n`;
+  return `${directive}\nrepo map (graft/INDEX.md):\n${indexMd.slice(0, budgetBytes)}`;
 }
 
 export function renderSubagent(agentName: string, session: SessionState | null): string {
