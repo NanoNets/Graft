@@ -15,14 +15,14 @@
 
 <!-- numbers from a 162-run benchmark (2026-07-22, 2 repos, 3 arms) — see Benchmark below -->
 
-**vs. a standard coding session, no Graft at all:**
-
 | Metric | With Graft |
 |---|---|
 | Cost | **32% less** |
 | Tool calls | **46% fewer** |
 | Latency | **60% lower** |
 | Correctness | equal |
+
+**vs. a standard coding session, no Graft at all.**
 
 </div>
 
