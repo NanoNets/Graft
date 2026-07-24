@@ -10,12 +10,6 @@ const C = {
 };
 const SEP = C.muted(' · ');
 
-export function enrichedSegment(s: Stats): string | null {
-  if (s.readyCount < 1) return null;
-  const pct = s.totalCount ? Math.round((s.readyCount / s.totalCount) * 100) : 0;
-  return C.indigo(`${pct}% enriched`);
-}
-
 export function freshnessSegment(s: Stats): string {
   if (s.syncing) return C.amber('syncing…');
   if (s.dirty && s.staleCount > 0) return C.amber(`⚠ ${s.staleCount} stale`);
@@ -32,8 +26,6 @@ export function renderStatusline(
     return [C.muted('◤ graft · not built · run ') + C.text('graft build')];
   }
   const top = [C.muted('◤ ') + C.indigo('graft'), C.text(`${stats.nodeCount} nodes / ${stats.edgeCount} edges`)];
-  const enr = enrichedSegment(stats);
-  if (enr) top.push(enr);
   top.push(freshnessSegment(stats));
   const saved = session?.savedTokens ?? 0;
   if (saved > 0) top.push(C.indigo(`~${saved.toLocaleString()} tok saved`));
