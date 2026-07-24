@@ -60,7 +60,7 @@ test('formatRetrieval renders top hits, trims snippet, first pointer only', () =
   ] } as any;
   const txt = strip(formatRetrieval(ask)!);
   assert.match(txt, /starting points for this task/); // pointers-only header (no inlined code)
-  assert.match(txt, /PKCE — src\/pkce\.ts/);
+  assert.match(txt, /PKCE: src\/pkce\.ts/);
   assert.match(txt, /Validates the challenge\./); // snippet trimmed, own line
   assert.doesNotMatch(txt, /client\.ts/); // only the first pointer segment
 });
@@ -69,7 +69,7 @@ test('formatRetrieval keeps the substitutive header when code is inlined', () =>
   const ask = { query: 'pkce', mode: 'lexical', hits: [
     { kind: 'symbol', title: 'verify', pointer: 'src/pkce.ts:L1-L4', snippet: 's', score: 1, code: 'a\nb' },
   ] } as any;
-  assert.match(strip(formatRetrieval(ask)!), /retrieved context — read these spans/);
+  assert.match(strip(formatRetrieval(ask)!), /retrieved context, read these spans/);
 });
 
 test('formatRetrieval appends a tokens-saved line when ask reports a baseline', () => {
@@ -131,8 +131,8 @@ test('formatOrientation labels and truncates to budget', () => {
   const out = strip(formatOrientation(md, 1500));
   assert.match(out, /repo map/);
   assert.match(out, /reach for graft first/, 'always-on usage directive present');
-  // index truncated to budget (1500) + the fixed usage directive header (~500).
-  assert.ok(out.length < 2200, 'index trimmed to budget; only the fixed directive adds to it');
+  // index truncated to budget (1500) + the fixed usage directive (per-tool descriptions + discipline).
+  assert.ok(out.length < 3200, 'index trimmed to budget; only the fixed directive adds to it');
   // Regression: `graft impact` was folded into `graft callers --depth` in 0.6.0 —
   // the always-on directive must teach the current command, not a dead one.
   assert.doesNotMatch(out, /graft impact\b/, 'does not teach the removed `graft impact` command');

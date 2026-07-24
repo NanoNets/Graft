@@ -63,7 +63,7 @@ export function formatBlastRadius(w: GraphV1, filePath: string, cap = 8): string
     return ` • ${e.relation} ← ${label}`;
   });
   const more = edges.length > cap ? `\n • +${edges.length - cap} more` : '';
-  return `[graft] blast radius for ${basename(filePath)} — who depends on it:\n${items.join('\n')}${more}`;
+  return `[graft] blast radius for ${basename(filePath)}, who depends on it:\n${items.join('\n')}${more}`;
 }
 
 export interface AskJson {
@@ -84,7 +84,7 @@ function retrievalBody(hits: AskJson['hits']): string {
   const blocks = hits.map((h, i) => {
     const ptr = (h.pointer ?? '').split(',')[0].trim();
     const snip = (h.snippet ?? '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    let b = ` ${i + 1}. ${h.title} — ${ptr}`;
+    let b = ` ${i + 1}. ${h.title}: ${ptr}`;
     if (snip) b += `\n    ${snip}`;
     if (h.code) b += `\n\`\`\`\n${h.code}\n\`\`\``;
     return b;
@@ -94,8 +94,8 @@ function retrievalBody(hits: AskJson['hits']): string {
   // pulling spans itself via `graft ask --source` (push→pull: per-prompt injected
   // tokens are always fresh full-price input, so the pack stays tiny).
   const header = hits.some((h) => h.code)
-    ? '[graft] retrieved context — read these spans, do not re-open the files:'
-    : '[graft] starting points for this task — pull the code inline with `graft ask "<what you need>" --source`, trace impact with `graft callers <symbol>`, or search with `graft grep "<literal>"`:';
+    ? '[graft] retrieved context, read these spans; do not re-open the files:'
+    : '[graft] starting points for this task: pull the code inline with `graft ask "<what you need>" --source`, trace impact with `graft callers <symbol>`, or search with `graft grep "<literal>"`:';
   return `${header}\n${blocks.join('\n')}`;
 }
 
@@ -117,7 +117,7 @@ export function formatRetrieval(ask: AskJson, cap = 5): string | null {
   const base = tokensOf(ask.saved!.baselineChars);
   const pct = Math.round((saved / base) * 100);
   return (
-    `${body}\n[graft] tokens saved ≈ ${saved.toLocaleString()} (${pct}%) — this pack ≈ ` +
+    `${body}\n[graft] tokens saved ≈ ${saved.toLocaleString()} (${pct}%); this pack ≈ ` +
     `${tokensOf(body.length).toLocaleString()} tok vs reading the ${ask.saved!.files} file(s) whole ≈ ` +
     `${base.toLocaleString()} tok (estimate).`
   );
@@ -156,14 +156,20 @@ export function relevantRetrieval(ask: AskJson, s: SessionState, cap = 3): strin
 
 export function formatOrientation(indexMd: string, budgetBytes = 1500): string {
   // Always-on directive (cached, seen turn 0) so the agent reaches for graft's
-  // commands without waiting for the discretionary skill to load. Positive only
-  // — names the tools, forbids nothing.
+  // commands without waiting for the discretionary skill to load. This is the
+  // reliable steering channel (fires every session, unlike the discretionary
+  // skill): it carries a one-line description of each tool AND the call-discipline
+  // that keeps the agent from over-tooling. Positive only, names the tools,
+  // forbids nothing.
   const directive =
-    `[graft] This repo is indexed by graft. To find or understand code, reach for graft first — it cites exact file:line and is faster than grep/read:\n` +
-    `  • graft ask "<task>" --source   — the relevant code, inline (skip the file read)\n` +
-    `  • graft callers <sym> --depth 2   — who/what breaks if it changes\n` +
-    `  • graft grep "<literal>"   — exhaustive search, grouped by enclosing symbol\n` +
-    `  • graft skeleton <file> · graft map   — a file's API · whole-repo orientation\n`;
+    `[graft] This repo is indexed by graft. To find, understand, or change code, reach for graft first; it answers from a prebuilt graph with exact file:line, faster than grep/read. Pick the ONE tool that fits and act on its answer. Most tasks need a single call. If one isn't enough, switch to the tool that fits the next need; don't call the same tool again and again or re-ask a question reworded:\n` +
+    `  • graft ask "<task>" --source: locate + understand. Ranked nodes with the code inlined at each file:line (the ≤8-line crux; add --full for the whole span). The default for "how does X work" / "where is Y".\n` +
+    `  • graft grep "<literal>": exhaustive find. Every occurrence, grouped by enclosing symbol; use when you need them ALL (ask is ranked top-N and misses instances).\n` +
+    `  • graft skeleton <file>: a file's whole API in ~200 tokens, every signature + span, ~10x cheaper than reading the file.\n` +
+    `  • graft callers <sym> [--direction out] [--depth N]: exact edges. Who calls it (default), what it calls (--direction out), or the full blast radius (--depth 2). Run before you change a symbol.\n` +
+    `  • graft map: orientation for an unfamiliar repo, directory clusters, hubs, hotspots. map alone is the answer; don't then skeleton every subsystem it names.\n` +
+    `  In a monorepo, add --in <path>/ to ask/grep/callers to scope to one sub-project; hits are labeled [scope/].\n` +
+    `Each tool prints a "[graft] tokens saved ≈ N" footer; when you used graft this turn, close your reply with a one-line tally of the total saved (e.g. 🌱 graft saved ~12k tokens this turn, 3 calls).\n`;
   return `${directive}\nrepo map (graft/INDEX.md):\n${indexMd.slice(0, budgetBytes)}`;
 }
 
