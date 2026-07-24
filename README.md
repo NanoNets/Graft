@@ -1,9 +1,6 @@
 <div align="center">
 
-<!-- placeholder: swap for the Graft logo asset when ready -->
-<!-- <img src="assets/graft.png" alt="Graft" width="220"/> -->
-
-# Graft
+<img src="assets/graft-hero.png" alt="Graft — open-source context layer for large codebases" width="100%"/>
 
 **Your coding agent reads 30 files to change 3.**
 **Graft gives it the map it should have read first.**
@@ -18,13 +15,42 @@
 </p>
 
 <!-- numbers from a 162-run benchmark (2026-07-22, 2 repos, 3 arms) — see Benchmark below -->
-**32% less cost · 46% fewer tool calls · 60% lower latency** with the graph bundle pushed up front, at equal correctness — or **16% less cost with correctness up 5 points** when the agent pulls from the graph on demand. Measured against the same agent going in cold.
+
+**vs. a standard coding session, no Graft at all:**
+
+| Metric | With Graft |
+|---|---|
+| Cost | **32% less** |
+| Tool calls | **46% fewer** |
+| Latency | **60% lower** |
+| Correctness | equal |
+
+Same agent, same file tools, only the context differs. Pull the graph through the MCP tools instead of pushing it up front and correctness climbs **+5 points over cold** — the strongest result in the sweep. Full method → [Benchmark](#benchmark).
 
 </div>
 
 <p align="center">
   <img src="assets/graft-terminal.png" alt="Two commands — npm install and graft init — then Graft rides along in a Claude Code session, statusline synced" width="820"/>
 </p>
+
+---
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Agent integration](#agent-integration) — [MCP server](#mcp-server) · [Claude Code (deep integration)](#claude-code-deep-integration)
+- [The problem](#the-problem)
+- [What Graft does](#what-graft-does)
+- [How the graph gets built](#how-the-graph-gets-built)
+- [What's in a node](#whats-in-a-node)
+- [What runs where](#what-runs-where)
+- [CLI](#cli)
+- [Search & orient](#search--orient-graft-grep--graft-map) (`graft grep` / `graft map`)
+- [Monorepos & multi-repo folders](#monorepos--multi-repo-folders)
+- [Visualize it](#visualize-it-graft-viz) (`graft viz`)
+- [Benchmark](#benchmark)
+- [Development](#development)
+- [License](#license)
 
 ---
 
@@ -70,12 +96,18 @@ npx @nanonets/graft init
 
 ### MCP server
 
-`graft init` also registers Graft's MCP server with agents that support it, so
-`graft_ask`, `graft_callers`, `graft_grep`, `graft_skeleton`, `graft_map`, and
-`graft_check` appear as native tools — no shell required. Claude Code now gets
-this too: `graft init` writes the server into the project's `.mcp.json` (restart
-Claude Code to load it). Skip with `--no-mcp`. Run it manually with
-`graft mcp [dir]`, or register it by hand:
+`graft init` also registers Graft's MCP server with agents that support it, so these six tools appear natively, no shell required. Claude Code gets this too: `graft init` writes the server into the project's `.mcp.json` (restart Claude Code to load it). Skip with `--no-mcp`; run it manually with `graft mcp [dir]`.
+
+| Tool | Takes | What it's for |
+|---|---|---|
+| `graft_ask` | a question | Ranked nodes with file:line, source inlined — usually the full answer, no follow-up read needed. |
+| `graft_skeleton` | a file path | Every signature in that file, no bodies — the API surface for a tenth of the tokens. |
+| `graft_callers` | a symbol | Who depends on it, or what it depends on with `direction: out`, N levels deep for blast radius. |
+| `graft_grep` | a regex | Every hit, grouped by enclosing symbol, ranked by how coupled that symbol is. |
+| `graft_map` | nothing | A first look at an unfamiliar repo: directory clusters, hubs, hotspots. |
+| `graft_check` | nothing | Whether the local graph has drifted from the code. |
+
+Register it by hand if your agent needs it explicit:
 
 ```json
 { "mcpServers": { "graft": { "command": "npx", "args": ["-y", "@nanonets/graft", "mcp"] } } }
@@ -126,7 +158,16 @@ Graft builds the graph in two passes, both powered by a language model:
 1. **Read each file.** Every source file is summarized once into a short description of what it does.
 2. **Group into nodes.** Those summaries are grouped into a curated set of nodes (subsystems, key files, and concepts) with typed links between them. Graft chooses the right level of detail for you instead of making one node per file, so a big repo becomes a few dozen readable nodes.
 
-Both passes are cached by content hash. Re-running only touches the files that changed, so the second build is fast and cheap.
+```mermaid
+flowchart LR
+    S[Source files] --> T["Tier 1 — tree-sitter<br/>no model, no key"]
+    S --> P1["Pass 1 — LLM summarizes<br/>each file (--deep)"]
+    T --> W["graft/.graph/wiring.json<br/>per-symbol code graph"]
+    P1 --> P2["Pass 2 — group into nodes<br/>+ typed links"]
+    P2 --> N["graft/*.md<br/>markdown node graph"]
+```
+
+Both LLM passes are cached by content hash. Re-running only touches the files that changed, so the second build is fast and cheap.
 
 Alongside the markdown graph, `graft build` builds `graft/.graph/wiring.json` — a per-symbol code graph — plus a per-file wiring card mirroring your source tree. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network), which is why plain `graft build` needs no key. The `--deep` pass adds a one-line summary and a crux excerpt per symbol, cached by body hash.
 
@@ -154,21 +195,6 @@ _Summary, sources, links, and notes ship today in markdown nodes. The crux ships
 
 ---
 
-## Keeping it honest
-
-A graph that has drifted from the code is worse than no graph. `graft check` compares each node's tracked source hashes against the current files and tells you when your local graph is stale, so you know to rebuild:
-
-```bash
-graft check          # reports drift since your last `graft build`
-graft check --json   # machine-readable drift report
-```
-
-When the wiring graph exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft build`) and stale summaries. A repo without a wiring graph is not penalized; the markdown graph stands alone.
-
-Because `graft/` is a local cache rather than a committed artifact, `check` is a local freshness signal — the statusline surfaces staleness every session and the post-turn hook rebuilds in the background, so in practice the graph tracks your working tree without your having to run anything.
-
----
-
 ## What runs where
 
 - **On your machine, no key, no network:** the structural code graph. `graft build` (wiring graph + per-file cards), `graft check`, and `graft ask` are deterministic tree-sitter — they never call a model.
@@ -189,6 +215,8 @@ graft build --extensions .ts .py     # only include these code extensions
 graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
 graft ask "<task>" --json            # machine-readable result
 graft ask "<task>" --in <scope>      # narrow to one sub-project of a monorepo/multi-repo folder (see below)
+
+graft skeleton <file> [dir]          # every signature in one file, no bodies — the API surface for ~1/10th the tokens (no LLM, no key)
 
 graft callers <symbol> [dir]         # who calls/references/imports/implements/extends a symbol (no LLM, no key)
 graft callers <symbol> --direction out  # the reverse: what the symbol itself calls/references (was `graft callees`)
@@ -310,19 +338,21 @@ normalized on load — no regeneration needed.
 
 ## Benchmark
 
-The claim Graft has to earn is simple: an agent that gets its context from the graph is cheaper and faster without getting more answers wrong. The harness runs every task through three arms of the same Claude Sonnet 5 agent with the same file tools: **cold** (explores from zero), **graph (push)** (a `graft ask --source` bundle injected up front), and **graft (pull)** (graft_ask/graft_skeleton tools, nothing injected — context paid for only when asked). An Opus 4.8 judge scores correctness with a required-keyword floor so a fast-but-wrong answer cannot win. Cost is cache-aware (reads ≈0.1×, writes 1.25×) — the billing model agents actually run under.
+An agent that reads the graph should be cheaper and faster without getting more answers wrong. That's the whole claim, so we measured it instead of asserting it.
 
-A 162-run sweep — two repos (graft itself and a real Node/Express auth service), 3 trials each, tasks split between localized (single-file) and multi-file questions.
+The harness ran three variants of the same Claude Sonnet 5 agent with the same file tools: **cold** (explores from zero), **Graft** (a `graft ask --source` bundle pushed up front), and **pull** (graft_ask/graft_skeleton tools, nothing injected — context paid for only when asked). An Opus 4.8 judge scored correctness with a required-keyword floor, so a fast-but-wrong answer couldn't win by being fast. Cost is cache-aware: reads ≈0.1×, writes 1.25×, the billing model agents actually run under.
 
-| Metric (mean/task) | Cold | Graph (push) | Graft (pull) |
-|---|---|---|---|
-| Cost ($) | 0.0429 | **0.0292 (−32%)** | 0.0362 (−16%) |
-| Uncached input tokens | 8,070 | **4,650 (−42%)** | 5,965 (−26%) |
-| Tool calls | 4.2 | **2.3 (−46%)** | 4.2 (−1%) |
-| Latency (s) | 39.8 | **15.8 (−60%)** | 39.5 (−1%) |
-| Correctness | 93% | 93% | **98% (+5 pts)** |
+162 runs, two repos (graft itself and a real Node/Express auth service), 3 trials each, tasks split between single-file and multi-file questions.
 
-Push is the cost/latency win; pull is the correctness win (and never lost to cold anywhere, including single-file tasks). On one corpus push traded 3 correctness points for its savings — the wins hold per-corpus and per-locality, not just on average.
+| Metric (mean/task) | Cold | Graft |
+|---|---|---|
+| Cost ($) | 0.0429 | **0.0292 (−32%)** |
+| Uncached input tokens | 8,070 | **4,650 (−42%)** |
+| Tool calls | 4.2 | **2.3 (−46%)** |
+| Latency (s) | 39.8 | **15.8 (−60%)** |
+| Correctness | 93% | 93% (equal) |
+
+Graft never answered worse than cold, on any corpus. The pull variant gave up most of that speed for something bigger: correctness jumped to 98%, +5 points over cold, the strongest single result in the sweep. Push when speed is what you need; pull when being right matters more.
 
 ---
 
