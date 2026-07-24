@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+### Changed
+
+- **`graft/` is now a local, git-ignored cache, not a committed artifact.** Every
+  `graft build` adds `graft/` to the repo's `.gitignore` itself, so the graph is
+  regenerated locally (like `node_modules`) rather than shared through git. Commit
+  `.claude/` (hooks, skill, statusline, `.mcp.json`) so teammates' agents pick graft
+  up; each teammate runs `graft build` for their own graph. `graft check` is now a
+  local freshness signal rather than a CI merge gate.
+
+### Removed
+
+- The `bench/` benchmark harness is no longer part of the published repo.
+
 ## 0.6.0
 
 Consolidates the structural-traversal surface and wires the MCP server into

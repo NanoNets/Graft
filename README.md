@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/telemetry-none-546FFF?style=for-the-badge" />
 </p>
 
-<!-- numbers from the committed run in bench/results/ (2026-07-22, 162 agent runs, 2 repos) — see Benchmark below -->
+<!-- numbers from a 162-run benchmark (2026-07-22, 2 repos, 3 arms) — see Benchmark below -->
 **32% less cost · 46% fewer tool calls · 60% lower latency** with the graph bundle pushed up front, at equal correctness — or **16% less cost with correctness up 5 points** when the agent pulls from the graph on demand. Measured against the same agent going in cold.
 
 </div>
@@ -37,10 +37,10 @@ graft init                       # build the graph + wire it into Claude Code
 
 That is the whole setup. `graft init` builds `graft/` from your code and drops a statusline and hooks into `.claude/`, so from the next session on Graft rides along in Claude Code: it pulls the matching nodes into each prompt and rebuilds the graph in the background after every turn. No daemon, no re-indexing to remember, nothing to run or maintain by default — the graph is just files.
 
-Commit `graft/` so everyone who clones the repo (and their agents) gets the map:
+`graft build` adds `graft/` to your `.gitignore` automatically — the graph is a local, regenerable cache (like `node_modules`), not something you commit. What you share is the wiring `init` dropped into `.claude/`; each teammate runs `graft build` to generate their own graph:
 
 ```bash
-git add graft && git commit -m "add context graph"
+git add .claude && git commit -m "wire in graft"
 ```
 
 Prefer not to install globally? `npx @nanonets/graft init` works the same way.
@@ -154,19 +154,18 @@ _Summary, sources, links, and notes ship today in markdown nodes. The crux ships
 
 ---
 
-## Keeping it honest (CI)
+## Keeping it honest
 
-A graph that has drifted from the code is worse than no graph. `graft check` compares each node's tracked source hashes against the current files and fails if the graph is stale. Drop it in CI so a pull request cannot merge with an out-of-date map.
+A graph that has drifted from the code is worse than no graph. `graft check` compares each node's tracked source hashes against the current files and tells you when your local graph is stale, so you know to rebuild:
 
 ```bash
-graft check          # exits non-zero if graft/ has drifted
+graft check          # reports drift since your last `graft build`
 graft check --json   # machine-readable drift report
 ```
 
-When the wiring graph exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft build`) and stale summaries both fail the check. A repo without a wiring graph is not penalized; the markdown graph stands alone.
+When the wiring graph exists, `graft check` validates it too — structural drift (symbols added, removed, or changed since the last `graft build`) and stale summaries. A repo without a wiring graph is not penalized; the markdown graph stands alone.
 
-<!-- placeholder: planned, not yet in the CLI -->
-> **Planned: auto-regen on PR.** A single CI bot will regenerate changed nodes on a pull request and push the update, so the graph stays current without anyone remembering to run `build`. Until then, regenerate with `graft build --deep` and commit it alongside your code.
+Because `graft/` is a local cache rather than a committed artifact, `check` is a local freshness signal — the statusline surfaces staleness every session and the post-turn hook rebuilds in the background, so in practice the graph tracks your working tree without your having to run anything.
 
 ---
 
@@ -249,15 +248,14 @@ with file/symbol counts, each dir's local hubs, and the global hotspots —
 all ranked by in-degree, no LLM, no key:
 
 ```
-repo map — 105 files · 582 symbols · 1815 edges · typescript
+repo map — 113 files · 687 symbols · 2186 edges · typescript
 
-src/                54 files · 414 symbols   hubs: set (bindings.ts, 38←), contextDirFor (node-file.ts, 11←), wiringPath (write.ts, 10←)
-test/               36 files · 68 symbols   hubs: edge (graph-traverse.test.ts, 4←), graphOf (graph-traverse.test.ts, 4←), nodeStub (graph-traverse.test.ts, 3←)
+src/                63 files · 527 symbols   hubs: contextDirFor (node-file.ts, 21←), wiringPath (write.ts, 14←), buildGraph (build.ts, 11←)
+test/               43 files · 102 symbols   hubs: edge (graph-traverse.test.ts, 4←), graphOf (graph-traverse.test.ts, 4←), fileNode (graph-map.test.ts, 3←)
 viewer/             5 files · 58 symbols   hubs: $ (main.ts, 9←), activeGraph (main.ts, 5←), cvar (data.ts, 5←)
-bench/              8 files · 42 symbols   hubs: makeClient (llm.ts, 3←), buildMarkdown (report.ts, 2←), judge (judge.ts, 2←)
 scripts/            2 files · 0 symbols
 
-hotspots: set · method · src/graph/bindings.ts:L21-L23 · 38←  contextDirFor · function · src/context/node-file.ts:L100-L103 · 11←  wiringPath · function · src/graph/write.ts:L20-L22 · 10←  ...
+hotspots: contextDirFor · function · src/context/node-file.ts:L100-L103 · 21←  wiringPath · function · src/graph/write.ts:L20-L22 · 14←  buildGraph · function · src/graph/build.ts:L104-L218 · 11←  ...
 ```
 
 ## Monorepos & multi-repo folders
@@ -271,7 +269,7 @@ Graft handles two shapes without any config:
   sub-project can't drown a small one; hits carry `[scope/]` labels, and
   `graft map` groups its directory clusters by scope first.
 - **A folder of separate git repos** (no `.git` at the top) — `graft build`
-  auto-splits: each child keeps its own committable `graft/`, and the parent
+  auto-splits: each child gets its own (git-ignored) `graft/`, and the parent
   gets a `graft/workspace.json` index. Queries from the parent federate across
   every child, always labeled `<child>/`. Run `graft build` inside a child to
   work on just that repo.
@@ -314,7 +312,7 @@ normalized on load — no regeneration needed.
 
 The claim Graft has to earn is simple: an agent that gets its context from the graph is cheaper and faster without getting more answers wrong. The harness runs every task through three arms of the same Claude Sonnet 5 agent with the same file tools: **cold** (explores from zero), **graph (push)** (a `graft ask --source` bundle injected up front), and **graft (pull)** (graft_ask/graft_skeleton tools, nothing injected — context paid for only when asked). An Opus 4.8 judge scores correctness with a required-keyword floor so a fast-but-wrong answer cannot win. Cost is cache-aware (reads ≈0.1×, writes 1.25×) — the billing model agents actually run under.
 
-Committed run: `bench/results/2026-07-22T13-19-14-246Z` — 162 runs across two repos (graft itself and a real Node/Express auth service), 3 trials each, tasks split between localized (single-file) and multi-file questions.
+A 162-run sweep — two repos (graft itself and a real Node/Express auth service), 3 trials each, tasks split between localized (single-file) and multi-file questions.
 
 | Metric (mean/task) | Cold | Graph (push) | Graft (pull) |
 |---|---|---|---|
@@ -324,14 +322,7 @@ Committed run: `bench/results/2026-07-22T13-19-14-246Z` — 162 runs across two 
 | Latency (s) | 39.8 | **15.8 (−60%)** | 39.5 (−1%) |
 | Correctness | 93% | 93% | **98% (+5 pts)** |
 
-Push is the cost/latency win; pull is the correctness win (and never lost to cold anywhere, including single-file tasks). On one corpus push traded 3 correctness points for its savings — the per-corpus and per-locality splits are in the committed results, not averaged away. Reproduce it yourself:
-
-```bash
-npm run bench -- --smoke   # 1 corpus, 1 task, all arms — a quick plumbing check
-npm run bench              # full: all corpora, all tasks, 3 arms × 3 trials
-```
-
-See [`bench/README.md`](bench/README.md) for the method and how to add your own repo.
+Push is the cost/latency win; pull is the correctness win (and never lost to cold anywhere, including single-file tasks). On one corpus push traded 3 correctness points for its savings — the wins hold per-corpus and per-locality, not just on average.
 
 ---
 

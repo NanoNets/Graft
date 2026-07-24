@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
-import { contextDirFor } from "../context/node-file.js";
+import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { extractFile, languageOf, type Language, type RawEdge } from "./extract.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
@@ -169,6 +169,9 @@ export async function buildGraph(
   };
 
   const graphPath = writeGraph(graph, outDir);
+  // The graph is a local, regenerable cache — make sure git ignores it. Runs on
+  // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
+  ensureGitignored(root, outDir);
   // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build
   // time (~45% of query time on a 32k-node graph, profiled). Lives in the
   // cache dir; `ask` falls back to live tokenization when it's absent/stale.

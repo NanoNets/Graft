@@ -6,6 +6,7 @@
  * this file only renders them and wires the child builds through the engine.
  */
 import { Graft } from "../engine.js";
+import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import type { EngineConfig } from "../ai/providers.js";
 import { formatAsk } from "../ask/ask.js";
 import type { Direction } from "./traverse.js";
@@ -52,8 +53,11 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
       console.error(`building ${children.length} workspace repos: ${children.join(", ")}`);
     },
   );
+  // Each child self-ignored during its own build; the parent's federation
+  // index (graft/workspace.json) is written outside buildGraph, so ignore it here too.
+  ensureGitignored(root, contextDirFor(root, opts.override));
   console.log(`✓ workspace: ${children.length} repos federated → graft/workspace.json`);
-  console.log(`  commit each repo's graft/ and this folder's graft/workspace.json.`);
+  console.log(`  graft/ is git-ignored — each teammate runs \`graft build\` to regenerate it locally.`);
 }
 
 export function runWorkspaceAsk(

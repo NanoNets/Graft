@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Context Graph — read the graph before you work</title>
-<meta name="description" content="Point it at a repo and it builds a context graph — a folder of linked markdown files that lives in the repo and stays in sync with the code through git. Agents that read it first use 31% fewer tool calls." />
+<meta name="description" content="Point it at a repo and it builds a context graph — a folder of linked markdown files, built locally in one command and kept fresh as the code changes. Agents that read it first use 31% fewer tool calls." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -235,8 +235,8 @@
       <h1><em>31%</em> fewer tool calls. <em>23%</em> less cost. <em>17%</em> lower latency.</h1>
       <p class="hero-sub">
         That's what your agent gets from reading the repo's context graph before it works.
-        The graph is a folder of plain markdown files in the repo, kept in sync with the code
-        through git — so <b>anyone who clones the repo has it, no setup.</b>
+        The graph is a folder of plain markdown files, built from your code in one command and
+        kept fresh as you work — <b>no server, no database, no keys.</b>
       </p>
       <div class="hero-actions">
         <button class="cmd" id="copy-cmd" type="button" aria-label="Copy command">
@@ -247,7 +247,7 @@
         <a class="btn" href="https://github.com/NanoNets/context-graph-engine">View source</a>
       </div>
       <p class="hero-note">
-        No database, no server, no embeddings — just files in git.
+        No database, no server, no embeddings — just files, built locally.
         <a href="#quickstart">Set it up in about a minute</a>.
       </p>
     </div>
@@ -259,7 +259,7 @@
         <span class="corner bl"></span><span class="corner br"></span>
         <div class="panel-head">
           <span>graft/ — 41 entities</span>
-          <span class="live"><i></i>tracked in git</span>
+          <span class="live"><i></i>local · git-ignored</span>
         </div>
         <div class="fg-body">
           <span class="muted">graft/</span><br />
@@ -277,7 +277,7 @@
         </div>
         <div class="panel-foot">
           <span>the files are nodes, the links are edges</span>
-          <span class="add" id="diff">billing.md changed in the same PR as the code</span>
+          <span class="add" id="diff">billing.md rebuilt when the code changed</span>
         </div>
       </div>
     </div>
@@ -287,9 +287,9 @@
 <section id="how" class="section-pad">
   <div class="wrap">
     <p class="kicker">How it works</p>
-    <h2>Push builds it. Clone pulls it. Your agent reads it.</h2>
+    <h2>Build it. It rides along. Your agent reads it.</h2>
     <p class="section-sub">
-      No pipelines, no server to run. The graph is files in the repo, so git does the syncing.
+      No pipelines, no server to run. The graph is a local cache that rebuilds itself; commit the <code>.claude/</code> wiring and every teammate's agent picks it up.
     </p>
     <div class="steps">
       <div class="step">
@@ -300,9 +300,9 @@
       </div>
       <div class="step">
         <p class="n">02</p>
-        <h3>Commit it</h3>
-        <p>The graph is just files in git, so git is the sync. Anyone who clones has it, and CI keeps it fresh — you see the graph diff next to the code, in the same PR.</p>
-        <div class="art">$ git add graft<br /><b>auth-service.md</b> <span class="hl">+3 −1</span> · alongside the code</div>
+        <h3>It rides along</h3>
+        <p>The graph is a local, git-ignored cache — <code>graft build</code> adds it to <code>.gitignore</code> for you. Commit the <code>.claude/</code> wiring instead; every teammate runs <code>graft build</code> for their own, and it rebuilds in the background as the code changes.</p>
+        <div class="art">$ git add .claude<br /><b>graft/</b> <span class="hl">git-ignored</span> · rebuilt locally</div>
       </div>
       <div class="step">
         <p class="n">03</p>
@@ -350,10 +350,10 @@
       <span class="corner tl"></span><span class="corner tr"></span>
       <span class="corner bl"></span><span class="corner br"></span>
       <pre><span class="c"># in your repo</span>
-<span class="hl">graft build --deep</span>  <span class="c"># builds graft/ from your code</span>
-git add graft &amp;&amp; git commit
+<span class="hl">graft build --deep</span>  <span class="c"># builds graft/ (git-ignored, local)</span>
+git add .claude &amp;&amp; git commit  <span class="c"># share the wiring; teammates build their own</span>
 
-<span class="c"># keep it honest — fails CI if the graph is stale</span>
+<span class="c"># keep it fresh — reports drift since your last build</span>
 <span class="hl">graft check</span></pre>
     </div>
     <p class="quick-note">

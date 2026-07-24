@@ -2,13 +2,10 @@ node_modules/
 dist/
 *.log
 
-# The graph's local LLM-call cache — regenerated, never committed. Everything
-# else in graft/ (concept nodes, wiring cards, .graph/wiring.json, manifest.json)
-# IS committed — it's the lockfile teammates and their agents read.
-graft/.cache/
-
-# Benchmark run artifacts (regenerated per run)
-bench/results/
+# graft's local graph cache — regenerable, not committed. Each dev runs
+# `graft build` locally (it re-adds this line itself), so the folder is a
+# personal cache like node_modules, never a shared artifact.
+graft/
 
 # Env
 .env

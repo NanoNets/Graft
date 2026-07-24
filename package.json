@@ -46,7 +46,6 @@
     "build": "tsc -p tsconfig.json && tsc -p viewer/tsconfig.json && node scripts/build-viewer.mjs",
     "dev": "tsc -p tsconfig.json --watch",
     "cli": "tsx src/cli.ts",
-    "bench": "tsx bench/run.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",

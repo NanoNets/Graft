@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { buildContext } from "../src/context/build.js";
 import { checkContext } from "../src/context/check.js";
+import { contextDirFor, ensureGitignored } from "../src/context/node-file.js";
 import { fakeProviders } from "./helpers.js";
 
 // CLI-spawn helper (same pattern as test/graph-traverse-cli.test.ts) — these tests
@@ -206,6 +207,68 @@ test("graft check: keyless build then code changes (wiring stale) exits 1", () =
     const r = runCli(["check", dir]);
     assert.equal(r.status, 1, `expected exit 1, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.match(r.stdout, /graph check: STALE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ensureGitignored — every `graft build` self-ignores its regenerable graph dir.
+test("ensureGitignored: creates .gitignore with the graft/ entry when none exists", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgi-"));
+  try {
+    ensureGitignored(dir, contextDirFor(dir));
+    const gi = readFileSync(join(dir, ".gitignore"), "utf8");
+    assert.match(gi, /^graft\/$/m);
+    assert.match(gi, /regenerable, not committed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureGitignored: appends to an existing .gitignore without clobbering it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgi-"));
+  try {
+    writeFileSync(join(dir, ".gitignore"), "node_modules/\ndist/\n");
+    ensureGitignored(dir, contextDirFor(dir));
+    const gi = readFileSync(join(dir, ".gitignore"), "utf8");
+    assert.match(gi, /node_modules\//);
+    assert.match(gi, /dist\//);
+    assert.match(gi, /^graft\/$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureGitignored: idempotent — a second build adds nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgi-"));
+  try {
+    ensureGitignored(dir, contextDirFor(dir));
+    const once = readFileSync(join(dir, ".gitignore"), "utf8");
+    ensureGitignored(dir, contextDirFor(dir));
+    const twice = readFileSync(join(dir, ".gitignore"), "utf8");
+    assert.equal(once, twice);
+    assert.equal((twice.match(/^graft\/$/gm) ?? []).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureGitignored: recognizes a pre-existing bare `graft` entry (no slash) and stays silent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgi-"));
+  try {
+    writeFileSync(join(dir, ".gitignore"), "graft\n");
+    ensureGitignored(dir, contextDirFor(dir));
+    assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), "graft\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureGitignored: no-op when the graph dir is outside the repo root", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgi-"));
+  try {
+    ensureGitignored(dir, join(tmpdir(), "somewhere-else-graft"));
+    assert.equal(existsSync(join(dir, ".gitignore")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -99,7 +99,8 @@ test('formatInitEpilogue: graph built shows stats, wordmark, and the 3-step list
   assert.ok(out.includes('graft ask'));
   assert.ok(!out.includes('build the graph'));
   assert.ok(!out.includes('OPENROUTER'));
-  assert.ok(out.includes('git add graft'));
+  // graft/ is git-ignored now — the shareable artifact is .claude (wiring), not the graph.
+  assert.ok(out.includes('git add .claude'));
 });
 
 test('formatInitEpilogue: graph not built shows "build the graph" as step 1, no stats, same column alignment', () => {
@@ -110,7 +111,7 @@ test('formatInitEpilogue: graph not built shows "build the graph" as step 1, no 
   assert.ok(notBuilt.includes('3. code as usual'));
   assert.ok(notBuilt.includes('4. explore by hand'));
   assert.ok(!notBuilt.includes('nodes ·'));
-  assert.ok(notBuilt.includes('git add graft'));
+  assert.ok(notBuilt.includes('git add .claude'));
   // the command column (after "restart your agent", the longest label) lines up
   // identically whether there are 3 or 4 numbered steps.
   const col = (text: string, marker: string) => text.split('\n').find((l) => l.includes(marker))!.indexOf('a new session');
@@ -128,7 +129,7 @@ test('CLI: graft init epilogue has the wordmark + next steps, and never mentions
   assert.ok(res.stderr.includes('|___/'), 'wordmark present');
   assert.ok(res.stderr.includes('code as usual'));
   assert.ok(res.stderr.includes('restart your agent'));
-  assert.ok(res.stderr.includes('git add graft'));
+  assert.ok(res.stderr.includes('git add .claude'));
   assert.ok(res.stderr.includes('graft ask'));
   assert.ok(!res.stderr.includes('OPENROUTER'));
   // --no-build, never built before → "build the graph" is step 1

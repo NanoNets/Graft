@@ -170,7 +170,7 @@ program
     for (const e of g.errors) console.error(`✗ ${e}`);
 
     const rel = relative(process.cwd(), g.contextDir) || "graft";
-    console.log(`  commit it:  git add ${rel} && git commit -m "update graft"`);
+    console.log(`  ${rel}/ is git-ignored (added automatically) — a local cache; teammates run \`graft build\` to get their own.`);
   });
 
 program

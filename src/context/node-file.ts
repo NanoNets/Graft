@@ -22,7 +22,7 @@
  * LLM and without re-reading every node body.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
 
@@ -100,6 +100,32 @@ export function digestSources(sources: SourceRef[]): string {
 export function contextDirFor(root: string, override?: string): string {
   if (override) return override;
   return join(root, "graft");
+}
+
+/**
+ * Make sure the repo's root `.gitignore` ignores the graft output dir. The
+ * graph is a local, regenerable cache (like `node_modules`), not a committed
+ * artifact, so every `graft build` adds the entry itself the first time — the
+ * user never has to think about it. No-ops when the entry is already present
+ * or the dir lives outside `root` (a custom `--dir` elsewhere, which can't be
+ * expressed as a repo-relative ignore). Best-effort: an unwritable `.gitignore`
+ * must never abort a build, so write failures are swallowed.
+ */
+export function ensureGitignored(root: string, contextDir: string): void {
+  const rel = relative(root, contextDir).split(sep).join("/");
+  if (rel === "" || rel.startsWith("..")) return; // dir is at/above the repo root — nothing sane to ignore
+  const entry = `${rel.replace(/\/+$/, "")}/`;
+  const path = join(root, ".gitignore");
+  let current = "";
+  try { current = readFileSync(path, "utf8"); } catch { /* no .gitignore yet — we create one */ }
+  const present = current.split("\n").some((l) => {
+    const t = l.trim();
+    return t === entry || t === rel;
+  });
+  if (present) return;
+  const gap = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+  const block = `${gap}# graft's local graph cache — regenerable, not committed (run \`graft build\`).\n${entry}\n`;
+  try { writeFileSync(path, current + block); } catch { /* best-effort — build already succeeded */ }
 }
 
 /** Render the generated body (Summary + Related) for a node. */

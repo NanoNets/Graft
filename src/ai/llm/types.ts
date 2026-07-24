@@ -2,7 +2,7 @@
  * Provider-neutral chat transport.
  *
  * Every LLM call in graft — the engine's single-shot summarize/synthesize/crux
- * ops AND the benchmark's multi-turn ReAct loop — goes through one interface,
+ * ops, and any multi-turn tool-use loop built on top — goes through one interface,
  * {@link ChatModel}. Adapters translate this neutral shape to a concrete SDK
  * (OpenAI-compatible or native Anthropic). Nothing above this layer knows which
  * provider is in play, so adding a provider is a new adapter, never a change to
@@ -39,7 +39,7 @@ export interface Message {
   /**
    * Request a provider cache marker (`cache_control: ephemeral`) on THIS message.
    * The transport only understands this per-message flag; any sliding/rotation
-   * policy lives in the caller (see the bench loop).
+   * policy lives in the caller.
    */
   cacheBreakpoint?: boolean;
   /**

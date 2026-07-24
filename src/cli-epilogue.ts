@@ -79,7 +79,7 @@ export function formatInitEpilogue(opts: InitEpilogueOptions): string {
     }
   });
 
-  const closing = `${indent}when it clicks: git add graft .claude && git commit — every teammate's agent gets the map`;
+  const closing = `${indent}share it: git add .claude && git commit — teammates run \`graft build\` for their own local graph`;
 
   return [...wordmark, "", ...stepLines, "", closing].join("\n");
 }
