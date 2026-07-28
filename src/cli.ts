@@ -28,6 +28,9 @@ import {
   runWorkspaceMap,
 } from "./graph/workspace-cli.js";
 import { formatInitEpilogue } from "./cli-epilogue.js";
+import { planInit } from "./hosts/plan.js";
+import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
+import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
 
 const program = new Command();
@@ -432,7 +435,10 @@ program
   .option("--list-agents", "list known agent ids and exit")
   .option("--no-mcp", "skip MCP server registration for other agents")
   .option("--no-hooks", "skip hook installation for other agents")
-  .action((dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean; hooks?: boolean }) => {
+  .option("--dry-run", "print every file init would touch, then exit without writing")
+  .option("-y, --yes", "skip the picker and wire every detected agent (the pre-0.8 default)")
+  .option("--no-global", "skip writes outside this repo (the ~/.codex/ config + hooks)")
+  .action(async (dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean; hooks?: boolean; dryRun?: boolean; yes?: boolean; global?: boolean }) => {
     if (opts.listAgents) {
       for (const id of [...hostIds(), "claude"]) console.log(id);
       return;
@@ -449,7 +455,42 @@ program
       }
     }
 
-    const wantClaude = !explicit || explicit.includes("claude");
+    // Which agents to wire, decided before anything is written. Explicit flags
+    // win; otherwise prompt on a TTY, and on a pipe write nothing rather than
+    // guessing (pre-0.8 this silently wired every agent the machine had ever
+    // installed — see --yes to get that back).
+    const home = homedir();
+    const plan = planInit(repo, { home });
+    const detectedIds = plan.filter((p) => p.detected).map((p) => p.id);
+    const noAgents = (opts as { agents?: unknown }).agents === false;
+
+    let ids: string[];
+    if (explicit) ids = explicit;
+    else if (opts.allAgents) ids = plan.map((p) => p.id);
+    else if (noAgents) ids = ["claude"];
+    else if (opts.yes || opts.dryRun) ids = detectedIds;
+    else if (process.stdin.isTTY && process.stderr.isTTY) {
+      const picked = await runPicker(plan, repo, home);
+      if (picked === null) {
+        console.error("· cancelled — nothing written");
+        return;
+      }
+      ids = picked;
+    } else {
+      console.error(formatNonInteractiveHelp(detectedIds));
+      return;
+    }
+
+    if (opts.dryRun) {
+      console.error(formatPlan(plan, ids, repo, home));
+      return;
+    }
+    if (ids.length === 0) {
+      console.error("· no agents selected — nothing written");
+      return;
+    }
+
+    const wantClaude = ids.includes("claude");
 
     if (wantClaude) {
       const cliPath = fileURLToPath(import.meta.url);
@@ -467,19 +508,21 @@ program
       for (const w of res.warnings) console.error(`⚠ ${w}`);
     }
 
-    const skipOthers = (opts as { agents?: unknown }).agents === false;
-    if (!skipOthers) {
+    // `ids` is already resolved, so hosts init is always driven by an explicit
+    // list — never by its own detection fallback.
+    const others = ids.filter((id) => id !== "claude");
+    if (others.length > 0) {
       const r = runHostsInit(repo, {
-        agents: explicit?.filter((id) => id !== "claude"),
-        all: opts.allAgents,
+        agents: others,
+        home,
         mcp: opts.mcp,
         hooks: opts.hooks,
+        global: opts.global,
       });
       for (const w of r.written) console.error(`✓ ${w.id}: ${w.path} (${w.action})`);
-      if (!explicit && !opts.allAgents && r.written.length === 0)
-        console.error("· no other agents detected (see --list-agents / --all-agents)");
       for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
       for (const h of r.hooks) console.error(`✓ hook ${h.id}: ${h.path} (${h.action})`);
+      if (opts.global === false) console.error("· skipped out-of-repo writes (--no-global)");
     }
 
     const globalOpts = program.opts<{ dir?: string }>();

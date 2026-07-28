@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0
+
+### Changed
+
+- **`graft init` now asks which agents to wire, instead of writing files for every
+  agent it detects.** Detection keyed off directories in `$HOME`, so anyone who had
+  tried several coding CLIs got instruction files and MCP configs for all of them —
+  plain `graft init` effectively behaved like `--all-agents`. On a terminal it now
+  shows every known agent, which ones were detected, and the exact files each would
+  write, and wires only what you select (Claude Code pre-selected).
+
+  **Migration —** `graft init` in CI, a Dockerfile, or any non-interactive shell now
+  writes **nothing** and prints the command to run instead. Add `--yes` for the old
+  behaviour, or `--agents <ids>` to be explicit:
+
+  ```bash
+  graft init --yes                  # wire every detected agent (pre-0.8 default)
+  graft init --agents claude        # or name them
+  ```
+
+### Added
+
+- **`graft init --dry-run`** — print every path `init` would touch, then exit without
+  writing. Out-of-repo writes get their own section.
+- **`graft init --no-global`** — skip every write outside the repo. Selecting the
+  `agents` host writes to `~/.codex/config.toml`, `~/.codex/hooks.json`, and
+  `~/.codex/hooks/graft/`; those are user-level and apply to every repo you open with
+  Codex, and previously nothing suppressed the `config.toml` write (`--no-hooks` only
+  covered the other two). These are now labelled `machine-wide` in the picker.
+- **`graft init --yes`** — wire every detected agent without prompting.
+
 ## 0.7.0
 
 ### Changed

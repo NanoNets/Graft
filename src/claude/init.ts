@@ -1,11 +1,30 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { mergeGraftSettings } from './settings-merge.js';
 import { statuslineShim, hooksShim } from './shim-template.js';
 import { skillTemplate } from './skill-template.js';
 import { claudeDistDir } from './paths.js';
 import { mergeJsonKey, SERVER_ENTRY, type McpWrite } from '../hosts/mcp-config.js';
+import type { PlannedWrite } from '../hosts/plan.js';
+
+/**
+ * The files `runInit` writes — pure, no writes, so `--dry-run` and the picker
+ * can report them up front. All repo-local: the Claude Code layer never writes
+ * outside the project.
+ */
+export function claudeTargets(dir: string): PlannedWrite[] {
+  const t = (path: string, what: string, kind: PlannedWrite['kind'] = 'claude'): PlannedWrite =>
+    ({ hostId: 'claude', id: 'claude', path, scope: 'repo', kind, what });
+  return [
+    t(join(dir, '.claude', 'settings.json'), 'graft statusline + hook blocks'),
+    t(join(dir, '.claude', 'helpers', 'graft-statusline.cjs'), 'statusline shim'),
+    t(join(dir, '.claude', 'helpers', 'graft-hooks.cjs'), 'hooks shim'),
+    t(join(dir, '.claude', 'skills', 'graft', 'SKILL.md'), 'graft skill'),
+    // Tagged 'mcp' so the picker doesn't label Claude Code as having no MCP.
+    t(join(dir, '.mcp.json'), 'mcpServers.graft', 'mcp'),
+  ];
+}
 
 export interface InitResult {
   settingsPath: string;
@@ -18,32 +37,33 @@ export interface InitResult {
 }
 
 export function runInit(dir: string, opts: { build?: boolean; cliPath?: string } = {}): InitResult {
-  const helpersDir = join(dir, '.claude', 'helpers');
-  mkdirSync(helpersDir, { recursive: true });
+  // Same list `--dry-run` and the picker report, so the two can't drift apart.
+  const [settings, statusline, hooks, skill, mcpTarget] = claudeTargets(dir).map((t) => t.path);
 
-  const settingsPath = join(dir, '.claude', 'settings.json');
+  mkdirSync(dirname(statusline), { recursive: true });
+
+  const settingsPath = settings;
   let existing: Record<string, any> = {};
   try { existing = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { /* none/invalid → start fresh */ }
   const { merged, warnings } = mergeGraftSettings(existing);
   writeFileSync(settingsPath, `${JSON.stringify(merged, null, 2)}\n`);
 
-  const sl = join(helpersDir, 'graft-statusline.cjs');
-  const hk = join(helpersDir, 'graft-hooks.cjs');
+  const sl = statusline;
+  const hk = hooks;
   const bakedDir = claudeDistDir(); // absolute <pkg>/dist/claude — the shims' primary resolution path
   writeFileSync(sl, statuslineShim(bakedDir)); chmodSync(sl, 0o755);
   writeFileSync(hk, hooksShim(bakedDir)); chmodSync(hk, 0o755);
 
   // Install the graft skill — the piece that redirects the agent to graft/ before it
   // greps source. Overwritten each run (graft owns this file), like the shims above.
-  const skillDir = join(dir, '.claude', 'skills', 'graft');
-  mkdirSync(skillDir, { recursive: true });
-  const skillPath = join(skillDir, 'SKILL.md');
+  const skillPath = skill;
+  mkdirSync(dirname(skillPath), { recursive: true });
   writeFileSync(skillPath, skillTemplate());
 
   // Register the graft MCP server in the project's .mcp.json so Claude Code
   // exposes graft_ask/graft_callers/etc. as tools — the same keyed merge the
   // other hosts use (existing servers preserved; unparseable files skipped).
-  const mcp = mergeJsonKey('claude', join(dir, '.mcp.json'), 'mcpServers', SERVER_ENTRY);
+  const mcp = mergeJsonKey('claude', mcpTarget, 'mcpServers', SERVER_ENTRY);
 
   let built = false;
   const wiring = join(dir, 'graft', '.graph', 'wiring.json');

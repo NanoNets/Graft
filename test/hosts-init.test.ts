@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { runHostsInit } from '../src/hosts/init.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-hostsinit-')); }
@@ -135,4 +135,91 @@ test('hooks: false skips hook installation', () => {
   const r = runHostsInit(repo, { home, agents: ['agents'], hooks: false });
   assert.deepEqual(r.hooks, []);
   assert.ok(!existsSync(join(home, '.codex', 'hooks.json')));
+});
+
+test('global: false keeps the instruction file but skips every ~ write', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  const r = runHostsInit(repo, { home, agents: ['agents'], global: false });
+
+  assert.deepEqual(r.written.map((w) => w.id), ['agents']);
+  assert.ok(existsSync(join(repo, 'AGENTS.md')));
+  assert.deepEqual(r.hooks, []);
+  assert.ok(!existsSync(join(home, '.codex', 'hooks.json')));
+  assert.ok(!existsSync(join(home, '.codex', 'config.toml')));
+  // The repo-local opencode MCP config is not a global write, so it survives.
+  assert.deepEqual(r.mcp.map((m) => m.id), ['opencode']);
+  assert.ok(existsSync(join(repo, 'opencode.json')));
+});
+
+// --- CLI: choosing what gets written ------------------------------------
+
+/**
+ * Run `graft init` with a scratch HOME so tests never touch the real ~/.codex,
+ * and return stderr. The child gets a pipe rather than a TTY, which is exactly
+ * the non-interactive path we want to exercise.
+ */
+function cliStderr(repo: string, home: string, extra: string[] = []): string {
+  const res = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', 'src/cli.ts', 'init', repo, '--no-build', ...extra],
+    { encoding: 'utf8', env: { ...process.env, HOME: home } },
+  );
+  assert.equal(res.status, 0, `exited ${res.status}: ${res.stderr}`);
+  return res.stderr ?? '';
+}
+
+test('CLI: no flags and no TTY writes nothing and names the detected agents', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.cursor'));
+  const out = cliStderr(repo, home);
+  assert.match(out, /nothing written/);
+  assert.match(out, /detected: claude, cursor/);
+  assert.match(out, /graft init --agents claude cursor/);
+  assert.deepEqual(readdirSync(repo), []);
+});
+
+test('CLI: --dry-run prints the plan, both sections, and writes nothing', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const out = cliStderr(repo, home, ['--dry-run']);
+
+  assert.match(out, /would write — this repo:/);
+  assert.match(out, /\.claude\/settings\.json/);
+  assert.match(out, /AGENTS\.md/);
+  assert.match(out, /affects ALL repos:/);
+  assert.match(out, /~\/\.codex\/hooks\.json/);
+  assert.match(out, /nothing was written/);
+
+  assert.deepEqual(readdirSync(repo), []);
+  assert.ok(!existsSync(join(home, '.codex', 'hooks.json')));
+});
+
+test('CLI: --yes wires every detected agent (the pre-0.8 default)', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.cursor'));
+  cliStderr(repo, home, ['--yes']);
+  assert.ok(existsSync(join(repo, '.claude', 'settings.json')));
+  assert.ok(existsSync(join(repo, '.cursor', 'rules', 'graft.mdc')));
+  // gemini was never installed in this scratch home, so it is not wired.
+  assert.ok(!existsSync(join(repo, 'GEMINI.md')));
+});
+
+test('CLI: --no-global writes AGENTS.md but leaves ~/.codex alone', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const out = cliStderr(repo, home, ['--agents', 'agents', '--no-global']);
+  assert.ok(existsSync(join(repo, 'AGENTS.md')));
+  assert.deepEqual(readdirSync(join(home, '.codex')), []);
+  assert.match(out, /skipped out-of-repo writes/);
+});
+
+test('CLI: --dry-run respects an explicit --agents list', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const out = cliStderr(repo, home, ['--agents', 'adal', '--dry-run']);
+  assert.match(out, /\.adal\/skills\/graft\/SKILL\.md/);
+  assert.doesNotMatch(out, /AGENTS\.md/);
+  assert.doesNotMatch(out, /affects ALL repos/);
 });

@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, statSync
 import { dirname, join } from 'node:path';
 import { hooksShim } from '../claude/shim-template.js';
 import { claudeDistDir } from '../claude/paths.js';
+import type { PlannedWrite } from './plan.js';
 
 export interface HookWrite {
   id: string;
@@ -16,6 +17,29 @@ export interface HookWrite {
 
 function dirExists(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
+}
+
+/**
+ * The files installing the Codex hook would touch — pure, no writes. Both live
+ * under `~/.codex`, so both are scoped 'global': the PostToolUse entry fires on
+ * every edit in every repo opened with Codex, not just this one. Empty when the
+ * CLI isn't installed, mirroring `installCodexHooks`' early return.
+ */
+export function hookTargets(home: string): PlannedWrite[] {
+  const base = join(home, '.codex');
+  if (!dirExists(base)) return [];
+  return [
+    {
+      hostId: 'agents', id: 'codex-hook-shim',
+      path: join(base, 'hooks', 'graft', 'graft-hooks.cjs'),
+      scope: 'global', kind: 'hook', what: 'post-edit hook shim',
+    },
+    {
+      hostId: 'agents', id: 'codex-hooks',
+      path: join(base, 'hooks.json'),
+      scope: 'global', kind: 'hook', what: 'PostToolUse: Write|Edit|MultiEdit',
+    },
+  ];
 }
 
 function writeOwned(id: string, path: string, content: string, mode?: number): HookWrite {
@@ -35,13 +59,13 @@ function isGraftEntry(entry: unknown): boolean {
 }
 
 export function installCodexHooks(home: string): HookWrite[] {
-  const base = join(home, '.codex');
-  if (!dirExists(base)) return [];
+  const targets = hookTargets(home);
+  if (targets.length === 0) return [];
 
-  const shimPath = join(base, 'hooks', 'graft', 'graft-hooks.cjs');
+  const shimPath = targets[0].path;
   const shimWrite = writeOwned('codex-hook-shim', shimPath, hooksShim(claudeDistDir()), 0o755);
 
-  const cfgPath = join(base, 'hooks.json');
+  const cfgPath = targets[1].path;
   let root: Record<string, any> = {};
   const existed = existsSync(cfgPath);
   if (existed) {

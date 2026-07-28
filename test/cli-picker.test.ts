@@ -1,0 +1,211 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { planInit } from '../src/hosts/plan.js';
+import {
+  KEY_CTRL_C, KEY_DOWN, KEY_ESC, KEY_UP,
+  describeWrites, formatNonInteractiveHelp, formatPlan, initialPickerState,
+  keyOf, keysOf, pickedIds, reducePicker, renderPicker, tilde,
+  type PickerKey,
+} from '../src/cli-picker.js';
+
+function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-picker-')); }
+
+function fullHome(): string {
+  const home = fresh();
+  for (const d of ['.codex', '.cursor', '.gemini', '.adal', join('.config', 'opencode')]) {
+    mkdirSync(join(home, d), { recursive: true });
+  }
+  return home;
+}
+
+/** Feed a key sequence through the reducer, no TTY involved. */
+function drive(repo: string, home: string, keys: PickerKey[]) {
+  let state = initialPickerState(planInit(repo, { home }), repo, home);
+  for (const k of keys) state = reducePicker(state, k);
+  return state;
+}
+
+test('keyOf maps arrows, vim keys, toggles and aborts', () => {
+  assert.equal(keyOf(KEY_UP), 'up');
+  assert.equal(keyOf(KEY_DOWN), 'down');
+  assert.equal(keyOf('k'), 'up');
+  assert.equal(keyOf('j'), 'down');
+  assert.equal(keyOf(' '), 'space');
+  assert.equal(keyOf('a'), 'all');
+  assert.equal(keyOf('\r'), 'enter');
+  assert.equal(keyOf(KEY_ESC), 'abort');
+  assert.equal(keyOf(KEY_CTRL_C), 'abort');
+  assert.equal(keyOf('z'), null);
+});
+
+test('keysOf splits a batched chunk into every keypress it contains', () => {
+  // A pty hands over held/pasted/replayed input in one chunk — this must not
+  // read as a single unrecognised key (which used to hang the prompt).
+  assert.deepEqual(keysOf(`${KEY_DOWN} \r`), ['down', 'space', 'enter']);
+  assert.deepEqual(keysOf('jjk a'), ['down', 'down', 'up', 'space', 'all']);
+});
+
+test('keysOf consumes CSI sequences whole, so an arrow is never a bare ESC', () => {
+  assert.deepEqual(keysOf(KEY_UP), ['up']);
+  // An arrow followed by enter must not abort.
+  assert.deepEqual(keysOf(`${KEY_UP}\r`), ['up', 'enter']);
+  // A real lone ESC still aborts.
+  assert.deepEqual(keysOf(KEY_ESC), ['abort']);
+  // Unrecognised CSI (e.g. Home) is dropped, not mistaken for ESC.
+  assert.deepEqual(keysOf('\x1b[H'), []);
+  // Parameterised CSI (e.g. a mouse/modifier report) is also consumed whole.
+  assert.deepEqual(keysOf('\x1b[1;5A'), []);
+});
+
+test('keysOf ignores keys with no binding', () => {
+  assert.deepEqual(keysOf('xyz'), []);
+  assert.deepEqual(keysOf(''), []);
+});
+
+test('a batched chunk drives the reducer to a complete selection', () => {
+  const repo = fresh(); const home = fullHome();
+  let state = initialPickerState(planInit(repo, { home }), repo, home);
+  for (const key of keysOf(`${KEY_DOWN} \r`)) state = reducePicker(state, key);
+  assert.ok(state.done);
+  assert.deepEqual(pickedIds(state), ['claude', 'agents']);
+});
+
+test('claude starts checked, nothing else does', () => {
+  const repo = fresh(); const home = fullHome();
+  const state = initialPickerState(planInit(repo, { home }), repo, home);
+  assert.deepEqual(pickedIds(state), ['claude']);
+  assert.equal(state.rows[0].id, 'claude');
+});
+
+test('enter with no toggling wires claude only', () => {
+  const repo = fresh(); const home = fullHome();
+  const state = drive(repo, home, ['enter']);
+  assert.ok(state.done);
+  assert.deepEqual(pickedIds(state), ['claude']);
+});
+
+test('space toggles the row under the cursor, off and on again', () => {
+  const repo = fresh(); const home = fullHome();
+  assert.deepEqual(pickedIds(drive(repo, home, ['space'])), []);
+  assert.deepEqual(pickedIds(drive(repo, home, ['space', 'space'])), ['claude']);
+});
+
+test('down then space adds the second host', () => {
+  const repo = fresh(); const home = fullHome();
+  const state = drive(repo, home, ['down', 'space', 'enter']);
+  assert.deepEqual(pickedIds(state), ['claude', 'agents']);
+});
+
+test('cursor wraps at both ends', () => {
+  const repo = fresh(); const home = fullHome();
+  const n = planInit(repo, { home }).length;
+  assert.equal(drive(repo, home, ['up']).cursor, n - 1);
+  assert.equal(drive(repo, home, Array(n).fill('down') as PickerKey[]).cursor, 0);
+});
+
+test('a toggles all on, then all off', () => {
+  const repo = fresh(); const home = fullHome();
+  const n = planInit(repo, { home }).length;
+  assert.equal(pickedIds(drive(repo, home, ['all'])).length, n);
+  assert.deepEqual(pickedIds(drive(repo, home, ['all', 'all'])), []);
+});
+
+test('picked ids come back in plan order, not toggle order', () => {
+  const repo = fresh(); const home = fullHome();
+  // Toggle a late row first, then an earlier one.
+  const state = drive(repo, home, ['up', 'space', 'down', 'down', 'space', 'enter']);
+  const ids = pickedIds(state);
+  assert.deepEqual(ids, [...ids].sort((a, b) =>
+    state.rows.findIndex((r) => r.id === a) - state.rows.findIndex((r) => r.id === b)));
+});
+
+test('abort sets aborted and never done', () => {
+  const state = drive(fresh(), fullHome(), ['space', 'abort']);
+  assert.ok(state.aborted);
+  assert.ok(!state.done);
+});
+
+test('tilde shortens home paths and leaves others alone', () => {
+  assert.equal(tilde('/Users/me/.codex/config.toml', '/Users/me'), '~/.codex/config.toml');
+  assert.equal(tilde('/repo/AGENTS.md', '/Users/me'), '/repo/AGENTS.md');
+  // A sibling directory that merely shares a prefix is not the home dir.
+  assert.equal(tilde('/Users/mediocre/x', '/Users/me'), '/Users/mediocre/x');
+});
+
+test('describeWrites names out-of-repo writes as machine-wide', () => {
+  const repo = fresh(); const home = fullHome();
+  const agents = planInit(repo, { home, ids: ['agents'] })[0];
+  const summary = describeWrites(agents.writes, repo, home);
+  assert.match(summary, /AGENTS\.md/);
+  assert.match(summary, /\+ 3 in ~\/\.codex\/ \(machine-wide\)/);
+});
+
+test('describeWrites flags hosts with no MCP target', () => {
+  const repo = fresh(); const home = fullHome();
+  const adal = planInit(repo, { home, ids: ['adal'] })[0];
+  assert.match(describeWrites(adal.writes, repo, home), /no MCP/);
+  const cursor = planInit(repo, { home, ids: ['cursor'] })[0];
+  assert.doesNotMatch(describeWrites(cursor.writes, repo, home), /no MCP/);
+});
+
+test('describeWrites truncates long path lists', () => {
+  const repo = fresh(); const home = fullHome();
+  const claude = planInit(repo, { home, ids: ['claude'] })[0];
+  assert.match(describeWrites(claude.writes, repo, home), /\+2 more/);
+});
+
+test('renderPicker marks the cursor, the checkboxes and undetected hosts', () => {
+  const repo = fresh(); const home = fresh(); // nothing installed
+  const state = initialPickerState(planInit(repo, { home }), repo, home);
+  const text = renderPicker(state, false);
+  assert.match(text, /› \[x\] claude/);
+  assert.match(text, /\[ \] cursor.*\(not detected\)/);
+  assert.match(text, /space toggle/);
+  // Every host gets a row, plus header, blank lines and the key legend.
+  assert.equal(text.split('\n').filter((l) => /\[[ x]\]/.test(l)).length, state.rows.length);
+});
+
+test('formatPlan separates repo writes from machine-wide ones', () => {
+  const repo = fresh(); const home = fullHome();
+  const plan = planInit(repo, { home });
+  const text = formatPlan(plan, ['claude', 'agents'], repo, home, false);
+  const repoAt = text.indexOf('would write — this repo:');
+  const globalAt = text.indexOf('affects ALL repos:');
+  assert.ok(repoAt >= 0 && globalAt > repoAt, 'repo section comes first');
+  assert.match(text, /~\/\.codex\/hooks\.json/);
+  assert.match(text, /PostToolUse: Write\|Edit\|MultiEdit/);
+  assert.match(text, /nothing was written \(--dry-run\)/);
+  assert.match(text, /--no-global/);
+});
+
+test('formatPlan omits the machine-wide section when there is nothing global', () => {
+  const repo = fresh(); const home = fullHome();
+  const text = formatPlan(planInit(repo, { home }), ['claude'], repo, home, false);
+  assert.doesNotMatch(text, /affects ALL repos/);
+  assert.doesNotMatch(text, /--no-global/);
+});
+
+test('formatPlan says so when nothing is selected', () => {
+  const repo = fresh();
+  assert.match(formatPlan(planInit(repo, { home: fresh() }), [], repo, fresh(), false), /nothing/);
+});
+
+test('formatNonInteractiveHelp lists detected ids and a runnable command', () => {
+  const text = formatNonInteractiveHelp(['claude', 'cursor']);
+  assert.match(text, /nothing written/);
+  assert.match(text, /detected: claude, cursor/);
+  assert.match(text, /graft init --agents claude cursor {3}# wire these/);
+  assert.match(text, /--dry-run/);
+});
+
+test('formatNonInteractiveHelp still helps when nothing was detected', () => {
+  const text = formatNonInteractiveHelp([]);
+  assert.match(text, /detected: none/);
+  // No `--yes` example, since there is nothing for it to wire (the header
+  // still mentions the flag by name).
+  assert.doesNotMatch(text, /^ +graft init --yes/m);
+  assert.match(text, /--agents claude/);
+});

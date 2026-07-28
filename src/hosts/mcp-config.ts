@@ -2,15 +2,29 @@
  * Register the graft MCP server in each host's config.
  * JSON hosts get a keyed merge (other servers preserved; unparseable files
  * are never rewritten). The TOML host gets an append-if-absent section.
+ *
+ * `mcpTargets()` is the pure "which files would this touch" half, so `graft
+ * init --dry-run` and the picker can report paths without writing;
+ * `registerMcpConfigs()` walks that same list to do the writing.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import type { PlannedWrite } from './plan.js';
 
 export interface McpWrite {
   id: string;
   path: string;
   action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable';
+}
+
+/** A planned MCP write, plus the detail needed to actually perform it. */
+export interface McpTarget extends PlannedWrite {
+  format: 'json' | 'toml';
+  /** JSON only: the top-level key holding the server map. */
+  topKey?: string;
+  /** JSON only: the server entry to merge in under `graft`. */
+  entry?: object;
 }
 
 export const SERVER_ENTRY = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
@@ -53,35 +67,70 @@ function upsertCodexToml(id: string, path: string): McpWrite {
   return { id, path, action: existed ? 'updated' : 'created' };
 }
 
-export function registerMcpConfigs(
+function jsonTarget(
+  hostId: string,
+  id: string,
+  path: string,
+  topKey: string,
+  entry: object,
+  scope: PlannedWrite['scope'] = 'repo',
+): McpTarget {
+  return { hostId, id, path, scope, kind: 'mcp', what: `${topKey}.graft`, format: 'json', topKey, entry };
+}
+
+/**
+ * The MCP config files selecting these hosts would touch — pure, no writes.
+ * Codex's target is the user-level `~/.codex/config.toml`, so it is scoped
+ * 'global': registering there affects every project on the machine.
+ */
+export function mcpTargets(
   repo: string,
   ids: string[],
   opts: { home?: string } = {},
-): McpWrite[] {
+): McpTarget[] {
   const home = opts.home ?? homedir();
-  const out: McpWrite[] = [];
+  const out: McpTarget[] = [];
   for (const id of ids) {
     switch (id) {
       case 'cursor':
-        out.push(mergeJsonKey(id, join(repo, '.cursor', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.cursor', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
         break;
       case 'gemini':
-        out.push(mergeJsonKey(id, join(repo, '.gemini', 'settings.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.gemini', 'settings.json'), 'mcpServers', SERVER_ENTRY));
         break;
       case 'kiro':
-        out.push(mergeJsonKey(id, join(repo, '.kiro', 'settings', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.kiro', 'settings', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
         break;
       case 'agents':
+        // Guarded on the CLI actually being installed, so a plan only ever
+        // lists files a real run would touch.
         if (dirExists(join(home, '.codex'))) {
-          out.push(upsertCodexToml('codex', join(home, '.codex', 'config.toml')));
+          out.push({
+            hostId: id, id: 'codex', path: join(home, '.codex', 'config.toml'),
+            scope: 'global', kind: 'mcp', what: '[mcp_servers.graft]', format: 'toml',
+          });
         }
         if (dirExists(join(home, '.config', 'opencode'))) {
-          out.push(mergeJsonKey('opencode', join(repo, 'opencode.json'), 'mcp', OPENCODE_ENTRY));
+          out.push(jsonTarget(id, 'opencode', join(repo, 'opencode.json'), 'mcp', OPENCODE_ENTRY));
         }
         break;
       default:
-        break; // copilot / windsurf / claude: no MCP target in this phase
+        break; // copilot / windsurf / adal: no MCP target in this phase
     }
   }
   return out;
+}
+
+export function registerMcpConfigs(
+  repo: string,
+  ids: string[],
+  opts: { home?: string; global?: boolean } = {},
+): McpWrite[] {
+  return mcpTargets(repo, ids, opts)
+    .filter((t) => opts.global !== false || t.scope !== 'global')
+    .map((t) =>
+      t.format === 'toml'
+        ? upsertCodexToml(t.id, t.path)
+        : mergeJsonKey(t.id, t.path, t.topKey!, t.entry!),
+    );
 }

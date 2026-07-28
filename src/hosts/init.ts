@@ -36,7 +36,15 @@ function writeOwned(path: string, content: string): string {
 
 export function runHostsInit(
   repo: string,
-  opts: { agents?: string[]; all?: boolean; home?: string; mcp?: boolean; hooks?: boolean } = {},
+  opts: {
+    agents?: string[];
+    all?: boolean;
+    home?: string;
+    mcp?: boolean;
+    hooks?: boolean;
+    /** false → skip every write outside the repo (the ~/.codex/ targets). */
+    global?: boolean;
+  } = {},
 ): HostsInitResult {
   const home = opts.home ?? homedir();
   const probe = probeFor(home, repo);
@@ -63,9 +71,13 @@ export function runHostsInit(
     written.push({ id: host.id, path, action });
   }
   const skipped = HOSTS.filter((h) => !selected.includes(h)).map((h) => h.id);
-  const mcp = opts.mcp === false ? [] : registerMcpConfigs(repo, selected.map((h) => h.id), { home });
+  const mcp =
+    opts.mcp === false
+      ? []
+      : registerMcpConfigs(repo, selected.map((h) => h.id), { home, global: opts.global });
+  // Every hook target is user-level, so --no-global suppresses the lot.
   const hooks =
-    opts.hooks === false || !selected.some((h) => h.id === 'agents')
+    opts.hooks === false || opts.global === false || !selected.some((h) => h.id === 'agents')
       ? []
       : installCodexHooks(home);
   return { written, skipped, unknown, mcp, hooks };
