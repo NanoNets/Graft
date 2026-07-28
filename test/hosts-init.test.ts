@@ -215,6 +215,24 @@ test('CLI: --no-global writes AGENTS.md but leaves ~/.codex alone', () => {
   assert.match(out, /skipped out-of-repo writes/);
 });
 
+test('CLI: the graph build is attempted even when claude is not selected', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.cursor'));
+  // Regression: the build used to sit inside `if (wantClaude)`, so picking only
+  // cursor wired .cursor/ and never built the graph its rule file points at.
+  const out = cliStderr(repo, home, ['--agents', 'cursor']);
+  assert.match(out, /(built the graph|skipped graph build)/);
+});
+
+test('CLI: --no-global stays quiet when the selection has nothing out-of-repo', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  // cursor writes only inside the repo, so there is nothing for --no-global to skip.
+  const out = cliStderr(repo, home, ['--agents', 'cursor', '--no-global']);
+  assert.ok(existsSync(join(repo, '.cursor', 'rules', 'graft.mdc')));
+  assert.doesNotMatch(out, /skipped out-of-repo writes/);
+});
+
 test('CLI: --dry-run respects an explicit --agents list', () => {
   const home = fresh(); const repo = fresh();
   mkdirSync(join(home, '.codex'), { recursive: true });

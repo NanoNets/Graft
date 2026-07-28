@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { runInit } from '../src/claude/init.js';
+import { buildGraphIfMissing, runInit } from '../src/claude/init.js';
 import { formatInitEpilogue } from '../src/cli-epilogue.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-init-')); }
@@ -134,4 +134,23 @@ test('CLI: graft init epilogue has the wordmark + next steps, and never mentions
   assert.ok(!res.stderr.includes('OPENROUTER'));
   // --no-build, never built before → "build the graph" is step 1
   assert.ok(res.stderr.includes('1. build the graph'));
+});
+
+// --- buildGraphIfMissing --------------------------------------------------
+// Shared with the CLI's non-Claude path, so its guards are pinned here.
+
+test('buildGraphIfMissing: build:false never spawns a build', () => {
+  assert.equal(buildGraphIfMissing(fresh(), { build: false, cliPath: '/nonexistent/cli.js' }), false);
+});
+
+test('buildGraphIfMissing: no cliPath means nothing to spawn', () => {
+  assert.equal(buildGraphIfMissing(fresh(), { build: true }), false);
+});
+
+test('buildGraphIfMissing: an existing graph is left alone', () => {
+  const dir = fresh();
+  mkdirSync(join(dir, 'graft', '.graph'), { recursive: true });
+  writeFileSync(join(dir, 'graft', '.graph', 'wiring.json'), '{}');
+  // A bogus cliPath would throw if it were reached; the wiring check short-circuits.
+  assert.equal(buildGraphIfMissing(dir, { build: true, cliPath: '/nonexistent/cli.js' }), false);
 });

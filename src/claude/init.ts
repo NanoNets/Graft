@@ -26,6 +26,23 @@ export function claudeTargets(dir: string): PlannedWrite[] {
   ];
 }
 
+/**
+ * Build the graph if it isn't there yet. Not Claude-specific: the wiring for any
+ * host points at `graft/`, so `graft init` builds whichever hosts were selected —
+ * this lives beside `runInit` only because that's the caller that owns `built`.
+ * Best-effort; the user can always run `graft build` (the epilogue says so).
+ */
+export function buildGraphIfMissing(dir: string, opts: { build?: boolean; cliPath?: string }): boolean {
+  const wiring = join(dir, 'graft', '.graph', 'wiring.json');
+  if (opts.build === false || !opts.cliPath || existsSync(wiring)) return false;
+  try {
+    execFileSync(process.execPath, [opts.cliPath, 'build', '.'], { cwd: dir, stdio: 'inherit', timeout: 300000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface InitResult {
   settingsPath: string;
   shims: string[];
@@ -65,13 +82,6 @@ export function runInit(dir: string, opts: { build?: boolean; cliPath?: string }
   // other hosts use (existing servers preserved; unparseable files skipped).
   const mcp = mergeJsonKey('claude', mcpTarget, 'mcpServers', SERVER_ENTRY);
 
-  let built = false;
-  const wiring = join(dir, 'graft', '.graph', 'wiring.json');
-  if (opts.build !== false && opts.cliPath && !existsSync(wiring)) {
-    try {
-      execFileSync(process.execPath, [opts.cliPath, 'build', '.'], { cwd: dir, stdio: 'inherit', timeout: 300000 });
-      built = true;
-    } catch { /* build best-effort; user can run `graft build` manually */ }
-  }
+  const built = buildGraphIfMissing(dir, opts);
   return { settingsPath, shims: [sl, hk], skill: skillPath, mcp, warnings, built };
 }

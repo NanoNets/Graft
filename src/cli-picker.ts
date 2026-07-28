@@ -5,7 +5,6 @@
  * `reducePicker` are pure, `runPicker` is the only part that touches stdin.
  */
 import { relative, dirname, sep } from 'node:path';
-import { createInterface } from 'node:readline';
 import type { HostPlan, PlannedWrite } from './hosts/plan.js';
 
 const indigo = (s: string) => `\x1b[38;2;84;111;255m${s}\x1b[0m`;
@@ -206,7 +205,6 @@ export async function runPicker(
     lastLines = text.split('\n').length;
   };
 
-  const rl = createInterface({ input: stdin });
   const wasRaw = Boolean(stdin.isRaw);
   stdin.setRawMode?.(true);
   stdin.resume();
@@ -214,8 +212,11 @@ export async function runPicker(
 
   try {
     return await new Promise<string[] | null>((resolve) => {
+      // Both listeners come off together: a leftover 'end' would otherwise fire
+      // after a confirmed pick and redraw the picker over init's own output.
       const finish = (onData: (b: Buffer) => void) => {
         stdin.off('data', onData);
+        stdin.off('end', onEnd);
         draw();
         resolve(state.aborted ? null : pickedIds(state));
       };
@@ -231,13 +232,13 @@ export async function runPicker(
         }
         draw();
       };
-      stdin.on('data', onData);
       // A closed stdin (piped input that ran out) must not hang the prompt.
-      stdin.once('end', () => { state = { ...state, aborted: true }; finish(onData); });
+      const onEnd = () => { state = { ...state, aborted: true }; finish(onData); };
+      stdin.on('data', onData);
+      stdin.on('end', onEnd);
     });
   } finally {
     stdin.setRawMode?.(wasRaw);
-    rl.close();
     stdin.pause();
   }
 }

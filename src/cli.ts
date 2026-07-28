@@ -13,7 +13,7 @@ import { resolveConfig, type EngineConfig } from "./ai/providers.js";
 import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
-import { runInit } from "./claude/init.js";
+import { buildGraphIfMissing, runInit } from "./claude/init.js";
 import { runHostsInit } from "./hosts/init.js";
 import { hostIds } from "./hosts/registry.js";
 import { contextDirFor } from "./context/node-file.js";
@@ -28,7 +28,7 @@ import {
   runWorkspaceMap,
 } from "./graph/workspace-cli.js";
 import { formatInitEpilogue } from "./cli-epilogue.js";
-import { planInit } from "./hosts/plan.js";
+import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
 import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
@@ -491,9 +491,9 @@ program
     }
 
     const wantClaude = ids.includes("claude");
+    const cliPath = fileURLToPath(import.meta.url);
 
     if (wantClaude) {
-      const cliPath = fileURLToPath(import.meta.url);
       const res = runInit(repo, { build: opts.build, cliPath });
       console.error(`✓ wrote ${res.settingsPath}`);
       for (const s of res.shims) console.error(`✓ wrote ${s}`);
@@ -522,7 +522,19 @@ program
       for (const w of r.written) console.error(`✓ ${w.id}: ${w.path} (${w.action})`);
       for (const m of r.mcp) console.error(`✓ mcp ${m.id}: ${m.path} (${m.action})`);
       for (const h of r.hooks) console.error(`✓ hook ${h.id}: ${h.path} (${h.action})`);
-      if (opts.global === false) console.error("· skipped out-of-repo writes (--no-global)");
+      // Only worth saying when there was actually something out-of-repo to skip.
+      if (opts.global === false && selectedWrites(plan, ids).some((w) => w.scope === "global"))
+        console.error("· skipped out-of-repo writes (--no-global)");
+    }
+
+    // Every host's wiring points at graft/, so the graph is built whatever was
+    // selected — not only when Claude Code is in the list (runInit does its own).
+    if (!wantClaude) {
+      console.error(
+        buildGraphIfMissing(repo, { build: opts.build, cliPath })
+          ? "✓ built the graph (graft build)"
+          : "· skipped graph build",
+      );
     }
 
     const globalOpts = program.opts<{ dir?: string }>();
