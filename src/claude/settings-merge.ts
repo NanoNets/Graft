@@ -17,7 +17,10 @@ function graftBlocks(): Record<string, Json[]> {
       // is actually present, so non-graft Bash calls cost only a stdin read.
       { matcher: 'Bash|mcp__graft__', hooks: [{ type: 'command', command: hookCmd('tool-savings'), timeout: 8000 }] },
     ],
-    UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd('prompt'), timeout: 8000 }] }],
+    // Longer budget than the other hooks: its `graft ask` is a real query, and a
+    // query now brings the graph up to date first (graph/refresh.ts) — usually
+    // milliseconds, but the first one after an upgrade re-parses the repo once.
+    UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd('prompt'), timeout: 15000 }] }],
     SessionStart: [{ hooks: [{ type: 'command', command: hookCmd('session-start'), timeout: 8000 }] }],
     Stop: [{ hooks: [{ type: 'command', command: hookCmd('stop'), timeout: 8000 }] }],
   };

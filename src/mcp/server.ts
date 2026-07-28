@@ -54,8 +54,14 @@ export function startMcpServer(root: string, dirOverride?: string): void {
         if (isNotification) return;
         const name = String(params?.name ?? '');
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
-        const r = callTool(root, name, args, dirOverride);
-        reply(id, { content: [{ type: 'text', text: r.text }], isError: r.isError });
+        // Async because a tool call may rebuild the graph first (see
+        // graph/refresh.ts). `callTool` absorbs its own errors, so the only thing
+        // that can reject here is a bug — surface it as a JSON-RPC error rather
+        // than an unhandled rejection that kills the server.
+        callTool(root, name, args, dirOverride).then(
+          (r) => reply(id, { content: [{ type: 'text', text: r.text }], isError: r.isError }),
+          (err) => replyError(id, -32603, err instanceof Error ? err.message : String(err)),
+        );
         return;
       }
       default:

@@ -50,7 +50,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" prompt",
-            "timeout": 8000
+            "timeout": 15000
           }
         ]
       }

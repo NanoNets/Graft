@@ -143,6 +143,14 @@ function pruneEmptyDirs(outDir: string): void {
   if (existsSync(outDir)) visit(outDir);
 }
 
+function readIfExists(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Write one wiring card per source file into `outDir`, mirroring the source tree,
  * and prune cards whose source no longer exists. Returns what changed.
@@ -164,7 +172,12 @@ export function writeCards(graph: GraphV1, outDir: string): CardStats {
     const symbols = group.filter((n) => n.kind !== "file");
     const cardPath = cardPathFor(outDir, sourcePath);
     mkdirSync(dirname(cardPath), { recursive: true });
-    writeFileSync(cardPath, renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []));
+    const rendered = renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []);
+    // Skip identical rewrites. Cards are a pure projection, so most of them are
+    // unchanged on a rebuild — and now that a rebuild can run before any query
+    // (graph/refresh.ts), churning every card's mtime would wake editors and file
+    // watchers on files that didn't actually change.
+    if (readIfExists(cardPath) !== rendered) writeFileSync(cardPath, rendered);
     written.add(cardPath);
     files.push({ card: relative(outDir, cardPath), path: sourcePath, symbols: symbols.length });
   }

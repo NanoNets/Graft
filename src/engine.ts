@@ -41,6 +41,8 @@ export interface GraphRunOptions {
   llm?: boolean;
   /** Max files summarized in parallel during the LLM pass. */
   concurrency?: number;
+  /** Replay unchanged files from the extraction cache (default true). */
+  reuse?: boolean;
   onProgress?: GraphBuildOptions["onProgress"];
 }
 
@@ -83,6 +85,7 @@ export class Graft {
       contextDir: this.cfg.contextDir,
       summarizer: opts.llm ? this.cruxSummarizer() : undefined,
       concurrency: opts.concurrency,
+      reuse: opts.reuse,
       onProgress: opts.onProgress,
     });
   }

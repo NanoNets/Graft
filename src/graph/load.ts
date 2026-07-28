@@ -98,3 +98,18 @@ export function loadAskIndexCached(outDir: string): AskIndex | null {
     __parseCount.askIndex++;
   });
 }
+
+/**
+ * Drop the cached graph + sidecar for `outDir`, forcing the next load to re-read.
+ *
+ * The `(mtimeMs, size)` key above is a good invalidator for a build that happened
+ * in *another* process, but not for one this process just performed: the
+ * pre-query auto-refresh (`refresh.ts`) rewrites the graph and then immediately
+ * queries it, and on a filesystem with coarse mtime resolution a same-tick rewrite
+ * of the same size would be served from the stale entry. Callers that rebuild must
+ * therefore invalidate explicitly rather than trust the clock.
+ */
+export function invalidateGraphCaches(outDir: string): void {
+  graphCache.delete(wiringPath(outDir));
+  askIndexCache.delete(askIndexPath(outDir));
+}

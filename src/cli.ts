@@ -18,6 +18,7 @@ import { runHostsInit } from "./hosts/init.js";
 import { hostIds } from "./hosts/registry.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
+import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
 import { isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
 import {
   runWorkspaceAsk,
@@ -67,6 +68,29 @@ function cliConfig(): EngineConfig {
 }
 
 const engineFrom = (): Graft => new Graft(cliConfig());
+
+/**
+ * Bring the graph up to date with the working tree before a query answers from it
+ * — the same gate the MCP tools run (see `graph/refresh.ts`). Cheap when nothing
+ * moved; a structural, $0 rebuild when it did. The note goes to stderr so `--json`
+ * stdout stays machine-readable.
+ */
+async function refreshBefore(dir: string, opts: { refresh?: boolean }): Promise<void> {
+  const globalDir = program.opts<GlobalOpts>().dir;
+  const root = resolve(dir);
+  const disabled = opts.refresh === false;
+  const ws = readWorkspace(root, globalDir);
+  const r = ws
+    ? await ensureFreshChildren(root, ws.children, { contextDir: globalDir, disabled })
+    : await ensureFreshGraph(root, { contextDir: globalDir, disabled });
+  const note = refreshNote(r);
+  if (note) console.error(note);
+}
+
+/** Attached to every query command: `--no-refresh` answers from the graph exactly
+ * as it is on disk, no rebuild. */
+const NO_REFRESH_FLAG = ["--no-refresh", "skip the freshness check — answer from the graph as-is"] as const;
+
 program
   .command("version")
   .description("Print the installed version and the latest published on npm")
@@ -94,7 +118,8 @@ program
   .option("--deep", "run the LLM pass: concept nodes (graft/*.md) + per-symbol summary/crux")
   .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py")')
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string }) => {
+  .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
+  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean }) => {
     const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
     if (opts.concurrency && !Number.isFinite(concurrency)) {
       console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
@@ -158,6 +183,7 @@ program
     const g = await engine.graph(dir, {
       llm: deep,
       concurrency,
+      reuse: opts.reuse,
       onProgress: ({ phase, index, total, file }) =>
         process.stderr.write(
           `\r${phase === "enrich" ? "summarizing" : "parsing"} ${index + 1}/${total}: ${file.slice(0, 50).padEnd(50)}`,
@@ -165,6 +191,7 @@ program
     });
     process.stderr.write("\n");
     console.log(`✓ wiring: ${g.nodes} nodes (${fmt(g.byKind)}), ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
+    console.log(`  parsed: ${g.parsed} of ${g.files} files (${g.reused} replayed from cache)`);
     if (deep) {
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
@@ -186,7 +213,9 @@ program
   .option("--full", "with --source: inline whole definition spans instead of the default ≤8-line crux excerpts")
   .option("--in <path>", "narrow to nodes under this path prefix, filtered before scoring (segment-aware, like scopeOf)")
   .option("--json", "output the result as JSON")
-  .action(async (query: string, dir: string, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean }) => {
+  .option(...NO_REFRESH_FLAG)
+  .action(async (query: string, dir: string, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean; refresh?: boolean }) => {
+    await refreshBefore(dir, opts);
     const askGlobalDir = program.opts<GlobalOpts>().dir;
     if (readWorkspace(resolve(dir), askGlobalDir)) {
       runWorkspaceAsk(resolve(dir), askGlobalDir, query, {
@@ -217,7 +246,9 @@ program
   .argument("<file>", "repo-relative path (or unique basename) of the file")
   .argument("[dir]", "repository root", ".")
   .option("--json", "output the result as JSON")
-  .action(async (file: string, dir: string, opts: { json?: boolean }) => {
+  .option(...NO_REFRESH_FLAG)
+  .action(async (file: string, dir: string, opts: { json?: boolean; refresh?: boolean }) => {
+    await refreshBefore(dir, opts);
     const { skeleton, formatSkeleton } = await import("./ask/ask.js");
     const globalOpts = program.opts<{ dir?: string }>();
     const r = skeleton(dir, file, { contextDir: globalOpts.dir });
@@ -322,12 +353,14 @@ program
   .option("-d, --depth <n>", 'walk transitively up to N hops for blast radius, or "all" for the full connected closure (default 1)')
   .option("--in <path>", "narrow matches to nodes whose path contains this substring")
   .option("--json", "output as JSON")
+  .option(...NO_REFRESH_FLAG)
   .action(
     async (
       symbol: string,
       dir: string,
-      opts: { direction?: string; depth?: string; in?: string; json?: boolean },
+      opts: { direction?: string; depth?: string; in?: string; json?: boolean; refresh?: boolean },
     ) => {
+      await refreshBefore(dir, opts);
       const globalOpts = program.opts<{ dir?: string }>();
       if (!opts.json && readWorkspace(resolve(dir), globalOpts.dir)) {
         runWorkspaceCallers(resolve(dir), globalOpts.dir, symbol, {
@@ -359,12 +392,14 @@ program
   .option("--fixed", "treat pattern as a literal string, not a regex")
   .option("--in <path>", "narrow to files whose path contains this substring")
   .option("--json", "output as JSON")
+  .option(...NO_REFRESH_FLAG)
   .action(
     async (
       pattern: string,
       dir: string,
-      opts: { ignoreCase?: boolean; fixed?: boolean; in?: string; json?: boolean },
+      opts: { ignoreCase?: boolean; fixed?: boolean; in?: string; json?: boolean; refresh?: boolean },
     ) => {
+      await refreshBefore(dir, opts);
       const globalOpts = program.opts<{ dir?: string }>();
       if (readWorkspace(resolve(dir), globalOpts.dir)) {
         runWorkspaceGrep(resolve(dir), globalOpts.dir, pattern, {
@@ -391,7 +426,8 @@ program
   .argument("[dir]", "repository root", ".")
   .option("--max-dirs <n>", "max directory entries shown, rest counted into dropped (default 16)")
   .option("--json", "output as JSON")
-  .action(async (dir: string, opts: { json?: boolean; maxDirs?: string }) => {
+  .option(...NO_REFRESH_FLAG)
+  .action(async (dir: string, opts: { json?: boolean; maxDirs?: string; refresh?: boolean }) => {
     const root = resolve(dir);
     const globalOpts = program.opts<{ dir?: string }>();
     let maxDirsW: number | undefined;
@@ -404,6 +440,7 @@ program
       }
       maxDirsW = n;
     }
+    await refreshBefore(dir, opts); // after arg validation: a bad flag shouldn't cost a rebuild
     if (!opts.json && readWorkspace(root, globalOpts.dir)) {
       runWorkspaceMap(root, globalOpts.dir, { maxDirs: maxDirsW });
       return;

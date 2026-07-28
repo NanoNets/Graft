@@ -6,12 +6,27 @@
  *   2. Parse each with tree-sitter and emit one NodeV1 per definition.
  *   3. Write a sorted graph.json.
  * Edges (M2) and LLM summary/crux (M3) layer onto this without changing it.
+ *
+ * Step 2 is memoized per file (`extract-cache.ts`): a file whose bytes haven't
+ * moved replays its last parse instead of re-running tree-sitter, so a rebuild
+ * costs ~the files that changed. Everything after extraction still runs over the
+ * whole node set, so an incremental build's output is byte-identical to a cold
+ * one — the invariant `test/graph-incremental.test.ts` pins down.
  */
 import { readFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { extractFile, languageOf, type Language, type RawEdge } from "./extract.js";
+import { contentHash } from "../util/id.js";
+import {
+  emptyExtractCache,
+  readExtractCache,
+  writeExtractCache,
+  type ExtractEntry,
+} from "./extract-cache.js";
+import { writeFingerprint } from "./fingerprint.js";
+import { listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
@@ -20,6 +35,8 @@ import { writeAskIndex } from "../ask/index-file.js";
 import { discoverScopes, scopeOf } from "./scopes.js";
 import type { GraphV1, Kind, NodeV1, Relation, ScopeV1 } from "./types.js";
 import type { CruxSummarizer } from "../ai/crux.js";
+
+export { listSourceFiles } from "./source-files.js";
 
 /** Minimum non-file node count for a discovered sub-scope to stand on its own
  * (over-split guard 3). A scope with fewer nodes than this is folded into the
@@ -49,6 +66,9 @@ function applyMinSubstanceGuard(scopes: ScopeV1[], nodes: NodeV1[]): ScopeV1[] {
 export interface GraphBuildOptions {
   /** Override the output dir (default: `<root>/.context`). */
   contextDir?: string;
+  /** Replay unchanged files from the extraction cache instead of re-parsing them
+   * (default true). False forces a cold parse of the whole repo. */
+  reuse?: boolean;
   /** Run the Tier-2 LLM meaning pass. Absent → Tier-1 only (cache is still preserved). */
   summarizer?: CruxSummarizer;
   /** Max files summarized in parallel during the Tier-2 pass. Default is set in enrich. */
@@ -67,6 +87,10 @@ export interface GraphBuildResult {
   /** Per-file wiring cards written (Tier-2 passive surface). */
   cards: number;
   files: number;
+  /** Files re-parsed this run (the rest were replayed from the extraction cache). */
+  parsed: number;
+  /** Files replayed from the extraction cache. */
+  reused: number;
   nodes: number;
   edges: number;
   byKind: Record<Kind, number>;
@@ -74,11 +98,6 @@ export interface GraphBuildResult {
   languages: string[];
   meaning: EnrichStats;
   errors: string[];
-}
-
-/** The source files a graph build parses: supported languages, minus the output dir. */
-export function listSourceFiles(root: string, outDir: string): string[] {
-  return walkDir(root).filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
 }
 
 /** Every Go module in the repo: each `go.mod`'s declared `module` path and the repo
@@ -107,7 +126,7 @@ export async function buildGraph(
 ): Promise<GraphBuildResult> {
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
-  const files = listSourceFiles(root, outDir);
+  const files = listSourceStats(root, outDir);
   const discoveredScopes = discoverScopes(root);
 
   const nodes: NodeV1[] = [];
@@ -116,26 +135,83 @@ export async function buildGraph(
   const langs = new Set<Language>();
   const errors: string[] = [];
 
-  files.forEach((file, i) => {
-    const rel = relative(root, file);
+  // Tier-1 memo: unchanged files replay their last parse. `entries` is rebuilt
+  // from scratch each run and keyed only by files currently on disk, so deletions
+  // fall out of both the cache and the fingerprint with no separate pruning pass.
+  const priorExtract = opts.reuse === false ? emptyExtractCache() : readExtractCache(outDir);
+  const entries: Record<string, ExtractEntry> = {};
+  // The Tier-2 pass reads source text for any node it must summarize, including
+  // one in a file we didn't re-parse — so when a summarizer is in play, read
+  // every file. Reading is ~0.05ms/file; parsing is the ~4.6ms we're skipping.
+  const needAllSources = !!opts.summarizer;
+  let parsed = 0;
+  let reused = 0;
+
+  files.forEach((f, i) => {
+    const rel = f.rel;
     opts.onProgress?.({ phase: "parse", index: i, total: files.length, file: rel });
-    const lang = languageOf(file)!;
-    let source: string;
-    try {
-      source = readFileSync(file, "utf8");
-    } catch (err) {
-      errors.push(`${rel}: ${err instanceof Error ? err.message : String(err)}`);
+    const lang = languageOf(f.abs)!;
+    const cached = priorExtract.files[rel];
+    // An entry that failed last time never takes the stat fast path: a `chmod`
+    // that makes the file readable again changes neither size nor mtime, so
+    // trusting the stat would keep it broken until someone edited it.
+    const unchanged = !!cached && !cached.error && cached.size === f.size && cached.mtimeMs === f.mtimeMs;
+
+    let source: string | null = null;
+    if (!unchanged || needAllSources) {
+      try {
+        source = readFileSync(f.abs, "utf8");
+      } catch (err) {
+        const message = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(message);
+        // Record it anyway (with the stat we do have) so the freshness probe's
+        // fast path doesn't report this file as new on every single query.
+        entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [], error: message };
+        return;
+      }
+    }
+
+    // A stat mismatch is only a *suspicion*; confirm by bytes so a touch, or a
+    // checkout that restores identical content, still replays the cache.
+    const hash = source === null ? cached!.hash : contentHash(source);
+    if (cached && hash === cached.hash) {
+      entries[rel] = { ...cached, size: f.size, mtimeMs: f.mtimeMs };
+      if (source !== null) sources.set(rel, source);
+      reused++;
+      if (cached.error) {
+        errors.push(cached.error); // this file failed to parse last time too
+        return;
+      }
+      nodes.push(...cached.nodes);
+      rawEdges.push(...cached.rawEdges);
+      langs.add(lang);
       return;
     }
+
+    parsed++;
     try {
-      const { nodes: fileNodes, rawEdges: fileEdges } = extractFile(rel, source, lang);
+      const { nodes: fileNodes, rawEdges: fileEdges } = extractFile(rel, source!, lang);
       nodes.push(...fileNodes);
       rawEdges.push(...fileEdges);
-      sources.set(rel, source);
+      sources.set(rel, source!);
       langs.add(lang);
+      entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash, nodes: fileNodes, rawEdges: fileEdges };
     } catch (err) {
-      errors.push(`${rel}: parse failed — ${err instanceof Error ? err.message : String(err)}`);
+      const message = `${rel}: parse failed — ${err instanceof Error ? err.message : String(err)}`;
+      errors.push(message);
+      entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash, nodes: [], rawEdges: [], error: message };
     }
+  });
+
+  // Persist the memo BEFORE enrichment, because `enrichGraph` mutates these very
+  // node objects (summary/crux/summary_state) and the cache must only ever hold
+  // pristine Tier-1 output — otherwise a replayed node would arrive pre-enriched
+  // and a cold build and an incremental build could disagree. The meaning layer
+  // has its own cache (wiring.json itself, keyed on body_hash); this one is
+  // strictly about not re-parsing.
+  const memoWritten = writeExtractCache(outDir, {
+    ...emptyExtractCache(),
+    files: entries,
   });
 
   const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root) });
@@ -172,6 +248,11 @@ export async function buildGraph(
   // The graph is a local, regenerable cache — make sure git ignores it. Runs on
   // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
   ensureGitignored(root, outDir);
+  // The freshness fingerprint claims "the graph on disk describes these exact
+  // bytes", so it may only be written now that wiring.json is actually there —
+  // and only if the memo it projects from made it to disk. If either write fails
+  // the next probe reports drift and rebuilds, which is the safe direction.
+  if (memoWritten) writeFingerprint(outDir, entries);
   // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build
   // time (~45% of query time on a 32k-node graph, profiled). Lives in the
   // cache dir; `ask` falls back to live tokenization when it's absent/stale.
@@ -207,6 +288,8 @@ export async function buildGraph(
     graphPath,
     cards: cardStats.written,
     files: files.length,
+    parsed,
+    reused,
     nodes: nodes.length,
     edges: edges.length,
     byKind,

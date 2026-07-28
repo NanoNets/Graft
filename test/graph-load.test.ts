@@ -118,7 +118,12 @@ test("loadAskIndexCached: caches and invalidates the same way as the graph loade
   assert.equal(__parseCount.askIndex, 2);
 });
 
-test("callTool: graft_callers on the same dir twice doesn't reparse the graph", () => {
+// This file pins the mtime-keyed load cache, so the pre-query auto-refresh —
+// which deliberately invalidates that cache after a rebuild — has to stay out of
+// the way. `graph-refresh.test.ts` covers the refresh itself.
+process.env.GRAFT_NO_REFRESH = "1";
+
+test("callTool: graft_callers on the same dir twice doesn't reparse the graph", async () => {
   const dir = fixtureDir();
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "math.ts"), "export function add() { return 1; }\n");
@@ -142,11 +147,11 @@ test("callTool: graft_callers on the same dir twice doesn't reparse the graph", 
   writeGraph(graph, outDir);
   __resetParseCounts();
 
-  const r1 = callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
+  const r1 = await callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r1.isError, false);
   assert.equal(__parseCount.graph, 1);
 
-  const r2 = callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
+  const r2 = await callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r2.isError, false);
   assert.equal(__parseCount.graph, 1, "second call on the same dir must not reparse");
 });

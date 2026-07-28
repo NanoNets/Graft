@@ -80,9 +80,11 @@ hotspots, straight from the wiring graph.
   or ask your way through every subsystem it lists. \`--max-dirs N\` widens it.
 
 ### 6 · Lifecycle: \`graft build\` / \`graft check\`
-\`build\` regenerates the graph after code changes (\`$0\`; \`--deep\` adds an LLM
-concept map, skip unless asked). \`check\` fails when \`graft/\` is stale (for CI).
-You rarely touch these mid-task; the graph is already built and committed.
+Every tool above refreshes the graph itself before answering, so what you get back
+always describes the code as it is right now — including edits you just made and
+have not committed. You do **not** need to run \`build\` after editing.
+\`build\` is for the LLM layer (\`--deep\` adds a concept map; skip unless asked);
+\`check\` fails when \`graft/\` is stale, for CI.
 
 ## Scenarios: the shortest path through a coding task
 

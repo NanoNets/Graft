@@ -72,7 +72,7 @@ function multiDirRepo(): string {
   return d;
 }
 
-test('TOOLS lists the six tools with schemas', () => {
+test('TOOLS lists the six tools with schemas', async () => {
   assert.deepEqual(TOOLS.map((t) => t.name), [
     'graft_ask',
     'graft_skeleton',
@@ -93,101 +93,101 @@ test('TOOLS lists the six tools with schemas', () => {
   assert.ok('depth' in props, 'graft_callers schema should document `depth`');
 });
 
-test('graft_ask returns ranked hits for a built repo', () => {
+test('graft_ask returns ranked hits for a built repo', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_ask', { query: 'how do I add numbers' });
+  const r = await callTool(d, 'graft_ask', { query: 'how do I add numbers' });
   assert.equal(r.isError, false);
   assert.match(r.text, /add/);
   assert.match(r.text, /src\/math\.ts/);
 });
 
-test('graft_ask: `in` arg round-trips — narrows results to the prefix and is a soft isError on an unknown one', () => {
+test('graft_ask: `in` arg round-trips — narrows results to the prefix and is a soft isError on an unknown one', async () => {
   const d = builtRepo();
-  const ok = callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'src' });
+  const ok = await callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'src' });
   assert.equal(ok.isError, false);
   assert.match(ok.text, /src\/math\.ts/);
 
-  const miss = callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'nosuchdir' });
+  const miss = await callTool(d, 'graft_ask', { query: 'how do I add numbers', in: 'nosuchdir' });
   assert.equal(miss.isError, true);
   assert.match(miss.text, /nothing indexed under "nosuchdir\/"/);
   assert.match(miss.text, /or any path prefix/);
 });
 
-test('graft_check reports the wiring state', () => {
+test('graft_check reports the wiring state', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_check', {});
+  const r = await callTool(d, 'graft_check', {});
   assert.equal(r.isError, false);
   assert.match(r.text, /graph check: OK/);
 });
 
-test('graft_callers with depth names dependents of a file (blast radius)', () => {
+test('graft_callers with depth names dependents of a file (blast radius)', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_callers', { symbol: 'src/math.ts', depth: 2 });
+  const r = await callTool(d, 'graft_callers', { symbol: 'src/math.ts', depth: 2 });
   assert.equal(r.isError, false);
   assert.ok(r.text.length > 0);
 });
 
-test('unbuilt repo and unknown tool are soft errors', () => {
+test('unbuilt repo and unknown tool are soft errors', async () => {
   const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-bare-'));
-  const r1 = callTool(bare, 'graft_callers', { symbol: 'x.ts', depth: 2 });
+  const r1 = await callTool(bare, 'graft_callers', { symbol: 'x.ts', depth: 2 });
   assert.equal(r1.isError, true);
   assert.match(r1.text, /graft build/);
-  const r2 = callTool(bare, 'nope', {});
+  const r2 = await callTool(bare, 'nope', {});
   assert.equal(r2.isError, true);
   assert.match(r2.text, /unknown tool/i);
 });
 
-test('graft_callers round-trips a caller on the built fixture', () => {
+test('graft_callers round-trips a caller on the built fixture', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_callers', { symbol: 'add' });
+  const r = await callTool(d, 'graft_callers', { symbol: 'add' });
   assert.equal(r.isError, false);
   assert.match(r.text, /add · function · src\/math\.ts:/);
   assert.match(r.text, /calls ← sub \(src\/math\.ts:/);
 });
 
-test('graft_callers: qualified/--in narrowing still resolves through the shared resolver', () => {
+test('graft_callers: qualified/--in narrowing still resolves through the shared resolver', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_callers', { symbol: 'add', in: 'math' });
+  const r = await callTool(d, 'graft_callers', { symbol: 'add', in: 'math' });
   assert.equal(r.isError, false);
   assert.match(r.text, /calls ← sub/);
-  const miss = callTool(d, 'graft_callers', { symbol: 'add', in: 'nowhere' });
+  const miss = await callTool(d, 'graft_callers', { symbol: 'add', in: 'nowhere' });
   assert.equal(miss.isError, true);
   assert.match(miss.text, /no symbol "add" in the graph/);
 });
 
-test('graft_callers direction:out round-trips a callee, and reports a loud note when there are none', () => {
+test('graft_callers direction:out round-trips a callee, and reports a loud note when there are none', async () => {
   const d = builtRepo();
-  const callee = callTool(d, 'graft_callers', { symbol: 'sub', direction: 'out' });
+  const callee = await callTool(d, 'graft_callers', { symbol: 'sub', direction: 'out' });
   assert.equal(callee.isError, false);
   assert.match(callee.text, /calls → add \(src\/math\.ts:/);
 
   // `add` calls nothing, so its callees are empty — must be a loud note, not silence.
-  const empty = callTool(d, 'graft_callers', { symbol: 'add', direction: 'out' });
+  const empty = await callTool(d, 'graft_callers', { symbol: 'add', direction: 'out' });
   assert.equal(empty.isError, false);
   assert.match(empty.text, /no indexed callees/);
   assert.match(empty.text, /graft grep "add"/);
 });
 
-test('graft_callers: unknown symbol / missing symbol are soft isErrors', () => {
+test('graft_callers: unknown symbol / missing symbol are soft isErrors', async () => {
   const d = builtRepo();
-  const r1 = callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere' });
+  const r1 = await callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere' });
   assert.equal(r1.isError, true);
   assert.match(r1.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r1.text, /check spelling|graft build/);
 
-  const r2 = callTool(d, 'graft_callers', {});
+  const r2 = await callTool(d, 'graft_callers', {});
   assert.equal(r2.isError, true);
   assert.match(r2.text, /requires a symbol/);
 });
 
-test('graft_callers: depth param is honored (depth 2 reaches further than depth 1)', () => {
+test('graft_callers: depth param is honored (depth 2 reaches further than depth 1)', async () => {
   const d = chainRepo();
-  const shallow = callTool(d, 'graft_callers', { symbol: 'add', depth: 1 });
+  const shallow = await callTool(d, 'graft_callers', { symbol: 'add', depth: 1 });
   assert.equal(shallow.isError, false);
   assert.match(shallow.text, /← sub \(/);
   assert.doesNotMatch(shallow.text, /compute/);
 
-  const deeper = callTool(d, 'graft_callers', { symbol: 'add', depth: 2 });
+  const deeper = await callTool(d, 'graft_callers', { symbol: 'add', depth: 2 });
   assert.equal(deeper.isError, false);
   assert.match(deeper.text, /← sub \(/);
   assert.match(deeper.text, /\[depth 1\]/);
@@ -195,9 +195,9 @@ test('graft_callers: depth param is honored (depth 2 reaches further than depth 
   assert.match(deeper.text, /\[depth 2\]/);
 });
 
-test('graft_callers depth>1 on a file aggregates dependents that call into a symbol the file defines, not just file-level imports', () => {
+test('graft_callers depth>1 on a file aggregates dependents that call into a symbol the file defines, not just file-level imports', async () => {
   const d = fileScopeRepo();
-  const r = callTool(d, 'graft_callers', { symbol: 'src/a.ts', depth: 2 });
+  const r = await callTool(d, 'graft_callers', { symbol: 'src/a.ts', depth: 2 });
   assert.equal(r.isError, false);
   // Walking only the FILE node's incoming edges would find b.ts via `imports`
   // but drop it via `calls`, since a `calls` edge targets the SYMBOL id
@@ -206,95 +206,95 @@ test('graft_callers depth>1 on a file aggregates dependents that call into a sym
   assert.match(r.text, /calls ← useB \(src\/b\.ts/);
 });
 
-test('graft_callers: unknown symbol is a soft isError with the check-spelling message', () => {
+test('graft_callers: unknown symbol is a soft isError with the check-spelling message', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere', depth: 2 });
+  const r = await callTool(d, 'graft_callers', { symbol: 'noSuchSymbolAnywhere', depth: 2 });
   assert.equal(r.isError, true);
   assert.match(r.text, /no symbol "noSuchSymbolAnywhere" in the graph/);
   assert.match(r.text, /check spelling/);
 });
 
-test('graft_grep round-trips a hit on the built fixture, grouped by enclosing symbol', () => {
+test('graft_grep round-trips a hit on the built fixture, grouped by enclosing symbol', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_grep', { pattern: 'add' });
+  const r = await callTool(d, 'graft_grep', { pattern: 'add' });
   assert.equal(r.isError, false);
   assert.match(r.text, /"add" — \d+ hits? in \d+ symbols? across \d+ files? \(searched \d+ indexed files\)/);
   assert.match(r.text, /src\/math\.ts/);
 });
 
-test('graft_grep: no hits is a soft (non-error) result with the loud fallback note', () => {
+test('graft_grep: no hits is a soft (non-error) result with the loud fallback note', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_grep', { pattern: 'noSuchPatternAnywhere' });
+  const r = await callTool(d, 'graft_grep', { pattern: 'noSuchPatternAnywhere' });
   assert.equal(r.isError, false);
   assert.match(r.text, /no hits for "noSuchPatternAnywhere"/);
   assert.match(r.text, /retry graft grep/);
 });
 
-test('graft_grep: missing pattern and unbuilt repo are soft errors', () => {
+test('graft_grep: missing pattern and unbuilt repo are soft errors', async () => {
   const d = builtRepo();
-  const r1 = callTool(d, 'graft_grep', {});
+  const r1 = await callTool(d, 'graft_grep', {});
   assert.equal(r1.isError, true);
   assert.match(r1.text, /requires a pattern/);
 
   const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-grep-bare-'));
-  const r2 = callTool(bare, 'graft_grep', { pattern: 'add' });
+  const r2 = await callTool(bare, 'graft_grep', { pattern: 'add' });
   assert.equal(r2.isError, true);
   assert.match(r2.text, /graft build/);
 });
 
-test('graft_map round-trips a repo orientation on the built fixture', () => {
+test('graft_map round-trips a repo orientation on the built fixture', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_map', {});
+  const r = await callTool(d, 'graft_map', {});
   assert.equal(r.isError, false);
   assert.match(r.text, /^repo map — \d+ files · \d+ symbols · \d+ edges/);
   assert.match(r.text, /src/);
   assert.match(r.text, /hotspots:/);
 });
 
-test('graft_map: unbuilt repo is a soft isError with the no-graph message', () => {
+test('graft_map: unbuilt repo is a soft isError with the no-graph message', async () => {
   const bare = mkdtempSync(join(tmpdir(), 'graft-mcptools-map-bare-'));
-  const r = callTool(bare, 'graft_map', {});
+  const r = await callTool(bare, 'graft_map', {});
   assert.equal(r.isError, true);
   assert.match(r.text, /graft build/);
 });
 
-test('graft_map: max_dirs arg is honored — the MCP escape hatch for dropped dirs', () => {
+test('graft_map: max_dirs arg is honored — the MCP escape hatch for dropped dirs', async () => {
   const d = multiDirRepo();
 
-  const capped = callTool(d, 'graft_map', { max_dirs: 1 });
+  const capped = await callTool(d, 'graft_map', { max_dirs: 1 });
   assert.equal(capped.isError, false);
   assert.match(capped.text, /\+4 more directories not shown/);
 
-  const raised = callTool(d, 'graft_map', { max_dirs: 10 });
+  const raised = await callTool(d, 'graft_map', { max_dirs: 10 });
   assert.equal(raised.isError, false);
   assert.doesNotMatch(raised.text, /more directories? not shown/);
 });
 
-test('callTool honors a dirOverride for a graph built in a non-default dir', () => {
+test('callTool honors a dirOverride for a graph built in a non-default dir', async () => {
   const { repo, graphDir } = customDirRepo();
 
   // With the override pointing at the actual graph location, tools find it.
-  const check = callTool(repo, 'graft_check', {}, graphDir);
+  const check = await callTool(repo, 'graft_check', {}, graphDir);
   assert.equal(check.isError, false);
   assert.match(check.text, /graph check: OK/);
 
-  const callers = callTool(repo, 'graft_callers', { symbol: 'add' }, graphDir);
+  const callers = await callTool(repo, 'graft_callers', { symbol: 'add' }, graphDir);
   assert.equal(callers.isError, false);
   assert.match(callers.text, /calls ← sub \(src\/math\.ts:/);
 
   // Without the override, tools fall back to the default `<repo>/graft`,
   // which doesn't exist here — must report no graph, not silently succeed.
-  const noOverride = callTool(repo, 'graft_callers', { symbol: 'add' });
+  const noOverride = await callTool(repo, 'graft_callers', { symbol: 'add' });
   assert.equal(noOverride.isError, true);
   assert.match(noOverride.text, /graft build/);
 });
 
-test('graft_skeleton returns signatures for a file, errors on unknown file', () => {
+test('graft_skeleton returns signatures for a file, errors on unknown file', async () => {
   const d = builtRepo();
-  const r = callTool(d, 'graft_skeleton', { file: 'src/math.ts' });
+  const r = await callTool(d, 'graft_skeleton', { file: 'src/math.ts' });
   assert.equal(r.isError, false);
   assert.match(r.text, /graft skeleton — src\/math\.ts/);
   assert.match(r.text, /function add {2}function add\(a: number, b: number\): number/);
-  const miss = callTool(d, 'graft_skeleton', { file: 'src/nope.ts' });
+  const miss = await callTool(d, 'graft_skeleton', { file: 'src/nope.ts' });
   assert.equal(miss.isError, true);
 });

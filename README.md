@@ -119,7 +119,9 @@ flowchart LR
     P2 --> N["graft/*.md<br/>markdown node graph"]
 ```
 
-Both LLM passes are cached by content hash. Re-running only touches the files that changed, so the second build is fast and cheap.
+Every pass is cached by content hash — the LLM ones and the tree-sitter parse alike. Re-running only touches the files that changed, so the second build is fast and cheap (on this repo, 124 files: 0.74s cold, 0.18s after one edited file, 0.18s with nothing changed). `graft build --no-reuse` forces a cold re-parse.
+
+That cheapness is what lets **every query refresh the graph before it answers**. A retrieval call stats the tree against the last build's fingerprint (~3ms), and rebuilds only if something moved — so `ask`/`grep`/`callers`/`skeleton`/`map` describe the code as it is right now, including edits that are unsaved to git: uncommitted, unstaged, or staged all look the same to graft, which never reads git at all. The refresh is structural and `$0`; it never calls the LLM. Turn it off per-command with `--no-refresh`, or everywhere with `GRAFT_NO_REFRESH=1`.
 
 Alongside the markdown graph, `graft build` builds `graft/.graph/wiring.json` — a per-symbol code graph — plus a per-file wiring card mirroring your source tree. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network), which is why plain `graft build` needs no key. The `--deep` pass adds a one-line summary and a crux excerpt per symbol, cached by body hash.
 
@@ -220,8 +222,8 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
 
 `graft init` always wires up Claude Code, and Claude Code gets more than an instruction file. From then on, any Claude Code session opened in the repo gets:
 
-- **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph
-- **auto-sync** — after you edit code, Graft rebuilds the graph in the background at the end of the turn (structural, `$0` — it never calls the LLM on its own)
+- **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph (it flips back to `✓ synced` as soon as any graft query refreshes it, without waiting for the turn to end)
+- **auto-sync** — every graft query brings the graph up to date first, so an answer always describes the code as it is right now, uncommitted edits included; a background rebuild also runs at the end of a turn that touched code. Both are structural and `$0` — auto-sync never calls the LLM on its own
 - **context on tap** — each prompt pulls the matching nodes into the session; editing a file surfaces what depends on it ("blast radius"); new sessions start with the repo map
 
 <p align="center">
@@ -239,6 +241,7 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
 graft build [dir]                    # build graft/ from the code at [dir]: wiring graph + per-file cards (no LLM, no key)
 graft build --deep                   # add the LLM layer: concept nodes + per-symbol summary/crux (cached)
 graft build --extensions .ts .py     # only include these code extensions
+graft build --no-reuse               # re-parse every file instead of replaying unchanged ones from cache
 
 graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
 graft ask "<task>" --json            # machine-readable result
@@ -257,8 +260,13 @@ graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a 
 graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)
 graft map --max-dirs N               # raise/lower the number of directories shown
 
-graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code
+graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code (never auto-refreshes — it's the drift report)
 graft check --json                   # print the drift report as JSON
+
+# ask / skeleton / callers / grep / map all refresh the graph first if the working tree moved:
+#   --no-refresh                     # answer from the graph exactly as it is on disk
+#   GRAFT_NO_REFRESH=1               # same, for every command
+#   GRAFT_REFRESH=hash               # hash every file instead of trusting size+mtime
 
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser

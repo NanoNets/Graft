@@ -7,6 +7,7 @@ import { formatAsk, skeleton, formatSkeleton } from '../ask/ask.js';
 import { formatCheckReport } from '../context/check.js';
 import { formatGraphCheckReport } from '../graph/check.js';
 import { loadGraphCached } from '../graph/load.js';
+import { ensureFreshChildren, ensureFreshGraph, refreshNote } from '../graph/refresh.js';
 import { contextDirFor } from '../context/node-file.js';
 import { resolveSymbol, edgeWalk, type Direction, type EdgeHit } from '../graph/traverse.js';
 import { callersSavings, headerOf, hitLine, looseNoteFor } from '../graph/traverse-cli.js';
@@ -195,18 +196,44 @@ function callWorkspaceTool(
   }
 }
 
-export function callTool(
+/** Tools whose whole job is to REPORT drift. Rebuilding first would make
+ * `graft_check` answer about a graph it just fixed, i.e. always "OK". */
+const NO_REFRESH_TOOLS = new Set(['graft_check']);
+
+export async function callTool(
+  root: string,
+  name: string,
+  args: Record<string, unknown>,
+  dirOverride?: string,
+): Promise<{ text: string; isError: boolean }> {
+  try {
+    const ws = readWorkspace(root, dirOverride);
+    // Freshness first: an answer that cites file:line has to be about the code as
+    // it is right now, including edits nobody has committed (or even saved through
+    // this agent). ~3ms when nothing moved; a structural, $0 rebuild when it did.
+    let note: string | null = null;
+    if (!NO_REFRESH_TOOLS.has(name)) {
+      const r = ws
+        ? await ensureFreshChildren(root, ws.children, { contextDir: dirOverride })
+        : await ensureFreshGraph(root, { contextDir: dirOverride });
+      note = refreshNote(r);
+    }
+    const fed = ws ? callWorkspaceTool(root, dirOverride, name, args) : null;
+    const res = fed ?? callSingleTool(root, name, args, dirOverride);
+    return note ? { ...res, text: `${note}\n${res.text}` } : res;
+  } catch (err) {
+    return { text: err instanceof Error ? err.message : String(err), isError: true };
+  }
+}
+
+/** The single-graph path: every tool, answered from one repo's graph. */
+function callSingleTool(
   root: string,
   name: string,
   args: Record<string, unknown>,
   dirOverride?: string,
 ): { text: string; isError: boolean } {
-  try {
-    if (readWorkspace(root, dirOverride)) {
-      const fed = callWorkspaceTool(root, dirOverride, name, args);
-      if (fed) return fed;
-    }
-    switch (name) {
+  switch (name) {
       case 'graft_ask': {
         const query = String(args.query ?? '');
         if (!query) return { text: 'graft_ask requires a query', isError: true };
@@ -279,10 +306,7 @@ export function callTool(
         const map = buildRepoMap(w, { maxDirs });
         return { text: formatRepoMap(map), isError: false };
       }
-      default:
-        return { text: `unknown tool: ${name}`, isError: true };
-    }
-  } catch (err) {
-    return { text: err instanceof Error ? err.message : String(err), isError: true };
+    default:
+      return { text: `unknown tool: ${name}`, isError: true };
   }
 }
