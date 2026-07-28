@@ -165,11 +165,11 @@ npx @nanonets/graft init
 # Claude Code additionally gets the live statusline + hooks below
 ```
 
-`init` auto-detects which agents are present (via their config directories) and writes a marker-fenced Graft section into each one's shared instruction file — `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` — or a wholly-owned rule file for the agents that use one — `.cursor/rules/graft.mdc`, `.kiro/steering/graft.md`, `.windsurf/rules/graft.md`. Re-running only updates Graft's own section (or replaces the owned file) and never touches the rest of your content.
+`init` auto-detects which agents are present (via their config directories) and writes a marker-fenced Graft section into each one's shared instruction file — `AGENTS.md` (Codex, OpenCode and other CLIs that read it), `GEMINI.md`, `.github/copilot-instructions.md` — or a wholly-owned rule/skill file for the agents that use one — `.cursor/rules/graft.mdc`, `.kiro/steering/graft.md`, `.windsurf/rules/graft.md`, `.adal/skills/graft/SKILL.md` for [AdaL](https://adal.sylph.ai) (progressive-disclosure skill, same shape as the Claude Code skill below). Re-running only updates Graft's own section (or replaces the owned file) and never touches the rest of your content.
 
 | Flag | Effect |
 |---|---|
-| `--agents <ids...>` | wire only these — ids: `agents`, `cursor`, `gemini`, `copilot`, `kiro`, `windsurf`, `claude` |
+| `--agents <ids...>` | wire only these — ids: `agents`, `cursor`, `gemini`, `copilot`, `kiro`, `windsurf`, `adal`, `claude` |
 | `--all-agents` | write instruction files for every known agent, detected or not |
 | `--no-agents` | Claude Code wiring only; skip other agents |
 | `--list-agents` | print the known agent ids and exit |
@@ -246,7 +246,7 @@ graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
 
 graft init [dir]                     # wire Graft into the coding agents detected in this repo (Claude Code always gets full hooks + statusline + MCP)
 graft init --no-build                # wire the files only; don't build the graph
-graft init --agents cursor kiro      # wire only these agents (ids: agents, cursor, gemini, copilot, kiro, windsurf, claude)
+graft init --agents cursor kiro      # wire only these agents (ids: agents, cursor, gemini, copilot, kiro, windsurf, adal, claude)
 graft init --all-agents              # wire every known agent, detected or not
 graft init --list-agents             # list known agent ids and exit
 

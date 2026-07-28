@@ -8,6 +8,7 @@
  */
 import { join } from 'node:path';
 import { instructionBody, cursorRule, kiroSteering, windsurfRule } from './instructions.js';
+import { skillTemplate } from '../claude/skill-template.js';
 
 export interface DetectProbe {
   home: string;
@@ -36,6 +37,14 @@ export const HOSTS: HostTarget[] = [
       p.dirExists(join(p.home, '.codex')) ||
       p.dirExists(join(p.home, '.config', 'opencode')) ||
       p.dirExists(join(p.home, '.config', 'agents')),
+  },
+  {
+    id: 'adal',
+    name: 'AdaL',
+    kind: 'owned',
+    relPath: join('.adal', 'skills', 'graft', 'SKILL.md'),
+    content: skillTemplate,
+    detect: (p) => p.dirExists(join(p.home, '.adal')) || p.dirExists(join(p.repo, '.adal')),
   },
   {
     id: 'cursor',

@@ -14,8 +14,8 @@ function probeFor(home: string, repo: string): DetectProbe {
 }
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-registry-')); }
 
-test('registry exposes the six phase-1 hosts', () => {
-  assert.deepEqual(hostIds().sort(), ['agents', 'copilot', 'cursor', 'gemini', 'kiro', 'windsurf']);
+test('registry exposes the known hosts', () => {
+  assert.deepEqual(hostIds().sort(), ['adal', 'agents', 'copilot', 'cursor', 'gemini', 'kiro', 'windsurf']);
   for (const h of HOSTS) {
     assert.ok(h.relPath.length > 0);
     assert.ok(h.content().length > 0);
@@ -41,4 +41,18 @@ test('repo-local markers also light up hosts', () => {
   mkdirSync(join(repo, '.kiro'));
   const ids = detectHosts(probeFor(home, repo)).map((h) => h.id).sort();
   assert.deepEqual(ids, ['copilot', 'kiro']);
+});
+
+test('~/.adal lights up the adal host', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(home, '.adal'));
+  const ids = detectHosts(probeFor(home, repo)).map((h) => h.id).sort();
+  assert.deepEqual(ids, ['adal']);
+});
+
+test('repo-local .adal also lights up the adal host', () => {
+  const home = fresh(); const repo = fresh();
+  mkdirSync(join(repo, '.adal'));
+  const ids = detectHosts(probeFor(home, repo)).map((h) => h.id).sort();
+  assert.deepEqual(ids, ['adal']);
 });
