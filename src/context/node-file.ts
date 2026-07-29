@@ -105,6 +105,21 @@ export function contextDirFor(root: string, override?: string): string {
 }
 
 /**
+ * Trailing `/` off a repo-relative dir path, in linear time.
+ *
+ * The obvious `replace(/\/+$/, "")` is a polynomial-ReDoS shape — `\/+$` can begin
+ * matching at any point inside a run of slashes, so a path ending in many slashes
+ * and then anything else costs O(n²). CodeQL flags it (`js/polynomial-redos`), and
+ * rightly: the input here is a `--dir` value, so it is not attacker-controlled, but
+ * the ambiguity buys nothing and a loop is both faster and plainer.
+ */
+function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path[end - 1] === "/") end--;
+  return path.slice(0, end);
+}
+
+/**
  * Make sure the repo's root `.gitignore` ignores the graft output dir. The
  * graph is a local, regenerable cache (like `node_modules`), not a committed
  * artifact, so every `graft build` adds the entry itself the first time — the
@@ -116,7 +131,7 @@ export function contextDirFor(root: string, override?: string): string {
 export function ensureGitignored(root: string, contextDir: string): void {
   const rel = relative(root, contextDir).split(sep).join("/");
   if (rel === "" || rel.startsWith("..")) return; // dir is at/above the repo root — nothing sane to ignore
-  const entry = `${rel.replace(/\/+$/, "")}/`;
+  const entry = `${stripTrailingSlashes(rel)}/`;
   const path = join(root, ".gitignore");
   let current = "";
   try { current = readFileSync(path, "utf8"); } catch { /* no .gitignore yet — we create one */ }
@@ -153,7 +168,7 @@ export function ensureGitignored(root: string, contextDir: string): void {
 export function ensureSearchable(root: string, contextDir: string): void {
   const rel = relative(root, contextDir).split(sep).join("/");
   if (rel === "" || rel.startsWith("..")) return; // outside the repo — nothing to re-admit
-  const dir = rel.replace(/\/+$/, "");
+  const dir = stripTrailingSlashes(rel);
   const entry = `!${dir}/`;
   const path = join(root, ".ignore");
   let current = "";
