@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
 import { extractCachePath } from "../src/graph/extract-cache.js";
@@ -162,17 +162,21 @@ test("a refresh updates the statusline stats, but only where they already exist"
 });
 
 test("a failed rebuild still answers from the graph on disk", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only file proves nothing");
+  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only directory proves nothing");
   const d = repo();
   await buildGraph(d);
   const before = readFileSync(wiringPath(outOf(d)), "utf8");
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
 
   // Make the graph write itself fail: the query must degrade to the old graph, not
-  // start erroring because a rebuild couldn't happen.
-  chmodSync(wiringPath(outOf(d)), 0o400);
+  // start erroring because a rebuild couldn't happen. The *directory* is what has
+  // to be blocked — `writeGraph` installs the new graph with tmp+rename now (see
+  // `graph-write-atomic.test.ts`), and both the scratch write and the rename need
+  // write permission on the directory, while the old file's own mode is irrelevant.
+  const graphDir = dirname(wiringPath(outOf(d)));
+  chmodSync(graphDir, 0o500);
   const r = await ensureFreshGraph(d);
-  chmodSync(wiringPath(outOf(d)), 0o600);
+  chmodSync(graphDir, 0o700);
 
   assert.equal(r.refreshed, false);
   assert.match(r.note ?? "", /refresh skipped/);

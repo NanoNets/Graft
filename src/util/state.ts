@@ -35,13 +35,33 @@ function statsPath(d: string): string { return join(cacheDir(d), 'stats.json'); 
 export function readJson<T>(p: string): T | null {
   try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return null; }
 }
-/** Atomic write via tmp+rename. `compact` drops the indentation, for the caches
- * only a machine ever opens — it's ~30% of the bytes on a big, deep object. */
-export function writeJsonAtomic(p: string, value: unknown, compact = false): void {
+/**
+ * Write `text` to `p` so a concurrent reader sees either the whole old file or the
+ * whole new one — never a truncated prefix.
+ *
+ * `writeFileSync` truncates the destination to zero and *then* streams bytes into
+ * it, so for the milliseconds that takes, anyone who opens the path reads a partial
+ * document. Writing to a scratch file and renaming over the target avoids that
+ * entirely: `rename` within a filesystem is atomic, and it replaces the directory
+ * entry rather than modifying the file in place, so a reader that already opened
+ * the old file keeps reading a complete one.
+ *
+ * The pid in the temp name keeps two concurrent writers off each other's scratch
+ * file. This is the only atomic-write implementation in the codebase on purpose —
+ * `graph/write.ts` uses it for `wiring.json`, which a query can now rewrite while
+ * the statusline, a second graft process, or another MCP call is reading it.
+ */
+export function writeFileAtomic(p: string, text: string): void {
   mkdirSync(dirname(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
-  writeFileSync(tmp, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
+  writeFileSync(tmp, text);
   renameSync(tmp, p);
+}
+
+/** {@link writeFileAtomic} for JSON. `compact` drops the indentation, for the
+ * caches only a machine ever opens — it's ~30% of the bytes on a big, deep object. */
+export function writeJsonAtomic(p: string, value: unknown, compact = false): void {
+  writeFileAtomic(p, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
 }
 
 export function readStats(d: string): Stats | null { return readJson<Stats>(statsPath(d)); }
