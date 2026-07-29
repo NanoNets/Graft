@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.8.1
+
+### Changed
+
+- **Every graft query now refreshes the graph before it answers.** Freshness used to be the
+  `Stop` hook's job — it rebuilt once the turn had ended — so every query an agent made
+  between its first edit and the end of that turn answered from a graph that no longer
+  matched the file it had just changed, and it stayed that way indefinitely if the
+  background sync failed. Edits made outside the agent (your editor, a branch switch, a
+  stash) set no flag at all, so the statusline read `✓ synced` while the graph was behind.
+
+  `ask`, `grep`, `callers`, `skeleton` and `map` now stat the working tree against the last
+  build's fingerprint (~3ms) and rebuild only if something moved. `check` is exempt — it is
+  the drift report, and refreshing first would make it always say OK.
+
+  The refresh is structural and `$0`: it never calls the LLM, so `graft check` still reports
+  concept-node drift and stale summaries until you run `graft build --deep` yourself. A
+  refresh that fails answers from the graph on disk rather than failing the query.
+
+  ```bash
+  graft ask "..." --no-refresh     # answer from the graph exactly as it is on disk
+  GRAFT_NO_REFRESH=1               # same, for every command in the process
+  ```
+
+- **`wiring.json` is written atomically.** Now that a query can rewrite the graph, a
+  truncating write could hand a partial file to whatever was reading it at the time — the
+  statusline, a second MCP call, another graft process — which surfaced as
+  "no graph — run `graft build`" on a repo that has one.
+
+### Added
+
+- **Incremental extraction.** `graft build` memoizes each file's parse under `graft/.cache/`
+  and replays the files whose bytes have not moved, so a rebuild costs roughly the files
+  that changed: on this repo (124 files) **0.74s cold against 0.18s after one edit**. Output
+  is byte-identical to a cold build. The memo is discarded automatically when the extraction
+  code or the graft version changes, so a stale parse can't outlive an upgrade. `graft build`
+  now reports `parsed: N of M files (K replayed from cache)`, and `graft build --no-reuse`
+  forces a cold parse of everything.
+
+- **`GRAFT_REFRESH=hash`** — confirm every file by hashing its contents instead of trusting
+  size and mtime, for tooling that rewrites files while preserving both.
+
 ## 0.8.0
 
 ### Changed
