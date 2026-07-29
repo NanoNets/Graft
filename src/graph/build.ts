@@ -30,7 +30,7 @@ import { listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
-import { writeCards, writeIndex, writeCovers } from "./cards.js";
+import { writeCards, writeIndex, writeCovers, type CardStats } from "./cards.js";
 import { writeAskIndex } from "../ask/index-file.js";
 import { discoverScopes, scopeOf } from "./scopes.js";
 import type { GraphV1, Kind, NodeV1, Relation, ScopeV1 } from "./types.js";
@@ -244,16 +244,18 @@ export async function buildGraph(
     edges,
   };
 
-  const graphPath = writeGraph(graph, outDir);
-  // The graph is a local, regenerable cache — make sure git ignores it. Runs on
-  // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
-  ensureGitignored(root, outDir);
-  // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build
-  // time (~45% of query time on a 32k-node graph, profiled). Lives in the
-  // cache dir; `ask` falls back to live tokenization when it's absent/stale.
-  // Best-effort: wiring.json is already on disk at this point, so a sidecar
-  // write failure (e.g. an unwritable cache dir) must not abort cards/index/
-  // covers below — record it and keep going, same as other recoverable errors.
+  // ---- the ordered writes -------------------------------------------------
+  // Order is load-bearing, and it follows from what readers gate on. A reader
+  // decides whether it has a usable graph by reading wiring.json; everything else
+  // it consults is keyed to that. So: dependencies first, wiring.json second
+  // (atomically, so the flip is instantaneous), freshness third, projections last.
+
+  // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build time
+  // (~45% of query time on a 32k-node graph, profiled). It must land BEFORE
+  // wiring.json: `readAskIndex` rejects a sidecar whose ids don't match the graph,
+  // and the fallback is badly degraded (the nodes on disk have no `body_text`, so
+  // live re-tokenization has no body and body-only matches vanish). Writing it
+  // first means "new graph ⇒ new sidecar" always holds.
   //
   // MUST pass the in-memory `graph` here, never a re-read of wiringPath(outDir):
   // `writeGraph` strips `body_text` from what it serializes (dead weight once
@@ -265,24 +267,43 @@ export async function buildGraph(
     errors.push(`ask-index: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Tier-2 passive surface: project the nodes into per-file markdown cards, and
-  // refresh the INDEX roster. Pure projection — no LLM, no network.
-  const cardStats = writeCards(graph, outDir);
-  writeIndex(outDir, cardStats.files);
-  // Backfill concept nodes with their `covers:` symbol/file:line list (the
-  // OKF↔Wiring link). No-op when there are no concept nodes (a $0 build).
-  writeCovers(graph, outDir);
+  const graphPath = writeGraph(graph, outDir);
+  // The graph is a local, regenerable cache — make sure git ignores it. Runs on
+  // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
+  ensureGitignored(root, outDir);
 
-  // Dead last, and unconditionally. The fingerprint is the claim "everything graft
-  // wrote describes exactly these bytes", so it may only be made once everything
-  // graft writes is on disk: written before the cards above, a throw in that
-  // projection would leave a half-written `graft/` marked permanently clean, and no
-  // later probe would ever ask for it again. Conversely it must NOT depend on the
-  // extract memo's write succeeding — a missing memo only makes the next rebuild
-  // cold, whereas a missing fingerprint makes *every* query rebuild the repo from
-  // scratch, forever. If this write itself fails, the next probe reports "unknown"
-  // and rebuilds once, which is the safe direction.
+  // The fingerprint claims exactly one thing: "the graph on disk was built from
+  // these source bytes." That is true as of the line above, so it is written here.
+  //
+  // It says nothing about the projections below, and that is the point. Writing it
+  // after them made a failure there — one read-only INDEX.md — strand freshness
+  // forever: every later query would re-probe dirty, retake the lock, redo edge
+  // resolution + enrichment + the ask index + every card, throw again, and answer
+  // from a graph that was in fact already current. Projection failures are reported
+  // (below, and surfaced by `refreshNote`), never expressed as permanent drift.
   writeFingerprint(outDir, entries);
+
+  // Tier-2 passive surface: project the nodes into per-file markdown cards, refresh
+  // the INDEX roster, and backfill concept nodes with their `covers:` list (the
+  // OKF↔Wiring link; a no-op on a $0 build with no concept nodes). Pure projection —
+  // no LLM, no network — and individually fallible: a read-only card, a card path
+  // colliding with a directory, or ENOSPC records an error and lets the rest proceed.
+  let cardStats: CardStats = { written: 0, pruned: 0, files: [] };
+  try {
+    cardStats = writeCards(graph, outDir);
+  } catch (err) {
+    errors.push(`cards: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    writeIndex(outDir, cardStats.files);
+  } catch (err) {
+    errors.push(`INDEX.md: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    errors.push(...writeCovers(graph, outDir).errors);
+  } catch (err) {
+    errors.push(`covers: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const byKind = {} as Record<Kind, number>;
   for (const n of nodes) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;

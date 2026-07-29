@@ -48,14 +48,26 @@ export function readJson<T>(p: string): T | null {
  *
  * The pid in the temp name keeps two concurrent writers off each other's scratch
  * file. This is the only atomic-write implementation in the codebase on purpose —
- * `graph/write.ts` uses it for `wiring.json`, which a query can now rewrite while
- * the statusline, a second graft process, or another MCP call is reading it.
+ * `graph/write.ts` uses it for `wiring.json` and `ask/index-file.ts` for the sidecar
+ * that has to agree with it, both of which a query can now rewrite while the
+ * statusline, a second graft process, or another MCP call is reading them.
+ *
+ * A failed write takes its scratch file with it. Every CLI invocation is a new pid,
+ * so the names never collide and never get reused: leaving them behind means a repo
+ * that fails this write once per query (ENOSPC, or a Windows indexer holding the
+ * target open) accumulates one full-size copy of the graph per query, and nothing
+ * in graft ever lists `.graph/` or `.cache/` to clean them up.
  */
 export function writeFileAtomic(p: string, text: string): void {
   mkdirSync(dirname(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, p);
+  try {
+    writeFileSync(tmp, text);
+    renameSync(tmp, p);
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* nothing more we can do */ }
+    throw e;
+  }
 }
 
 /** {@link writeFileAtomic} for JSON. `compact` drops the indentation, for the

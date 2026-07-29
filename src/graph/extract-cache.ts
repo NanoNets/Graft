@@ -23,7 +23,7 @@
  * extraction code itself, caught by content-hashing it — see
  * {@link extractorStamp}. Neither asks anyone to remember to bump anything.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
@@ -34,7 +34,7 @@ import type { NodeV1 } from "./types.js";
 
 /** Bump when the on-disk shape below changes. */
 const CACHE_VERSION = 1;
-const EXTRACT_CACHE_FILE = "extract.json";
+const EXTRACT_CACHE_PREFIX = "extract";
 
 export interface ExtractEntry {
   size: number;
@@ -58,14 +58,48 @@ export interface ExtractCache {
   files: Record<string, ExtractEntry>;
 }
 
-export function extractCachePath(outDir: string): string {
-  return join(outDir, CACHE_DIR, EXTRACT_CACHE_FILE);
+/**
+ * Where this graft's memo lives: `<outDir>/.cache/extract.<stamp>.json`.
+ *
+ * The stamp is in the *filename*, not just inside the file, so two grafts working
+ * on one repo keep separate memos instead of evicting each other. That is the
+ * default install, not an exotic case: `graft init` wires the MCP server as
+ * `npx -y @nanonets/graft` (which resolves the latest published version) while the
+ * Claude Code hooks run the locally installed one. The moment those two versions
+ * differ, a single shared file means the prompt hook and every MCP retrieval take
+ * turns rejecting each other's entries and cold-re-parsing the whole repo — the memo
+ * would never help anyone.
+ *
+ * Null stamp → null path → no memo at all. See {@link extractorStamp}.
+ */
+export function extractCachePath(outDir: string): string | null {
+  const stamp = extractorStamp();
+  return stamp === null ? null : join(outDir, CACHE_DIR, `${EXTRACT_CACHE_PREFIX}.${stamp}.json`);
+}
+
+/** Keep `.cache/` from growing a file per version forever: after writing, drop all
+ * but the newest `keep` files sharing a prefix. Best-effort and never fatal — this
+ * is a cache directory, and a failure here costs disk, not correctness. */
+export function pruneSidecars(cacheDir: string, prefix: string, keep = 2): void {
+  try {
+    const mine = readdirSync(cacheDir)
+      .filter((f) => f.startsWith(`${prefix}.`) && f.endsWith(".json"))
+      .map((f) => {
+        const full = join(cacheDir, f);
+        return { full, mtimeMs: statSync(full).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const f of mine.slice(keep)) rmSync(f.full, { force: true });
+  } catch {
+    /* nothing here is load-bearing */
+  }
 }
 
 /** Computed once per process — this can't change under a running process without
  * the module graph itself being swapped, and a long-lived MCP server holding the
- * identity of the code it actually loaded is the correct answer anyway. */
-let memoizedStamp: string | null = null;
+ * identity of the code it actually loaded is the correct answer anyway.
+ * `undefined` = not computed yet; `null` = computed, and there is no identity. */
+let memoizedStamp: string | null | undefined;
 
 /**
  * Identity of the code that produces the cached parses. Both sidecars key on it,
@@ -92,33 +126,48 @@ let memoizedStamp: string | null = null;
  * graft's own files) invalidates too.
  *
  * Measured at ~0.5ms for 21 files / 556KB, paid once per process.
+ *
+ * **Null when no identity can be established at all**, and that is deliberately not
+ * a string. It used to return `"unknown"` on failure — but `"unknown"` was then
+ * *written into the sidecars as a real identity*, and every later run compared equal
+ * to it, so any environment where stamping fails (a `pkg`/`bun-compile` single-file
+ * build, an asar-style read, a directory that can't be listed) permanently lost the
+ * ability to notice an extractor change. A sentinel that doubles as a valid value
+ * silently disables the whole mechanism. Null forces callers to decide instead, and
+ * {@link extractCachePath} decides not to have a memo.
  */
-export function extractorStamp(): string {
-  if (memoizedStamp === null) memoizedStamp = computeStamp();
+export function extractorStamp(): string | null {
+  if (memoizedStamp === undefined) memoizedStamp = computeStamp();
   return memoizedStamp;
 }
 
-function computeStamp(): string {
+function computeStamp(): string | null {
   try {
     const self = fileURLToPath(import.meta.url);
     // `.js` when running from `dist/`, `.ts` under tsx — take the extension from
     // our own filename rather than guessing which layout we're in.
     const dir = dirname(self);
-    return stampDir(dir, extname(self), packageVersion(dir));
+    const hashed = stampDir(dir, extname(self), packageVersion(dir) ?? "");
+    if (hashed) return hashed;
+    // Couldn't read the modules (bundled into one file, say). The version alone is
+    // a weaker identity — it can't see a local edit — but it still turns over on
+    // every upgrade, which is the case that ships broken parses to users.
+    const v = packageVersion(dir);
+    return v ? `v${v}` : null;
   } catch {
-    return "unknown";
+    return null;
   }
 }
 
 /**
- * Hash every `ext` file in `dir`, plus `version`. Separated from
- * {@link extractorStamp} so a test can prove the property that matters: a change
- * to *any* module in the directory moves the stamp, not just the one the old
- * implementation happened to watch.
+ * Hash every `ext` file in `dir`, plus `version`. Null when the directory holds no
+ * such file. Separated from {@link extractorStamp} so a test can prove the property
+ * that matters: a change to *any* module in the directory moves the stamp, not just
+ * the one the old implementation happened to watch.
  */
-export function stampDir(dir: string, ext: string, version = ""): string {
+export function stampDir(dir: string, ext: string, version = ""): string | null {
   const files = readdirSync(dir).filter((f) => f.endsWith(ext)).sort();
-  if (!files.length) return "unknown";
+  if (!files.length) return null;
   const h = createHash("sha256");
   h.update(version);
   for (const f of files) {
@@ -128,38 +177,45 @@ export function stampDir(dir: string, ext: string, version = ""): string {
   return h.digest("hex").slice(0, 16);
 }
 
-/** graft's own version, or `""` when it can't be read (then the content hash
- * alone carries the stamp — still correct for every local edit). */
-function packageVersion(graphDir: string): string {
+/** graft's own version, or null when it can't be read. */
+function packageVersion(graphDir: string): string | null {
   try {
     const pkg = JSON.parse(readFileSync(join(graphDir, "..", "..", "package.json"), "utf8")) as { version?: string };
-    return pkg.version ?? "";
+    return pkg.version ?? null;
   } catch {
-    return "";
+    return null;
   }
 }
 
 export function emptyExtractCache(): ExtractCache {
-  return { version: CACHE_VERSION, extractor: extractorStamp(), files: {} };
+  return { version: CACHE_VERSION, extractor: extractorStamp() ?? "", files: {} };
 }
 
-/** The cache for `outDir`, or an empty one when it's absent, unparseable, or was
- * written by a different cache version / extractor build. */
+/** The cache for `outDir`, or an empty one when it's absent, unparseable, written by
+ * a different cache version, or when this graft has no identity to key on (then
+ * every build is cold, which is slow but never wrong). The stamp is in the filename,
+ * so the `extractor` field is a second check rather than the only one. */
 export function readExtractCache(outDir: string): ExtractCache {
-  const c = readJson<ExtractCache>(extractCachePath(outDir));
+  const path = extractCachePath(outDir);
   const stamp = extractorStamp();
+  if (path === null || stamp === null) return emptyExtractCache();
+  const c = readJson<ExtractCache>(path);
   if (!c || c.version !== CACHE_VERSION || c.extractor !== stamp || typeof c.files !== "object") {
     return emptyExtractCache();
   }
   return { version: c.version, extractor: c.extractor, files: c.files ?? {} };
 }
 
-/** Best-effort write — a full graph is already on disk by the time this runs, so
- * an unwritable cache dir must never fail the build (it only costs the next
- * build its reuse). Returns false when the write failed. */
+/** Best-effort write — a full graph is already on disk by the time this runs, so an
+ * unwritable cache dir must never fail the build (it only costs the next build its
+ * reuse). Returns false when nothing was written, including the deliberate case of
+ * having no extractor identity: a parse we can't attribute must never be replayed. */
 export function writeExtractCache(outDir: string, cache: ExtractCache): boolean {
+  const path = extractCachePath(outDir);
+  if (path === null) return false;
   try {
-    writeJsonAtomic(extractCachePath(outDir), cache, true);
+    writeJsonAtomic(path, cache, true);
+    pruneSidecars(join(outDir, CACHE_DIR), EXTRACT_CACHE_PREFIX);
     return true;
   } catch {
     return false;

@@ -30,12 +30,51 @@ export function underGraft(dir: string, file: string): boolean {
 /** Default budget for a graft child process invoked from a hook, matching the 8s
  * the installed hook entries carry. */
 const CHILD_TIMEOUT_MS = 8000;
-/** The prompt hook's `graft ask` gets longer: its hook entry is installed with a
- * 15s budget (see `settings-merge.ts`) precisely because a query now brings the
- * graph up to date first, and the first one after an upgrade re-parses the repo
- * once. Kept under the outer budget so the killer is this timeout — which returns
- * cleanly — rather than Claude Code cutting the hook off mid-write. */
-const PROMPT_ASK_TIMEOUT_MS = 13000;
+/** Headroom left for the hook's own work (read stdin, score, write session, emit)
+ * after its `graft ask` child returns. */
+const HOOK_OVERHEAD_MS = 2000;
+/** Floor, so a hand-edited tiny timeout can't leave the child no time at all. */
+const MIN_CHILD_TIMEOUT_MS = 4000;
+
+/**
+ * How long the prompt hook may let `graft ask` run — derived from the budget that is
+ * *actually installed* in this repo's `.claude/settings.json`, not from what the
+ * current version of `settings-merge.ts` would install.
+ *
+ * A query now brings the graph up to date first, so `graft init` raises the
+ * UserPromptSubmit budget to 15s to cover the one cold rebuild after an upgrade. But
+ * `mergeGraftSettings` only runs during `graft init` — upgrading the npm package does
+ * not re-run it. So every repo wired before that change keeps `"timeout": 8000`, and
+ * hard-coding a 13s child there means Claude Code kills the hook first: `emit()` and
+ * `writeSession()` never run, the turn gets no retrieval pack at all, and the SIGKILLed
+ * child can't even release the build lock. Reading the installed number keeps the child
+ * strictly inside whatever budget this repo really has.
+ */
+export function promptAskTimeout(dir: string): number {
+  const installed = installedHookTimeout(dir, 'UserPromptSubmit');
+  if (installed === null) return CHILD_TIMEOUT_MS - HOOK_OVERHEAD_MS;
+  return Math.max(MIN_CHILD_TIMEOUT_MS, installed - HOOK_OVERHEAD_MS);
+}
+
+/** The timeout on this repo's graft hook entry for `event`, or null if it can't be
+ * read (no settings file, hand-edited shape, unparseable JSON). */
+function installedHookTimeout(dir: string, event: string): number | null {
+  try {
+    const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8')) as any;
+    const blocks = settings?.hooks?.[event];
+    if (!Array.isArray(blocks)) return null;
+    for (const block of blocks) {
+      for (const h of block?.hooks ?? []) {
+        if (typeof h?.command === 'string' && h.command.includes('graft-hooks.cjs') && typeof h.timeout === 'number') {
+          return h.timeout;
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function graftJson(dir: string, args: string[], timeout: number = CHILD_TIMEOUT_MS): any | null {
   try {
@@ -184,7 +223,7 @@ export async function main(event: string): Promise<void> {
     // repo whose lastFile resolves cleanly to one scope — see lastFileScopeHint.
     const scopeHint = lastFileScopeHint(dir, readStats(dir)?.lastFile);
     if (scopeHint) askArgs.push('--in', scopeHint);
-    const ask = graftJson(dir, askArgs, PROMPT_ASK_TIMEOUT_MS);
+    const ask = graftJson(dir, askArgs, promptAskTimeout(dir));
     if (!ask) return;
     const id = input.session_id || 'default';
     const s = readSession(dir, id);

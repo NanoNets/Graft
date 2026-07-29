@@ -20,9 +20,11 @@ function graftBlocks(): Record<string, Json[]> {
     // Longer budget than the other hooks: its `graft ask` is a real query, and a
     // query now brings the graph up to date first (graph/refresh.ts) — usually
     // milliseconds, but the first one after an upgrade re-parses the repo once.
-    // Paired with `PROMPT_ASK_TIMEOUT_MS` in hooks.ts, which caps the child a
-    // little under this; raising one without the other buys nothing, because
-    // whichever limit is lower is the one that fires.
+    // `hooks.ts` reads this number back out of the installed settings.json at
+    // runtime and caps its `graft ask` child just under it, so a repo wired before
+    // this bump (8s) keeps a child that fits inside 8s. Changing the number here is
+    // therefore safe on its own — but it only reaches an existing repo when someone
+    // re-runs `graft init`, since that is the only caller of this function.
     UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCmd('prompt'), timeout: 15000 }] }],
     SessionStart: [{ hooks: [{ type: 'command', command: hookCmd('session-start'), timeout: 8000 }] }],
     Stop: [{ hooks: [{ type: 'command', command: hookCmd('stop'), timeout: 8000 }] }],

@@ -24,10 +24,18 @@
   GRAFT_NO_REFRESH=1               # same, for every command in the process
   ```
 
-- **`wiring.json` is written atomically.** Now that a query can rewrite the graph, a
-  truncating write could hand a partial file to whatever was reading it at the time — the
-  statusline, a second MCP call, another graft process — which surfaced as
-  "no graph — run `graft build`" on a repo that has one.
+- **The graph and its sidecars are written atomically, and in a consistent order.** Now
+  that a query can rewrite the graph, a truncating write could hand a partial file to
+  whatever was reading it at the time — the statusline, a second MCP call, another graft
+  process — which surfaced as "no graph — run `graft build`" on a repo that has one. The
+  `ask` sidecar is written before the graph, so a reader that sees a new `wiring.json`
+  always sees an index that matches it.
+
+- **A failed write under `graft/` is reported instead of being retried forever.** One
+  unwritable card or `INDEX.md` (a read-only mount, a directory you don't own) used to
+  make every later query rebuild the whole repo and fail again. The graph and its
+  freshness record are independent of those projections now, so a build converges and the
+  failure is named in the query's own output.
 
 ### Added
 

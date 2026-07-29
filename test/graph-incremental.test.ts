@@ -6,12 +6,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
 import { extractCachePath, extractorStamp, readExtractCache, stampDir } from "../src/graph/extract-cache.js";
-import { isClean, probeDrift, readFingerprint } from "../src/graph/fingerprint.js";
+import { fingerprintPath, isClean, probeDrift, readFingerprint } from "../src/graph/fingerprint.js";
 import { readAskIndex } from "../src/ask/index-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1 } from "../src/graph/types.js";
@@ -244,4 +244,81 @@ test("a memo written by a different extractor is dropped, not replayed", async (
   const cold = await buildGraph(d);
   assert.equal(cold.reused, 0);
   assert.equal(cold.parsed, cold.files);
+});
+
+test("two grafts on one repo keep separate memos instead of evicting each other", async () => {
+  const d = repo();
+  await buildGraph(d);
+  const cache = join(outOf(d), ".cache");
+  const mine = extractCachePath(outOf(d))!;
+  assert.ok(existsSync(mine));
+  // The mechanism: the identity is in the FILENAME, not only inside the file. A
+  // single shared `extract.json` is what made two installs evict each other.
+  assert.ok(basename(mine).includes(extractorStamp()!), `stamp missing from ${basename(mine)}`);
+  assert.ok(basename(fingerprintPath(outOf(d))).includes(extractorStamp()!), "same for the probe sidecar");
+
+  // Stand in for the other install — `graft init` wires the MCP server as
+  // `npx -y @nanonets/graft` while the hooks run the locally installed dist, so two
+  // different versions on one repo is the DEFAULT setup, not an exotic one. With a
+  // single shared filename they took turns rejecting each other's entries and
+  // cold-re-parsing the whole repo on every call.
+  const theirs = join(cache, "extract.0000000000000000.json");
+  writeFileSync(theirs, readFileSync(mine, "utf8"));
+
+  const again = await buildGraph(d);
+  assert.equal(again.parsed, 0, "our own memo still applies");
+  assert.equal(again.reused, again.files);
+  assert.ok(existsSync(theirs), "and the other install's memo is left intact");
+
+  // Bounded, though: `.cache/` must not grow a file per version forever.
+  for (const n of ["1111", "2222", "3333"]) {
+    writeFileSync(join(cache, `extract.${n}00000000000000.json`), "{}");
+  }
+  await buildGraph(d);
+  const left = readdirSync(cache).filter((f) => f.startsWith("extract."));
+  assert.ok(left.length <= 2, `pruned to at most 2, found ${left.join(", ")}`);
+  assert.ok(left.includes(basename(mine)), "and the surviving one is the memo in use");
+});
+
+test("with no extractor identity, nothing is memoized — and 'unknown' is never stored", async () => {
+  const d = repo();
+  await buildGraph(d);
+
+  // Every sidecar on disk must name a real identity. `"unknown"` used to be both the
+  // failure sentinel AND a value written into the files, so every later run compared
+  // equal to it and extractor-change invalidation silently stopped working forever.
+  for (const f of readdirSync(join(outOf(d), ".cache"))) {
+    if (!f.endsWith(".json")) continue;
+    assert.ok(!f.includes("unknown"), `${f} is filed under the failure sentinel`);
+    const body = JSON.parse(readFileSync(join(outOf(d), ".cache", f), "utf8")) as { extractor?: string };
+    if (body.extractor !== undefined) assert.notEqual(body.extractor, "unknown", `${f} stores the sentinel`);
+  }
+  assert.equal(stampDir(mkdtempSync(join(tmpdir(), "graft-empty-")), ".js"), null, "an empty dir has no identity");
+});
+
+test("the ask sidecar lands before the graph, and lands atomically", async () => {
+  const d = repo();
+  await buildGraph(d);
+  const idxPath = join(outOf(d), ".cache", "ask-index.json");
+  const before = statSync(idxPath).ino;
+
+  writeFileSync(join(d, "src", "math.ts"), `${MATH}export function mul(a: number): number {\n  return a * 2;\n}\n`);
+  await buildGraph(d);
+
+  // Atomic: replaced by rename, not truncated in place. A reader that catches this
+  // file mid-write gets a parse error, which `readAskIndex` can only report as "no
+  // sidecar" — and the fallback is degraded, because wiring.json's nodes have had
+  // `body_text` stripped, so body-only matches disappear.
+  assert.notEqual(statSync(idxPath).ino, before);
+  assert.deepEqual(readdirSync(join(outOf(d), ".cache")).filter((f) => f.includes(".tmp")), []);
+
+  // Written first, so "new graph ⇒ matching sidecar" holds for anyone reading the
+  // pair. mtime ordering is the observable proxy for the write order.
+  assert.ok(
+    statSync(idxPath).mtimeMs <= statSync(wiringPath(outOf(d))).mtimeMs,
+    "the sidecar must not be newer than the graph it describes",
+  );
+  const idx = readAskIndex(outOf(d));
+  const g = readGraph(wiringPath(outOf(d))) as GraphV1;
+  assert.equal(idx?.docs.length, g.nodes.length, "and the pair agrees");
 });

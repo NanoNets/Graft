@@ -23,11 +23,19 @@ import { join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { contentHash } from "../util/id.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
-import { extractorStamp, type ExtractEntry } from "./extract-cache.js";
+import { extractorStamp, pruneSidecars, type ExtractEntry } from "./extract-cache.js";
 import { listSourceStats } from "./source-files.js";
 
-const FINGERPRINT_FILE = "fingerprint.json";
+const FINGERPRINT_PREFIX = "fingerprint";
 const FINGERPRINT_VERSION = 1;
+
+/** The identity this graft's prints are filed under. Unlike the extract memo, a
+ * missing extractor identity is *not* disqualifying here: freshness is a claim about
+ * source bytes, and a build with no memo is merely cold, never wrong. So stamp what
+ * we can and fall back to a shared bucket. */
+function stamp(): string {
+  return extractorStamp() ?? "nostamp";
+}
 
 /** `[size, mtimeMs, hash]` — positional to keep the file small. */
 type Print = [number, number, string];
@@ -53,14 +61,18 @@ export interface Drift {
   removed: string[];
 }
 
+/** `<outDir>/.cache/fingerprint.<stamp>.json` — keyed by extractor identity for the
+ * same reason the memo is (see {@link extractCachePath}): two grafts on one repo,
+ * typically an `npx` MCP server and a locally installed hook binary, must not keep
+ * invalidating each other's prints and forcing a cold rebuild on every call. */
 export function fingerprintPath(outDir: string): string {
-  return join(outDir, CACHE_DIR, FINGERPRINT_FILE);
+  return join(outDir, CACHE_DIR, `${FINGERPRINT_PREFIX}.${stamp()}.json`);
 }
 
 export function readFingerprint(outDir: string): Fingerprint | null {
   const f = readJson<Fingerprint>(fingerprintPath(outDir));
   if (!f || f.version !== FINGERPRINT_VERSION || typeof f.files !== "object" || !f.files) return null;
-  if (f.extractor !== extractorStamp()) return null; // different extractor — re-extract, don't trust these prints
+  if (f.extractor !== stamp()) return null; // different extractor — re-extract, don't trust these prints
   return f;
 }
 
@@ -71,7 +83,8 @@ export function writeFingerprint(outDir: string, entries: Record<string, Extract
   const files: Record<string, Print> = {};
   for (const [rel, e] of Object.entries(entries)) files[rel] = [e.size, e.mtimeMs, e.hash];
   try {
-    writeJsonAtomic(fingerprintPath(outDir), { version: FINGERPRINT_VERSION, extractor: extractorStamp(), files }, true);
+    writeJsonAtomic(fingerprintPath(outDir), { version: FINGERPRINT_VERSION, extractor: stamp(), files }, true);
+    pruneSidecars(join(outDir, CACHE_DIR), FINGERPRINT_PREFIX);
     return true;
   } catch {
     return false;

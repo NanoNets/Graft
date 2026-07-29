@@ -5,8 +5,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
@@ -18,6 +20,8 @@ import { callTool } from "../src/mcp/tools.js";
 import type { GraphV1 } from "../src/graph/types.js";
 
 const MATH = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+/** A *function*, because a plain `export const` is not extracted as a symbol node. */
+const MUL = "export function mul(a: number, b: number): number {\n  return a * b;\n}\n";
 
 function repo(): string {
   const d = mkdtempSync(join(tmpdir(), "graft-refresh-"));
@@ -92,7 +96,7 @@ test("ensureFreshGraph is a no-op on a clean tree", async () => {
 test("ensureFreshGraph rebuilds once when the graph predates the fingerprint", async () => {
   const d = repo();
   await buildGraph(d);
-  rmSync(join(outOf(d), ".cache", "fingerprint.json"));
+  rmSync(fingerprintPath(outOf(d)));
 
   const first = await ensureFreshGraph(d);
   assert.equal(first.refreshed, true, "no fingerprint = unknown state, so rebuild");
@@ -256,21 +260,93 @@ test("a file that becomes readable again is picked up through the probe", async 
 });
 
 test("the fingerprint is written even when the extract memo can't be", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only dir proves nothing");
+  const d = repo();
+  await buildGraph(d);
+
+  // An unwritable memo costs the next build its reuse. It must not cost every future
+  // query a full cold rebuild, which is what gating the fingerprint on it did.
+  //
+  // The write has to be made to fail for real. An earlier version of this test
+  // chmod'd extract.json itself — useless, because `writeExtractCache` goes through
+  // `writeFileAtomic`, and rename(2) needs write permission on the *directory*, not
+  // on the file. It returned true, the test passed, and it would have passed against
+  // the pre-fix code too.
+  const cache = join(outOf(d), ".cache");
+  const memo = extractCachePath(outOf(d))!;
+  assert.ok(existsSync(memo), "a memo exists to begin with");
+  const before = readFileSync(memo, "utf8");
+
+  writeFileSync(join(d, "src", "math.ts"), `${MATH}${MUL}`);
+  chmodSync(cache, 0o500);
+  const built = await buildGraph(d);
+  chmodSync(cache, 0o700);
+
+  assert.equal(readFileSync(memo, "utf8"), before, "the memo really could not be written");
+  assert.ok(hasSymbol(d, "src/math.ts#mul"), "but the graph itself was rebuilt");
+
+  // The fingerprint lives in the same unwritable dir, so it couldn't be written
+  // either — the invariant that matters is that the NEXT build (with the dir
+  // writable again) lays one down and the query path settles.
+  await buildGraph(d);
+  const drift = probeDrift(d, outOf(d));
+  assert.ok(drift, "a fingerprint exists, so the probe has a fast path");
+  assert.ok(isClean(drift), "and it says the graph matches the tree");
+  assert.deepEqual((await ensureFreshGraph(d)).refreshed, false, "so a query stops rebuilding");
+  // The memo is the only thing whose loss is silent (it costs reuse, nothing else).
+  // The ask sidecar lives in the same directory and *is* worth reporting, because
+  // losing it degrades ranking rather than just performance.
+  assert.ok(
+    built.errors.some((e) => e.startsWith("ask-index:")),
+    `the sidecar failure is reported: ${JSON.stringify(built.errors)}`,
+  );
+});
+
+test("a failed projection is reported, and never becomes permanent drift", async (t) => {
   if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only file proves nothing");
   const d = repo();
   await buildGraph(d);
 
-  // An unwritable memo costs the next build its reuse. It must not cost every
-  // future query a full cold rebuild, which is what gating the fingerprint on it did.
-  const memo = extractCachePath(outOf(d));
-  chmodSync(memo, 0o400);
-  writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
-  await buildGraph(d);
-  chmodSync(memo, 0o600);
+  // One unwritable file under graft/ — a dir you don't fully own, a read-only mount.
+  const index = join(outOf(d), "INDEX.md");
+  assert.ok(existsSync(index));
+  chmodSync(index, 0o400);
+  // A new file changes INDEX.md's roster, so the write is actually attempted —
+  // an unchanged render is skipped now, by design.
+  writeFileSync(join(d, "src", "extra.ts"), MUL);
 
-  const drift = probeDrift(d, outOf(d));
-  assert.ok(drift, "a fingerprint exists, so the probe has a fast path");
-  assert.ok(isClean(drift), "and it says the graph matches the tree");
+  // The graph must still get built, the failure must be told to the caller, and the
+  // fingerprint must be laid down — otherwise every later query re-runs the whole
+  // post-extraction pipeline (edges, enrichment, ask index, every card), throws
+  // again, and answers from a graph that was already current. Forever.
+  const first = await ensureFreshGraph(d);
+  assert.equal(first.refreshed, true);
+  assert.equal(hasSymbol(d, "src/extra.ts#mul"), true, "the graph is current");
+  assert.ok(first.errors?.length, "the projection failure is reported");
+  assert.match(refreshNote(first) ?? "", /write error.* under graft\/: INDEX\.md/);
+
+  const second = await ensureFreshGraph(d);
+  chmodSync(index, 0o600);
+  assert.equal(second.refreshed, false, "and it converges — no rebuild on the next query");
+  assert.equal(refreshNote(second), null);
+});
+
+test("after waiting out another process's rebuild, the waiter does not rebuild too", async () => {
+  const d = repo();
+  await buildGraph(d);
+  writeFileSync(join(d, "src", "math.ts"), `${MATH}${MUL}`);
+
+  // Stand in for the process that got there first: take the lock, do the rebuild it
+  // would have done, then release while our caller is still waiting.
+  assert.equal(acquireLock(d), true);
+  setTimeout(() => {
+    void buildGraph(d).then(() => releaseLock(d));
+  }, 150);
+
+  const r = await ensureFreshGraph(d);
+  assert.equal(r.refreshed, false, "the work was already done — re-probe, don't redo it");
+  assert.equal(refreshNote(r), null, "and nothing to report");
+  assert.equal(hasSymbol(d, "src/math.ts#mul"), true, "the edit is in the graph either way");
 });
 
 test("a fingerprint from a different extractor is not trusted", async () => {
@@ -325,4 +401,46 @@ test("callTool refreshes before answering — except for graft_check", async () 
 
   const again = await callTool(d, "graft_ask", { query: "multiply two numbers" });
   assert.ok(!again.text.startsWith("[graft] refreshed"), "nothing moved — no note, no rebuild");
+});
+
+test("a process killed while holding the lock releases it", async () => {
+  const d = repo();
+  const cache = join(outOf(d), ".cache");
+  mkdirSync(cache, { recursive: true });
+  const lock = join(cache, ".sync.lock");
+
+  // `execFileSync(..., { timeout })` — which is how the Claude Code prompt hook runs
+  // `graft ask` — enforces its timeout with SIGTERM, and node's default disposition
+  // for that is to exit without unwinding. So the `finally` that releases the lock
+  // never ran, and the abandoned lock then blocked the background sync and made every
+  // query wait-then-answer-stale until it aged out.
+  const src = fileURLToPath(new URL("../src", import.meta.url));
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "-e",
+      `const { acquireLockIn } = await import(${JSON.stringify(`${src}/util/state.ts`)});
+       const { releaseOnSignal } = await import(${JSON.stringify(`${src}/graph/refresh.ts`)});
+       const cache = process.argv[1];
+       if (!acquireLockIn(cache)) { process.exit(9); }
+       releaseOnSignal(cache);
+       process.stdout.write("held\\n");
+       setInterval(() => {}, 1000);`,
+      cache],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  await new Promise<void>((done, fail) => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => { if (c.includes("held")) done(); });
+    child.on("exit", (code) => fail(new Error(`child exited early (${code})`)));
+  });
+  assert.ok(existsSync(lock), "the child holds the lock");
+
+  child.kill("SIGTERM");
+  const [code, signal] = await new Promise<[number | null, string | null]>((done) =>
+    child.on("exit", (c, s) => done([c, s])),
+  );
+
+  assert.ok(!existsSync(lock), "the lock must not outlive the process that took it");
+  assert.equal(signal, "SIGTERM", "and the exit still reports the signal, for whoever is waiting on us");
+  assert.equal(code, null);
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { underGraft, main, lastFileScopeHint } from '../src/claude/hooks.js';
+import { underGraft, main, lastFileScopeHint, promptAskTimeout } from '../src/claude/hooks.js';
 import { readStats, readSession } from '../src/claude/state.js';
 import { runSync } from '../src/claude/sync-run.js';
 import { savingsFooter } from '../src/context/savings.js';
@@ -439,4 +439,35 @@ test('tool-savings counts a REAL savingsFooter (with the turn nudge) exactly onc
   } finally {
     delete process.env.CLAUDE_PROJECT_DIR;
   }
+});
+
+/**
+ * The prompt hook's `graft ask` child must stay inside the budget THIS repo has
+ * installed, not the one the current source would install. `mergeGraftSettings` runs
+ * only during `graft init`, so an npm upgrade leaves every already-wired repo on its
+ * old `timeout` — and a child that outlives it gets the whole hook killed by Claude
+ * Code, which means no retrieval pack and no session write at all.
+ */
+function withSettings(timeout: unknown): string {
+  const d = mkdtempSync(join(tmpdir(), 'graft-hooktimeout-'));
+  mkdirSync(join(d, '.claude'), { recursive: true });
+  const hooks = timeout === undefined ? {} : {
+    UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node ".claude/helpers/graft-hooks.cjs" prompt', timeout }] }],
+  };
+  writeFileSync(join(d, '.claude', 'settings.json'), JSON.stringify({ hooks }));
+  return d;
+}
+
+test('promptAskTimeout is derived from the installed hook budget', () => {
+  // A repo wired before the budget was raised.
+  assert.equal(promptAskTimeout(withSettings(8000)), 6000);
+  // A repo wired after.
+  assert.equal(promptAskTimeout(withSettings(15000)), 13000);
+  // Never so small the child has no chance.
+  assert.equal(promptAskTimeout(withSettings(1000)), 4000);
+
+  // Nothing readable: assume the conservative 8s budget the other hooks carry.
+  assert.equal(promptAskTimeout(withSettings(undefined)), 6000);
+  assert.equal(promptAskTimeout(withSettings('nonsense')), 6000);
+  assert.equal(promptAskTimeout(mkdtempSync(join(tmpdir(), 'graft-nosettings-'))), 6000);
 });

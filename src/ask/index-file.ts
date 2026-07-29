@@ -19,10 +19,11 @@
  * contribution is folded into the stored `df` at query time (see `ask.ts`),
  * which is why `df` here counts symbol/file nodes only.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { GraphV1 } from "../graph/types.js";
 import { CACHE_DIR } from "../context/node-file.js";
+import { writeFileAtomic } from "../util/state.js";
 
 /** Words too common/short to carry query intent — dropped before scoring. */
 const STOP = new Set([
@@ -125,8 +126,14 @@ export function writeAskIndex(outDir: string, graph: GraphV1): string {
   };
 
   const outPath = askIndexPath(outDir);
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, JSON.stringify(index) + "\n");
+  // Atomic, and `buildGraph` writes this BEFORE wiring.json. The sidecar has to
+  // agree with the graph — `readAskIndex` rejects one whose ids don't match — and
+  // the graph is what every reader gates on, so the graph must be the last of the
+  // pair to flip. A truncating write here would have handed a reader the new graph
+  // beside a half-written index, and the fallback path is badly degraded: the nodes
+  // in wiring.json have had `body_text` stripped, so live re-tokenization has no
+  // body to work from and body-only matches silently disappear.
+  writeFileAtomic(outPath, JSON.stringify(index) + "\n");
   return outPath;
 }
 
