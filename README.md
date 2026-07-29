@@ -222,8 +222,8 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
 
 `graft init` always wires up Claude Code, and Claude Code gets more than an instruction file. From then on, any Claude Code session opened in the repo gets:
 
-- **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph (it flips back to `✓ synced` as soon as any graft query refreshes it, without waiting for the turn to end)
-- **auto-sync** — every graft query brings the graph up to date first, so an answer always describes the code as it is right now, uncommitted edits included; a background rebuild also runs at the end of a turn that touched code. Both are structural and `$0` — auto-sync never calls the LLM on its own
+- **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph
+- **auto-sync** — every graft query brings the graph up to date first, so an answer always describes the code as it is right now, uncommitted edits included. A query refreshes only what it reads; the markdown under `graft/` is refreshed by the background rebuild at the end of a turn that touched code. Both are structural and `$0` — auto-sync never calls the LLM on its own
 - **context on tap** — each prompt pulls the matching nodes into the session; editing a file surfaces what depends on it ("blast radius"); new sessions start with the repo map
 
 <p align="center">

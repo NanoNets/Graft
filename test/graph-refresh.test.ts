@@ -144,7 +144,16 @@ test("a rebuild already in flight is waited out, then reported — never a hang"
   assert.ok(waited >= 1000 && waited < 10000, `should wait out the lock briefly, waited ${waited}ms`);
 });
 
-test("a refresh updates the statusline stats, but only where they already exist", async () => {
+/**
+ * The gate must leave `stats.json` completely alone, and this is load-bearing rather
+ * than merely tidy. `handleStop` only spawns the end-of-turn `graft build` when
+ * `stats.dirty` is set. A refresh writes the graph but deliberately not the markdown
+ * projections, so if it cleared `dirty` — which is exactly what "flip the statusline
+ * to ✓ synced mid-turn" would mean — the one thing that rebuilds `graft/`'s cards
+ * and INDEX.md would stop running, and the passive surface an agent greps would
+ * never catch up.
+ */
+test("a refresh leaves the statusline stats alone, so the Stop hook still fires", async () => {
   const d = repo();
   await buildGraph(d);
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
@@ -153,16 +162,15 @@ test("a refresh updates the statusline stats, but only where they already exist"
   await ensureFreshGraph(d);
   assert.equal(readStats(d), null);
 
-  // With one, the refresh clears the drift flags the edit hook set mid-turn —
-  // that's what flips the statusline from `⚠ stale` to `✓ synced`.
   writeStats(d, { ...emptyStats(), dirty: true, staleCount: 3 });
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export const Y = 2;\n`);
-  await ensureFreshGraph(d);
+  const r = await ensureFreshGraph(d);
+  assert.equal(r.refreshed, true, "the graph itself was rebuilt");
+
   const s = readStats(d);
-  assert.equal(s?.dirty, false);
-  assert.equal(s?.staleCount, 0);
-  assert.ok((s?.nodeCount ?? 0) > 0, "and it refreshes the counts from the new graph");
-  assert.ok(s?.syncedAt);
+  assert.equal(s?.dirty, true, "still dirty — the passive surface has not been rebuilt");
+  assert.equal(s?.staleCount, 3, "and the edit hook's count is not overwritten");
+  assert.equal(s?.syncedAt, null);
 });
 
 test("a failed rebuild still answers from the graph on disk", async (t) => {
@@ -173,14 +181,11 @@ test("a failed rebuild still answers from the graph on disk", async (t) => {
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
 
   // Make the graph write itself fail: the query must degrade to the old graph, not
-  // start erroring because a rebuild couldn't happen. The *directory* is what has
-  // to be blocked — `writeGraph` installs the new graph with tmp+rename now (see
-  // `graph-write-atomic.test.ts`), and both the scratch write and the rename need
-  // write permission on the directory, while the old file's own mode is irrelevant.
-  const graphDir = dirname(wiringPath(outOf(d)));
-  chmodSync(graphDir, 0o500);
+  // start erroring because a rebuild couldn't happen.
+  const graphFile = wiringPath(outOf(d));
+  chmodSync(graphFile, 0o400);
   const r = await ensureFreshGraph(d);
-  chmodSync(graphDir, 0o700);
+  chmodSync(graphFile, 0o600);
 
   assert.equal(r.refreshed, false);
   assert.match(r.note ?? "", /refresh skipped/);
@@ -259,17 +264,14 @@ test("a file that becomes readable again is picked up through the probe", async 
   assert.equal(hasSymbol(d, "src/hidden.ts#reachable"), true);
 });
 
-test("the fingerprint is written even when the extract memo can't be", async (t) => {
+test("an unwritable cache costs reuse, not correctness", async (t) => {
   if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only dir proves nothing");
   const d = repo();
   await buildGraph(d);
 
-  // An unwritable memo costs the next build its reuse. It must not cost every future
-  // query a full cold rebuild, which is what gating the fingerprint on it did.
-  //
   // The write has to be made to fail for real. An earlier version of this test
-  // chmod'd extract.json itself — useless, because `writeExtractCache` goes through
-  // `writeFileAtomic`, and rename(2) needs write permission on the *directory*, not
+  // chmod'd extract.json itself — useless, because the sidecars go out through
+  // `writeJsonAtomic`, and rename(2) needs write permission on the *directory*, not
   // on the file. It returned true, the test passed, and it would have passed against
   // the pre-fix code too.
   const cache = join(outOf(d), ".cache");
@@ -279,56 +281,70 @@ test("the fingerprint is written even when the extract memo can't be", async (t)
 
   writeFileSync(join(d, "src", "math.ts"), `${MATH}${MUL}`);
   chmodSync(cache, 0o500);
-  const built = await buildGraph(d);
+  await buildGraph(d);
   chmodSync(cache, 0o700);
 
   assert.equal(readFileSync(memo, "utf8"), before, "the memo really could not be written");
   assert.ok(hasSymbol(d, "src/math.ts#mul"), "but the graph itself was rebuilt");
 
-  // The fingerprint lives in the same unwritable dir, so it couldn't be written
-  // either — the invariant that matters is that the NEXT build (with the dir
-  // writable again) lays one down and the query path settles.
+  // Losing the memo and the fingerprint is a performance failure, not a correctness
+  // one: the next query rebuilds because it can't prove it doesn't need to. Once the
+  // directory is writable again the fast path comes back on its own.
   await buildGraph(d);
   const drift = probeDrift(d, outOf(d));
   assert.ok(drift, "a fingerprint exists, so the probe has a fast path");
   assert.ok(isClean(drift), "and it says the graph matches the tree");
   assert.deepEqual((await ensureFreshGraph(d)).refreshed, false, "so a query stops rebuilding");
-  // The memo is the only thing whose loss is silent (it costs reuse, nothing else).
-  // The ask sidecar lives in the same directory and *is* worth reporting, because
-  // losing it degrades ranking rather than just performance.
-  assert.ok(
-    built.errors.some((e) => e.startsWith("ask-index:")),
-    `the sidecar failure is reported: ${JSON.stringify(built.errors)}`,
-  );
 });
 
-test("a failed projection is reported, and never becomes permanent drift", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only file proves nothing");
+/**
+ * The query path writes the graph, the ask sidecar and the fingerprint — and stops.
+ * Cards and INDEX.md are what a human reads and what the agent greps; they are
+ * rebuilt by an explicit `graft build`, which is what the `Stop` hook runs at the
+ * end of a turn. Keeping them off the query path is what makes a refresh cheap, and
+ * it means a read-only card or an unparseable hand-written concept node can never be
+ * reached — let alone made permanent — by a retrieval call.
+ */
+test("a refresh rebuilds the graph but not the markdown projections", async () => {
   const d = repo();
   await buildGraph(d);
 
-  // One unwritable file under graft/ — a dir you don't fully own, a read-only mount.
   const index = join(outOf(d), "INDEX.md");
-  assert.ok(existsSync(index));
-  chmodSync(index, 0o400);
-  // A new file changes INDEX.md's roster, so the write is actually attempted —
-  // an unchanged render is skipped now, by design.
+  const card = join(outOf(d), "src", "math.md");
+  const newCard = join(outOf(d), "src", "extra.md");
+  assert.ok(existsSync(index) && existsSync(card), "an explicit build wrote both");
+  const indexBefore = readFileSync(index, "utf8");
+  const cardBefore = readFileSync(card, "utf8");
+
   writeFileSync(join(d, "src", "extra.ts"), MUL);
+  const r = await ensureFreshGraph(d);
 
-  // The graph must still get built, the failure must be told to the caller, and the
-  // fingerprint must be laid down — otherwise every later query re-runs the whole
-  // post-extraction pipeline (edges, enrichment, ask index, every card), throws
-  // again, and answers from a graph that was already current. Forever.
-  const first = await ensureFreshGraph(d);
-  assert.equal(first.refreshed, true);
+  assert.equal(r.refreshed, true);
   assert.equal(hasSymbol(d, "src/extra.ts#mul"), true, "the graph is current");
-  assert.ok(first.errors?.length, "the projection failure is reported");
-  assert.match(refreshNote(first) ?? "", /write error.* under graft\/: INDEX\.md/);
+  assert.equal(existsSync(newCard), false, "no card for it yet");
+  assert.equal(readFileSync(index, "utf8"), indexBefore, "INDEX.md untouched");
+  assert.equal(readFileSync(card, "utf8"), cardBefore, "existing cards untouched");
 
-  const second = await ensureFreshGraph(d);
-  chmodSync(index, 0o600);
-  assert.equal(second.refreshed, false, "and it converges — no rebuild on the next query");
-  assert.equal(refreshNote(second), null);
+  // An explicit build — the Stop hook's job — is what catches the surface up.
+  await buildGraph(d);
+  assert.equal(existsSync(newCard), true);
+});
+
+test("a refresh never writes the repo's .gitignore", async () => {
+  const d = repo();
+  await buildGraph(d); // an explicit build DOES self-ignore — that part is unchanged
+  const ignore = join(d, ".gitignore");
+  assert.match(readFileSync(ignore, "utf8"), /graft\//);
+
+  // A repo that excludes graft/ some other way (.git/info/exclude, a global
+  // core.excludesfile) and deliberately has no line here. A query is a read; it must
+  // not hand the user an unexplained modification to a tracked file.
+  rmSync(ignore);
+  writeFileSync(join(d, "src", "math.ts"), `${MATH}${MUL}`);
+  const r = await ensureFreshGraph(d);
+
+  assert.equal(r.refreshed, true, "the refresh still happened");
+  assert.equal(existsSync(ignore), false, "and it left .gitignore alone");
 });
 
 test("after waiting out another process's rebuild, the waiter does not rebuild too", async () => {

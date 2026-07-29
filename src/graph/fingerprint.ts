@@ -100,14 +100,12 @@ export function alwaysHash(): boolean {
  * May a recorded `(size, mtimeMs, hash)` be trusted for the file `f` as it is on
  * disk now, without reading it?
  *
- * **One definition, shared by the probe and the builder.** They each had their own
- * once, and the two disagreed in both directions: `GRAFT_REFRESH=hash` was honored
- * here but not in `build.ts` (so the probe reported drift the rebuild then refused
- * to repair — a rebuild on every query, forever, still answering from pre-edit
- * code), and `build.ts` distrusted entries from a failed read while the probe
- * fast-pathed them (so a `chmod +r` that fixed a file was never noticed, because a
- * chmod changes neither size nor mtime). Any future rule about what a stat can be
- * trusted for belongs here and nowhere else.
+ * **The probe's rule only.** `buildGraph` deliberately does not use this: it reads
+ * and hashes every file, every time. A stat may decide whether a query bothers
+ * rebuilding; it may not decide what the rebuild itself looks at — otherwise
+ * `graft check` (which always re-hashes) can report drift that the `graft build` it
+ * recommends then refuses to repair. `GRAFT_REFRESH=hash` is the escape hatch for
+ * the probe's blind spot: a same-length edit inside one mtime tick.
  *
  * An empty `hash` means the last build never got the bytes — always re-read.
  * A *parse* failure keeps its real hash, so it stays on the fast path: re-reading

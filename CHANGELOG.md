@@ -15,6 +15,13 @@
   build's fingerprint (~3ms) and rebuild only if something moved. `check` is exempt — it is
   the drift report, and refreshing first would make it always say OK.
 
+  A refresh writes only what a query reads: the wiring graph, the `ask` sidecar, and the
+  freshness record. It does **not** rewrite the markdown cards, `INDEX.md`, or your
+  `.gitignore` — a query is a read, and those stay the job of an explicit `graft build`
+  (which is what the Claude Code `Stop` hook already runs at the end of a turn). So the
+  retrieval tools are always current, while the markdown you might `grep` by hand can lag
+  an edit until the turn ends.
+
   The refresh is structural and `$0`: it never calls the LLM, so `graft check` still reports
   concept-node drift and stale summaries until you run `graft build --deep` yourself. A
   refresh that fails answers from the graph on disk rather than failing the query.
@@ -23,19 +30,6 @@
   graft ask "..." --no-refresh     # answer from the graph exactly as it is on disk
   GRAFT_NO_REFRESH=1               # same, for every command in the process
   ```
-
-- **The graph and its sidecars are written atomically, and in a consistent order.** Now
-  that a query can rewrite the graph, a truncating write could hand a partial file to
-  whatever was reading it at the time — the statusline, a second MCP call, another graft
-  process — which surfaced as "no graph — run `graft build`" on a repo that has one. The
-  `ask` sidecar is written before the graph, so a reader that sees a new `wiring.json`
-  always sees an index that matches it.
-
-- **A failed write under `graft/` is reported instead of being retried forever.** One
-  unwritable card or `INDEX.md` (a read-only mount, a directory you don't own) used to
-  make every later query rebuild the whole repo and fail again. The graph and its
-  freshness record are independent of those projections now, so a build converges and the
-  failure is named in the query's own output.
 
 ### Added
 
@@ -46,6 +40,11 @@
   code or the graft version changes, so a stale parse can't outlive an upgrade. `graft build`
   now reports `parsed: N of M files (K replayed from cache)`, and `graft build --no-reuse`
   forces a cold parse of everything.
+
+  Only the *parse* is skipped — every file is still read and hashed on every build. A stat
+  may decide whether a query bothers rebuilding; it may not decide what the rebuild itself
+  looks at, or `graft check` (which always re-hashes) could report drift that the `graft
+  build` it recommends refuses to repair.
 
 - **`GRAFT_REFRESH=hash`** — confirm every file by hashing its contents instead of trusting
   size and mtime, for tooling that rewrites files while preserving both.

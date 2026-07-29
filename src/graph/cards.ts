@@ -143,14 +143,6 @@ function pruneEmptyDirs(outDir: string): void {
   if (existsSync(outDir)) visit(outDir);
 }
 
-function readIfExists(path: string): string | null {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Write one wiring card per source file into `outDir`, mirroring the source tree,
  * and prune cards whose source no longer exists. Returns what changed.
@@ -172,12 +164,7 @@ export function writeCards(graph: GraphV1, outDir: string): CardStats {
     const symbols = group.filter((n) => n.kind !== "file");
     const cardPath = cardPathFor(outDir, sourcePath);
     mkdirSync(dirname(cardPath), { recursive: true });
-    const rendered = renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []);
-    // Skip identical rewrites. Cards are a pure projection, so most of them are
-    // unchanged on a rebuild — and now that a rebuild can run before any query
-    // (graph/refresh.ts), churning every card's mtime would wake editors and file
-    // watchers on files that didn't actually change.
-    if (readIfExists(cardPath) !== rendered) writeFileSync(cardPath, rendered);
+    writeFileSync(cardPath, renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []));
     written.add(cardPath);
     files.push({ card: relative(outDir, cardPath), path: sourcePath, symbols: symbols.length });
   }
@@ -231,12 +218,7 @@ export function writeIndex(outDir: string, files: CardFileInfo[]): void {
     );
   }
 
-  // Same skip-if-identical rule as the cards themselves: a rebuild runs before every
-  // query now, and INDEX.md is a pure projection, so rewriting it unchanged would wake
-  // editors and file watchers on every single retrieval call.
-  const rendered = lines.join("\n");
-  const path = join(outDir, INDEX_FILE);
-  if (readIfExists(path) !== rendered) writeFileSync(path, rendered);
+  writeFileSync(join(outDir, INDEX_FILE), lines.join("\n"));
 }
 
 /** One symbol a concept node covers: its name, kind, and `path:span` pointer. */
@@ -257,19 +239,11 @@ export interface CoverRef {
  * A surgical frontmatter patch: the generated body and every other key are
  * preserved verbatim; only `covers` is added/replaced. Concept nodes are the
  * top-level `.md` files (cards live in subdirs; INDEX.md is skipped). On a $0
- * structure-only build there are no concept nodes, so this is a no-op.
- *
- * These are the one thing under `graft/` a human writes by hand, and a rebuild now
- * runs before every query rather than only on an explicit `graft build` — so this is
- * careful twice over. It never writes a file whose bytes wouldn't change, and it
- * refuses to touch a node whose frontmatter didn't parse: `matter()` reports
- * unparseable YAML by handing back zero keys and folding the whole `---` block into
- * the content, so re-stringifying would prepend a *second* frontmatter block and
- * bury the author's own text. Those are reported and skipped.
+ * structure-only build there are no concept nodes, so this is a no-op. Returns
+ * the number of nodes enriched.
  */
-export function writeCovers(graph: GraphV1, outDir: string): { enriched: number; errors: string[] } {
-  const errors: string[] = [];
-  if (!existsSync(outDir)) return { enriched: 0, errors };
+export function writeCovers(graph: GraphV1, outDir: string): number {
+  if (!existsSync(outDir)) return 0;
 
   const symbolsByPath = new Map<string, NodeV1[]>();
   for (const n of graph.nodes) {
@@ -286,23 +260,7 @@ export function writeCovers(graph: GraphV1, outDir: string): { enriched: number;
   for (const entry of readdirSync(outDir)) {
     if (!entry.endsWith(".md") || entry === INDEX_FILE) continue;
     const full = join(outDir, entry);
-    const raw = readIfExists(full);
-    if (raw === null) continue;
-
-    let parsed: matter.GrayMatterFile<string>;
-    try {
-      parsed = matter(raw);
-    } catch (err) {
-      errors.push(`${entry}: frontmatter unreadable, left untouched — ${err instanceof Error ? err.message : String(err)}`);
-      continue;
-    }
-    // Delimiters present but nothing parsed out of them: broken YAML. Rewriting would
-    // stack a new block on top of the old text instead of patching it.
-    if (raw.startsWith("---") && Object.keys(parsed.data).length === 0) {
-      errors.push(`${entry}: frontmatter did not parse, left untouched (fix its YAML to get \`covers:\`)`);
-      continue;
-    }
-
+    const parsed = matter(readFileSync(full, "utf8"));
     const sources = Array.isArray(parsed.data.sources)
       ? (parsed.data.sources as Array<{ path?: string }>)
       : [];
@@ -316,10 +274,8 @@ export function writeCovers(graph: GraphV1, outDir: string): { enriched: number;
 
     // Re-stringify with covers appended last, so re-runs produce a stable diff.
     const { covers: _prev, ...rest } = parsed.data as Record<string, unknown>;
-    const rendered = matter.stringify(parsed.content, { ...rest, covers });
-    if (rendered === raw) continue; // nothing moved — don't touch the author's file
-    writeFileSync(full, rendered);
+    writeFileSync(full, matter.stringify(parsed.content, { ...rest, covers }));
     enriched++;
   }
-  return { enriched, errors };
+  return enriched;
 }

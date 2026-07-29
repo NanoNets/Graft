@@ -11,7 +11,6 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { GraphV1 } from '../graph/types.js';
 
 export interface Stats {
   nodeCount: number; edgeCount: number; languages: string[];
@@ -36,44 +35,29 @@ export function readJson<T>(p: string): T | null {
   try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return null; }
 }
 /**
- * Write `text` to `p` so a concurrent reader sees either the whole old file or the
- * whole new one — never a truncated prefix.
+ * Write JSON to `p` via a scratch file and a rename, so a concurrent reader sees
+ * either the whole old file or the whole new one — never a truncated prefix. The
+ * pid in the temp name keeps two concurrent writers off each other's scratch file.
  *
- * `writeFileSync` truncates the destination to zero and *then* streams bytes into
- * it, so for the milliseconds that takes, anyone who opens the path reads a partial
- * document. Writing to a scratch file and renaming over the target avoids that
- * entirely: `rename` within a filesystem is atomic, and it replaces the directory
- * entry rather than modifying the file in place, so a reader that already opened
- * the old file keeps reading a complete one.
- *
- * The pid in the temp name keeps two concurrent writers off each other's scratch
- * file. This is the only atomic-write implementation in the codebase on purpose —
- * `graph/write.ts` uses it for `wiring.json` and `ask/index-file.ts` for the sidecar
- * that has to agree with it, both of which a query can now rewrite while the
- * statusline, a second graft process, or another MCP call is reading them.
+ * `compact` drops the indentation, for the caches only a machine ever opens —
+ * it's ~30% of the bytes on a big, deep object.
  *
  * A failed write takes its scratch file with it. Every CLI invocation is a new pid,
  * so the names never collide and never get reused: leaving them behind means a repo
- * that fails this write once per query (ENOSPC, or a Windows indexer holding the
- * target open) accumulates one full-size copy of the graph per query, and nothing
- * in graft ever lists `.graph/` or `.cache/` to clean them up.
+ * that fails this write repeatedly (ENOSPC, or a Windows indexer holding the target
+ * open) accumulates one full-size file per attempt, and nothing in graft ever lists
+ * `.cache/` to clean them up.
  */
-export function writeFileAtomic(p: string, text: string): void {
+export function writeJsonAtomic(p: string, value: unknown, compact = false): void {
   mkdirSync(dirname(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
   try {
-    writeFileSync(tmp, text);
+    writeFileSync(tmp, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
     renameSync(tmp, p);
   } catch (e) {
     try { rmSync(tmp, { force: true }); } catch { /* nothing more we can do */ }
     throw e;
   }
-}
-
-/** {@link writeFileAtomic} for JSON. `compact` drops the indentation, for the
- * caches only a machine ever opens — it's ~30% of the bytes on a big, deep object. */
-export function writeJsonAtomic(p: string, value: unknown, compact = false): void {
-  writeFileAtomic(p, compact ? JSON.stringify(value) : JSON.stringify(value, null, 2));
 }
 
 export function readStats(d: string): Stats | null { return readJson<Stats>(statsPath(d)); }
@@ -118,21 +102,4 @@ export function acquireLockIn(cache: string): boolean {
 }
 export function releaseLockIn(cache: string): void {
   try { rmSync(join(cache, LOCK_FILE)); } catch { /* already gone */ }
-}
-
-/** The graph-derived half of {@link Stats} — everything the statusline shows that
- * isn't drift state. Lives here so the hooks and the pre-query auto-refresh report
- * identical numbers. */
-export function computeStats(
-  w: GraphV1,
-): Pick<Stats, 'nodeCount' | 'edgeCount' | 'languages' | 'totalCount' | 'readyCount'> {
-  const nodes = w.nodes ?? [];
-  const edges = w.edges ?? [];
-  return {
-    nodeCount: w.meta?.nodeCount ?? nodes.length,
-    edgeCount: w.meta?.edgeCount ?? edges.length,
-    languages: w.meta?.languages ?? [],
-    totalCount: nodes.length,
-    readyCount: nodes.filter((n) => n.summary_state === 'ready').length,
-  };
 }

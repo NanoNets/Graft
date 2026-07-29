@@ -296,29 +296,55 @@ test("with no extractor identity, nothing is memoized — and 'unknown' is never
   assert.equal(stampDir(mkdtempSync(join(tmpdir(), "graft-empty-")), ".js"), null, "an empty dir has no identity");
 });
 
-test("the ask sidecar lands before the graph, and lands atomically", async () => {
+test("an incremental rebuild leaves the ask sidecar agreeing with the graph", async () => {
   const d = repo();
   await buildGraph(d);
-  const idxPath = join(outOf(d), ".cache", "ask-index.json");
-  const before = statSync(idxPath).ino;
 
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export function mul(a: number): number {\n  return a * 2;\n}\n`);
-  await buildGraph(d);
+  await buildGraph(d); // warm: math.ts re-parsed, everything else replayed
 
-  // Atomic: replaced by rename, not truncated in place. A reader that catches this
-  // file mid-write gets a parse error, which `readAskIndex` can only report as "no
-  // sidecar" — and the fallback is degraded, because wiring.json's nodes have had
-  // `body_text` stripped, so body-only matches disappear.
-  assert.notEqual(statSync(idxPath).ino, before);
-  assert.deepEqual(readdirSync(join(outOf(d), ".cache")).filter((f) => f.includes(".tmp")), []);
-
-  // Written first, so "new graph ⇒ matching sidecar" holds for anyone reading the
-  // pair. mtime ordering is the observable proxy for the write order.
-  assert.ok(
-    statSync(idxPath).mtimeMs <= statSync(wiringPath(outOf(d))).mtimeMs,
-    "the sidecar must not be newer than the graph it describes",
-  );
+  // The sidecar is built from the in-memory graph, never from a re-read of
+  // wiring.json (whose nodes have had `body_text` stripped), so a replayed node
+  // has to arrive with its body intact for the pair to agree.
   const idx = readAskIndex(outOf(d));
   const g = readGraph(wiringPath(outOf(d))) as GraphV1;
-  assert.equal(idx?.docs.length, g.nodes.length, "and the pair agrees");
+  assert.equal(idx?.docs.length, g.nodes.length, "the pair agrees on the node set");
+  assert.ok(idx!.docs.some((doc) => doc.id.endsWith("#mul")), "including the new symbol");
+});
+
+/**
+ * `graft check` re-reads and re-hashes every file; the builder must too. If the
+ * builder trusted `(size, mtimeMs)` the way the probe does, then on a filesystem with
+ * coarse mtime granularity a same-length edit inside one tick would leave `graft
+ * check` reporting drift that the `graft build` it recommends could not repair — the
+ * documented fix, doing nothing, forever.
+ */
+test("a build repairs an edit that leaves size and mtime untouched", async () => {
+  const d = repo();
+  await buildGraph(d);
+  const file = join(d, "src", "math.ts");
+  const size = statSync(file).size;
+
+  // A rename to a same-length name.
+  writeFileSync(file, readFileSync(file, "utf8").replace("export function add", "export function sum"));
+  assert.equal(statSync(file).size, size, "the edit is size-neutral");
+
+  // Now make the memo's record match the file's stat *as it is now* while keeping the
+  // pre-edit hash and nodes. That is precisely the state a 1s-granularity mount hands
+  // you for free, and it avoids `utimesSync`, whose float-seconds round-trip can't
+  // reproduce an mtimeMs exactly.
+  const memoPath = extractCachePath(outOf(d))!;
+  const memo = JSON.parse(readFileSync(memoPath, "utf8")) as {
+    files: Record<string, { size: number; mtimeMs: number }>;
+  };
+  const now = statSync(file);
+  memo.files["src/math.ts"].size = now.size;
+  memo.files["src/math.ts"].mtimeMs = now.mtimeMs;
+  writeFileSync(memoPath, JSON.stringify(memo));
+
+  const r = await buildGraph(d);
+  assert.equal(r.parsed, 1, "the file was re-parsed despite the identical stat");
+  const ids = (readGraph(wiringPath(outOf(d))) as GraphV1).nodes.map((n) => n.id);
+  assert.ok(ids.includes("src/math.ts#sum"), "and the graph reflects the rename");
+  assert.equal(ids.includes("src/math.ts#add"), false, "the old symbol is gone");
 });

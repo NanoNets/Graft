@@ -17,7 +17,7 @@ export {
   patchStats,
   readStats,
   releaseLock,
-  writeFileAtomic,
+  writeJsonAtomic,
   writeStats,
 } from '../util/state.js';
 export type { Stats } from '../util/state.js';

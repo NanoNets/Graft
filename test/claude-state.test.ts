@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   emptyStats, readStats, writeStats, patchStats,
-  readSession, writeSession, acquireLock, releaseLock, cacheDir, LOCK_STALE_MS, writeFileAtomic,
+  readSession, writeSession, acquireLock, releaseLock, cacheDir, LOCK_STALE_MS, writeJsonAtomic,
 } from '../src/claude/state.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-state-')); }
@@ -49,7 +49,7 @@ test('acquireLock reclaims a stale lock', () => {
   assert.equal(acquireLock(d), true, 'stale lock reclaimed');
 });
 
-test('writeFileAtomic leaves no scratch file behind when the write fails', (t) => {
+test('writeJsonAtomic leaves no scratch file behind when the write fails', (t) => {
   if (process.getuid?.() === 0) return t.skip('root writes anywhere, so a read-only dir proves nothing');
   const d = fresh();
   const dir = join(d, 'locked');
@@ -57,10 +57,10 @@ test('writeFileAtomic leaves no scratch file behind when the write fails', (t) =
   chmodSync(dir, 0o500);
 
   // Every CLI invocation is a new pid, so a repeatedly failing write would leave one
-  // full-size `<path>.<pid>.tmp` per query, and nothing in graft ever lists these
+  // full-size `<path>.<pid>.tmp` per attempt, and nothing in graft ever lists these
   // directories to clean them up — on a nearly-full disk that accelerates the ENOSPC
   // that caused it.
-  assert.throws(() => writeFileAtomic(join(dir, 'out.json'), 'x'.repeat(1024)));
+  assert.throws(() => writeJsonAtomic(join(dir, 'out.json'), { pad: 'x'.repeat(1024) }));
   chmodSync(dir, 0o700);
   assert.deepEqual(readdirSync(dir), [], 'no .tmp residue');
 });

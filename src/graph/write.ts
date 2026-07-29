@@ -8,9 +8,8 @@
  * timestamps, so rebuilding an unchanged repo produces a byte-identical file and
  * git diffs stay minimal.
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { writeFileAtomic } from "../util/state.js";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { EdgeV1, GraphV1, NodeV1 } from "./types.js";
 
 /** Hidden subdir under the context dir that holds machine-only graph artifacts. */
@@ -41,12 +40,8 @@ export function writeGraph(graph: GraphV1, outDir: string): string {
     edges: [...graph.edges].sort(edgeOrder),
   };
   const path = wiringPath(outDir);
-  // Atomic, because a query can now rebuild the graph (`graph/refresh.ts`) while
-  // something else is reading it — a second MCP call, the statusline's poll, a
-  // `graft check` from the edit hook, another graft process. None of those take
-  // the build lock, and a truncating write would hand them a partial document,
-  // which `readGraph` can only report as "no graph — run graft build".
-  writeFileAtomic(path, JSON.stringify(sorted, null, 2) + "\n");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(sorted, null, 2) + "\n");
   return path;
 }
 

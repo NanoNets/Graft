@@ -80,9 +80,15 @@ hotspots, straight from the wiring graph.
   or ask your way through every subsystem it lists. \`--max-dirs N\` widens it.
 
 ### 6 · Lifecycle: \`graft build\` / \`graft check\`
-Every tool above refreshes the graph itself before answering, so what you get back
-always describes the code as it is right now — including edits you just made and
-have not committed. You do **not** need to run \`build\` after editing.
+Every tool above refreshes the graph itself before answering, so what those tools
+return always describes the code as it is right now — including edits you just made
+and have not committed. You do **not** need to run \`build\` after editing.
+
+One caveat, if you \`grep\` the markdown under \`graft/\` directly: those cards are a
+projection, rebuilt at the end of the turn rather than on each query, so after an edit
+they can lag. The tools above never do — prefer them, and treat a card's spans as
+stale if you have edited that file this turn.
+
 \`build\` is for the LLM layer (\`--deep\` adds a concept map; skip unless asked);
 \`check\` fails when \`graft/\` is stale, for CI.
 

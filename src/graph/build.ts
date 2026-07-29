@@ -25,7 +25,7 @@ import {
   writeExtractCache,
   type ExtractEntry,
 } from "./extract-cache.js";
-import { statUnchanged, writeFingerprint } from "./fingerprint.js";
+import { writeFingerprint } from "./fingerprint.js";
 import { listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
@@ -69,6 +69,11 @@ export interface GraphBuildOptions {
   /** Replay unchanged files from the extraction cache instead of re-parsing them
    * (default true). False forces a cold parse of the whole repo. */
   reuse?: boolean;
+  /** Write only what a query reads — the graph, the `ask` sidecar, the freshness
+   * record — and skip the markdown projections and the `.gitignore` touch. Set by
+   * the pre-query refresh (`graph/refresh.ts`); an explicit `graft build` never
+   * sets it. See the write block in {@link buildGraph} for why the split exists. */
+  graphOnly?: boolean;
   /** Run the Tier-2 LLM meaning pass. Absent → Tier-1 only (cache is still preserved). */
   summarizer?: CruxSummarizer;
   /** Max files summarized in parallel during the Tier-2 pass. Default is set in enrich. */
@@ -140,10 +145,6 @@ export async function buildGraph(
   // fall out of both the cache and the fingerprint with no separate pruning pass.
   const priorExtract = opts.reuse === false ? emptyExtractCache() : readExtractCache(outDir);
   const entries: Record<string, ExtractEntry> = {};
-  // The Tier-2 pass reads source text for any node it must summarize, including
-  // one in a file we didn't re-parse — so when a summarizer is in play, read
-  // every file. Reading is ~0.05ms/file; parsing is the ~4.6ms we're skipping.
-  const needAllSources = !!opts.summarizer;
   let parsed = 0;
   let reused = 0;
 
@@ -152,31 +153,32 @@ export async function buildGraph(
     opts.onProgress?.({ phase: "parse", index: i, total: files.length, file: rel });
     const lang = languageOf(f.abs)!;
     const cached = priorExtract.files[rel];
-    // `statUnchanged` is shared with the freshness probe on purpose: whatever the
-    // probe treats as "moved" must be something this loop will actually re-read,
-    // or a query rebuilds forever and still answers from the old parse.
-    const unchanged = !!cached && statUnchanged(cached, f);
 
-    let source: string | null = null;
-    if (!unchanged || needAllSources) {
-      try {
-        source = readFileSync(f.abs, "utf8");
-      } catch (err) {
-        const message = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
-        errors.push(message);
-        // Record it anyway (with the stat we do have) so the freshness probe's
-        // fast path doesn't report this file as new on every single query.
-        entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [], error: message };
-        return;
-      }
+    // Every file is read and hashed, every build — only the *parse* is memoized.
+    // The tempting optimization is to trust the probe's `(size, mtimeMs)` and skip
+    // the read too, but then `graft build` inherits the probe's blind spot: on a
+    // filesystem with coarse mtime granularity, a same-length edit inside the same
+    // second is invisible, so `graft check` reports drift (it always re-hashes) and
+    // the `graft build` it tells you to run refuses to repair it — forever. A stat
+    // may decide whether a *query* bothers rebuilding; it may not decide what the
+    // rebuild itself looks at. Reading is ~0.05ms/file against the ~4.6ms parse
+    // this still skips.
+    let source: string;
+    try {
+      source = readFileSync(f.abs, "utf8");
+    } catch (err) {
+      const message = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
+      errors.push(message);
+      // Record it anyway (with the stat we do have) so the freshness probe's
+      // fast path doesn't report this file as new on every single query.
+      entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [], error: message };
+      return;
     }
 
-    // A stat mismatch is only a *suspicion*; confirm by bytes so a touch, or a
-    // checkout that restores identical content, still replays the cache.
-    const hash = source === null ? cached!.hash : contentHash(source);
+    const hash = contentHash(source);
     if (cached && hash === cached.hash) {
       entries[rel] = { ...cached, size: f.size, mtimeMs: f.mtimeMs };
-      if (source !== null) sources.set(rel, source);
+      sources.set(rel, source);
       reused++;
       if (cached.error) {
         errors.push(cached.error); // this file failed to parse last time too
@@ -190,10 +192,10 @@ export async function buildGraph(
 
     parsed++;
     try {
-      const { nodes: fileNodes, rawEdges: fileEdges } = extractFile(rel, source!, lang);
+      const { nodes: fileNodes, rawEdges: fileEdges } = extractFile(rel, source, lang);
       nodes.push(...fileNodes);
       rawEdges.push(...fileEdges);
-      sources.set(rel, source!);
+      sources.set(rel, source);
       langs.add(lang);
       entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash, nodes: fileNodes, rawEdges: fileEdges };
     } catch (err) {
@@ -244,18 +246,13 @@ export async function buildGraph(
     edges,
   };
 
-  // ---- the ordered writes -------------------------------------------------
-  // Order is load-bearing, and it follows from what readers gate on. A reader
-  // decides whether it has a usable graph by reading wiring.json; everything else
-  // it consults is keyed to that. So: dependencies first, wiring.json second
-  // (atomically, so the flip is instantaneous), freshness third, projections last.
-
-  // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build time
-  // (~45% of query time on a 32k-node graph, profiled). It must land BEFORE
-  // wiring.json: `readAskIndex` rejects a sidecar whose ids don't match the graph,
-  // and the fallback is badly degraded (the nodes on disk have no `body_text`, so
-  // live re-tokenization has no body and body-only matches vanish). Writing it
-  // first means "new graph ⇒ new sidecar" always holds.
+  const graphPath = writeGraph(graph, outDir);
+  // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build
+  // time (~45% of query time on a 32k-node graph, profiled). Lives in the
+  // cache dir; `ask` falls back to live tokenization when it's absent/stale.
+  // Best-effort: wiring.json is already on disk at this point, so a sidecar
+  // write failure (e.g. an unwritable cache dir) must not abort cards/index/
+  // covers below — record it and keep going, same as other recoverable errors.
   //
   // MUST pass the in-memory `graph` here, never a re-read of wiringPath(outDir):
   // `writeGraph` strips `body_text` from what it serializes (dead weight once
@@ -267,42 +264,32 @@ export async function buildGraph(
     errors.push(`ask-index: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const graphPath = writeGraph(graph, outDir);
-  // The graph is a local, regenerable cache — make sure git ignores it. Runs on
-  // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
-  ensureGitignored(root, outDir);
-
   // The fingerprint claims exactly one thing: "the graph on disk was built from
-  // these source bytes." That is true as of the line above, so it is written here.
-  //
-  // It says nothing about the projections below, and that is the point. Writing it
-  // after them made a failure there — one read-only INDEX.md — strand freshness
-  // forever: every later query would re-probe dirty, retake the lock, redo edge
-  // resolution + enrichment + the ask index + every card, throw again, and answer
-  // from a graph that was in fact already current. Projection failures are reported
-  // (below, and surfaced by `refreshNote`), never expressed as permanent drift.
+  // these source bytes." Nothing about the projections below — which is why it is
+  // safe to write here, and why `graphOnly` builds (the query path, which stops
+  // right after this line) are still recorded as fresh.
   writeFingerprint(outDir, entries);
 
-  // Tier-2 passive surface: project the nodes into per-file markdown cards, refresh
-  // the INDEX roster, and backfill concept nodes with their `covers:` list (the
-  // OKF↔Wiring link; a no-op on a $0 build with no concept nodes). Pure projection —
-  // no LLM, no network — and individually fallible: a read-only card, a card path
-  // colliding with a directory, or ENOSPC records an error and lets the rest proceed.
+  // Tier-2 passive surface: project the nodes into per-file markdown cards, and
+  // refresh the INDEX roster. Pure projection — no LLM, no network.
+  //
+  // Skipped entirely on the query path (`graphOnly`). Retrieval answers from
+  // wiring.json and the ask sidecar; the markdown surface is for humans and for
+  // the agent's own greps, and it is rebuilt by an explicit `graft build` — which
+  // is what the Claude Code `Stop` hook already runs at the end of a turn. Keeping
+  // it off the query path is what makes a refresh cheap, leaves the repo untouched
+  // (`ensureGitignored` writes `.gitignore`, which a read has no business doing),
+  // and means a failure here can never be triggered by a query.
   let cardStats: CardStats = { written: 0, pruned: 0, files: [] };
-  try {
+  if (!opts.graphOnly) {
+    // The graph is a local, regenerable cache — make sure git ignores it. Cheap and
+    // idempotent, so a fresh clone's first build self-ignores.
+    ensureGitignored(root, outDir);
     cardStats = writeCards(graph, outDir);
-  } catch (err) {
-    errors.push(`cards: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
     writeIndex(outDir, cardStats.files);
-  } catch (err) {
-    errors.push(`INDEX.md: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  try {
-    errors.push(...writeCovers(graph, outDir).errors);
-  } catch (err) {
-    errors.push(`covers: ${err instanceof Error ? err.message : String(err)}`);
+    // Backfill concept nodes with their `covers:` symbol/file:line list (the
+    // OKF↔Wiring link). No-op when there are no concept nodes (a $0 build).
+    writeCovers(graph, outDir);
   }
 
   const byKind = {} as Record<Kind, number>;

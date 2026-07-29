@@ -19,16 +19,22 @@
  * - **Never a stampede.** It takes the same `graft/.cache/.sync.lock` the
  *   background sync uses, so concurrent MCP calls and the Stop hook can't pile up
  *   rebuilds on top of each other.
+ * - **Writes only what a query reads** (`graphOnly`): the graph, the `ask` sidecar,
+ *   the freshness record. Not the markdown cards, not `INDEX.md`, not `.gitignore`.
+ *   Those belong to an explicit `graft build` — which the `Stop` hook already runs
+ *   at the end of a turn — so retrieval stays cheap and a read stays a read. It
+ *   also leaves `stats.json` alone, so that same `Stop` hook still sees `dirty` and
+ *   still rebuilds the passive surface.
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
-import { acquireLockIn, computeStats, patchStats, readStats, releaseLockIn } from "../util/state.js";
+import { acquireLockIn, releaseLockIn } from "../util/state.js";
 import { CACHE_DIR } from "../context/node-file.js";
 import { buildGraph } from "./build.js";
 import { driftCount, isClean, probeDrift, type Drift } from "./fingerprint.js";
 import { invalidateGraphCaches } from "./load.js";
-import { readGraph, wiringPath } from "./write.js";
+import { wiringPath } from "./write.js";
 
 /** How long to wait for another process's in-flight rebuild before giving up and
  * answering from the current graph. Long enough to ride out a small repo's build,
@@ -43,10 +49,6 @@ export interface RefreshResult {
   drift?: Drift;
   /** One-line explanation for the agent/user, when there's something worth saying. */
   note?: string;
-  /** Recoverable failures from the rebuild — a card that couldn't be written, a
-   * concept node whose frontmatter didn't parse. The graph is fine; a projection
-   * under `graft/` isn't, and nothing else would ever report it. */
-  errors?: string[];
 }
 
 export interface RefreshOptions {
@@ -152,15 +154,14 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
         invalidateGraphCaches(outDir);
         return CLEAN;
       }
-      // Tier-1 only: no summarizer, so no LLM call and no network, ever.
-      const built = await buildGraph(dir, { contextDir: opts.contextDir });
+      // Tier-1 only: no summarizer, so no LLM call and no network, ever. And
+      // `graphOnly`: write the graph, the ask sidecar and the fingerprint, nothing
+      // else. The markdown projections under `graft/` stay the `Stop` hook's job —
+      // a query has no business rewriting the repo's `.gitignore` or churning every
+      // card's mtime, and skipping them is most of what keeps this cheap.
+      await buildGraph(dir, { contextDir: opts.contextDir, graphOnly: true });
       invalidateGraphCaches(outDir);
-      syncStats(dir, outDir);
-      // The graph itself is current, but a projection under `graft/` may have failed
-      // (a read-only card, ENOSPC). That can't be expressed as staleness — the
-      // fingerprint is written and the next probe is clean by design — so say it out
-      // loud instead of letting the passive markdown surface rot in silence.
-      return { refreshed: true, drift: drift ?? undefined, errors: built.errors };
+      return { refreshed: true, drift: drift ?? undefined };
     } finally {
       unhook();
       releaseLockIn(lockCache);
@@ -168,26 +169,6 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
   } catch (err) {
     // Answering from a slightly stale graph beats failing the query.
     return { refreshed: false, note: `graph refresh skipped: ${err instanceof Error ? err.message : String(err)}` };
-  }
-}
-
-/** Mirror what the background sync writes, so the statusline flips to `✓ synced`
- * mid-turn instead of showing `⚠ stale` until the turn ends. Best-effort: this is
- * a display cache, and the stats file only exists in a hooked-up repo anyway. */
-function syncStats(dir: string, outDir: string): void {
-  try {
-    if (!readStats(dir)) return; // no hooks in this repo — nothing reads it
-    const w = readGraph(wiringPath(outDir));
-    if (!w) return;
-    patchStats(dir, {
-      dirty: false,
-      staleCount: 0,
-      syncing: false,
-      syncedAt: new Date().toISOString(),
-      ...computeStats(w),
-    });
-  } catch {
-    /* display-only — never let this fail a query */
   }
 }
 
@@ -228,17 +209,8 @@ export async function ensureFreshChildren(
 /** The one-line note a CLI/MCP surface prints when a refresh actually happened.
  * Null when there's nothing to say (the overwhelmingly common case). */
 export function refreshNote(r: RefreshResult): string | null {
-  if (r.note) return `[graft] ${r.note}${errorTail(r)}`;
+  if (r.note) return `[graft] ${r.note}`;
   if (!r.refreshed) return null;
   const n = r.drift ? driftCount(r.drift) : 0;
-  return `[graft] refreshed the graph (${n || "?"} file${n === 1 ? "" : "s"} changed) before answering${errorTail(r)}`;
-}
-
-/** Projection failures, condensed. The first one is usually the whole story (they
- * share a cause — a permission, a full disk), so name it and count the rest. */
-function errorTail(r: RefreshResult): string {
-  const errs = r.errors ?? [];
-  if (!errs.length) return "";
-  const more = errs.length > 1 ? ` (+${errs.length - 1} more)` : "";
-  return `; ${errs.length} write error${errs.length === 1 ? "" : "s"} under graft/: ${errs[0]}${more}`;
+  return `[graft] refreshed the graph (${n || "?"} file${n === 1 ? "" : "s"} changed) before answering`;
 }
