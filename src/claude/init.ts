@@ -5,7 +5,7 @@ import { mergeGraftSettings } from './settings-merge.js';
 import { statuslineShim, hooksShim } from './shim-template.js';
 import { skillTemplate } from './skill-template.js';
 import { claudeDistDir } from './paths.js';
-import { mergeJsonKey, SERVER_ENTRY, type McpWrite } from '../hosts/mcp-config.js';
+import { mergeJsonKey, serverEntry, type McpWrite } from '../hosts/mcp-config.js';
 import type { PlannedWrite } from '../hosts/plan.js';
 
 /**
@@ -78,9 +78,9 @@ export function runInit(dir: string, opts: { build?: boolean; cliPath?: string }
   writeFileSync(skillPath, skillTemplate());
 
   // Register the graft MCP server in the project's .mcp.json so Claude Code
-  // exposes graft_ask/graft_callers/etc. as tools — the same keyed merge the
+  // exposes graft_find_code/graft_trace_calls/etc. as tools — the same keyed merge the
   // other hosts use (existing servers preserved; unparseable files skipped).
-  const mcp = mergeJsonKey('claude', mcpTarget, 'mcpServers', SERVER_ENTRY);
+  const mcp = mergeJsonKey('claude', mcpTarget, 'mcpServers', serverEntry());
 
   const built = buildGraphIfMissing(dir, opts);
   return { settingsPath, shims: [sl, hk], skill: skillPath, mcp, warnings, built };

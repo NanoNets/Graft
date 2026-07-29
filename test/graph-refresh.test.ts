@@ -398,24 +398,24 @@ test("a workspace refreshes its children even under a --dir override", async () 
   assert.equal(hasSymbol(child, "src/math.ts#mul"), true);
 });
 
-test("callTool refreshes before answering — except for graft_check", async () => {
+test("callTool refreshes before answering — except for graft_check_freshness", async () => {
   const d = repo();
   await buildGraph(d);
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export function mul(a: number, b: number): number {\n  return a * b;\n}\n`);
 
-  // graft_check is the drift report: refreshing first would make it always say OK.
-  const check = await callTool(d, "graft_check", {});
+  // graft_check_freshness is the drift report: refreshing first would make it always say OK.
+  const check = await callTool(d, "graft_check_freshness", {});
   assert.equal(check.isError, false);
   assert.ok(!check.text.startsWith("[graft] refreshed"));
   assert.equal(hasSymbol(d, "src/math.ts#mul"), false, "check must not rebuild");
 
-  const ask = await callTool(d, "graft_ask", { query: "multiply two numbers" });
+  const ask = await callTool(d, "graft_find_code", { query: "multiply two numbers" });
   assert.equal(ask.isError, false);
   assert.match(ask.text, /^\[graft\] refreshed the graph/);
   assert.equal(hasSymbol(d, "src/math.ts#mul"), true);
   assert.match(ask.text, /mul/, "and the answer knows about the symbol that was never committed");
 
-  const again = await callTool(d, "graft_ask", { query: "multiply two numbers" });
+  const again = await callTool(d, "graft_find_code", { query: "multiply two numbers" });
   assert.ok(!again.text.startsWith("[graft] refreshed"), "nothing moved — no note, no rebuild");
 });
 

@@ -116,6 +116,6 @@ This is the per-turn figure; the statusline carries the running session total.
   exhaustive where it matters, so reach for them first.
 
 When the graft MCP server is connected, these are exposed as tools too:
-`graft_ask`, `graft_grep`, `graft_skeleton`, `graft_callers` (with
-`direction` / `depth`), `graft_map`, `graft_check`. Use whichever surface is
+`graft_find_code`, `graft_find_all`, `graft_file_api`, `graft_trace_calls` (with
+`direction` / `depth`), `graft_repo_map`, `graft_check_freshness`. Use whichever surface is
 available; the guidance is identical.

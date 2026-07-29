@@ -26,11 +26,11 @@
 
 /** Tool names in the order an agent should reach for them, most-used first. */
 const TOOL_ORDER = [
-  'graft_ask',
-  'graft_grep',
-  'graft_callers',
-  'graft_skeleton',
-  'graft_map',
+  'graft_find_code',
+  'graft_find_all',
+  'graft_trace_calls',
+  'graft_file_api',
+  'graft_repo_map',
 ] as const;
 
 /** The `select:` argument that loads every graft tool in one lookup. */
@@ -46,11 +46,11 @@ export function mcpInstructions(): string {
     '',
     `**If these tools are deferred (names shown, schemas withheld), load them all in ONE lookup:** ToolSearch "${toolSearchQuery()}" — one round trip for the whole session. Never load them one at a time.`,
     '',
-    '- graft_ask — "how does X work" / "where is Y": ranked hits, code inlined.',
-    '- graft_grep — when you need EVERY occurrence; ask is top-N and misses some.',
-    '- graft_callers — who calls it, what it calls, blast radius before a rename.',
-    '- graft_skeleton — a file\'s whole API in ~200 tokens.',
-    '- graft_map — orientation in an unfamiliar repo.',
+    '- graft_find_code — "how does X work" / "where is Y": ranked hits, code inlined.',
+    '- graft_find_all — when you need EVERY occurrence; find_code is top-N and misses some.',
+    '- graft_trace_calls — who calls it, what it calls, blast radius before a rename.',
+    '- graft_file_api — a file\'s whole API in ~200 tokens.',
+    '- graft_repo_map — orientation in an unfamiliar repo.',
     '',
     'Results already reflect uncommitted edits — the graph refreshes before each query.',
   ].join('\n');

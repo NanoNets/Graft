@@ -7,7 +7,7 @@
  *
  * Pure I/O + regex, no CLI/MCP concerns: `grep-cli.ts` formats this into
  * human text and wires the CLI command; `mcp/tools.ts` renders the same
- * shape for the `graft_grep` tool.
+ * shape for the `graft_find_all` tool.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

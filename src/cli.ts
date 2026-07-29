@@ -333,7 +333,7 @@ program
 
 program
   .command("mcp")
-  .description("Serve the graph over MCP (stdio) — exposes graft_ask, graft_callers, graft_grep, graft_skeleton, graft_map and graft_check as tools")
+  .description("Serve the graph over MCP (stdio) — exposes graft_find_code, graft_trace_calls, graft_find_all, graft_file_api, graft_repo_map and graft_check_freshness as tools")
   .argument("[dir]", "repository root", ".")
   .action(async (dir: string) => {
     const { resolve } = await import("node:path");

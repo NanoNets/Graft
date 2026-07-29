@@ -8,7 +8,7 @@
  * unit-testable without shelling out to the CLI on every case.
  *
  * `--direction out` subsumes the old `graft callees`; `--depth N` subsumes the
- * old `graft impact`. Exported formatters are reused by the MCP `graft_callers`
+ * old `graft impact`. Exported formatters are reused by the MCP `graft_trace_calls`
  * tool (`src/mcp/tools.ts`), so both surfaces render identical reports.
  */
 import { resolve } from "node:path";
@@ -32,7 +32,7 @@ export interface CallersCliOptions {
 const ARROW: Record<Direction, "←" | "→"> = { in: "←", out: "→" };
 const DEFAULT_DEPTH = 1;
 
-/** Exported so the MCP `graft_callers` tool (`src/mcp/tools.ts`) can render the
+/** Exported so the MCP `graft_trace_calls` tool (`src/mcp/tools.ts`) can render the
  * same human report format as the CLI, rather than re-implementing it — both
  * surfaces walk the same edges via the same `resolveSymbol` / `edgeWalk` core. */
 export function headerOf(n: NodeV1): string {

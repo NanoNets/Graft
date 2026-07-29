@@ -2,7 +2,16 @@ type Json = Record<string, any>;
 
 const SL_CMD = 'node "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-statusline.cjs"';
 const FOOTER = 'graft/[\\w./-]+\\.md';
-const ALLOW_ENTRIES = ['Bash(graft:*)', 'Bash(npx graft:*)'];
+// Every form graft is actually invoked as. 'graft:*' covers a global install;
+// the other two cover a repo working on graft itself (or any consumer running it
+// from a checkout), where the binary is not on PATH under that name. A retrieval
+// call that raises a permission prompt loses to grep, which never does.
+const ALLOW_ENTRIES = [
+  'Bash(graft:*)',
+  'Bash(npx graft:*)',
+  'Bash(graft-dev:*)',
+  'Bash(node dist/cli.js:*)',
+];
 
 function hookCmd(arg: string): string {
   return `node "\${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs" ${arg}`;

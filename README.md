@@ -203,12 +203,12 @@ Both configs are user-level, so they apply to **every** repo you open with Codex
 
 | Tool | Takes | What it's for |
 |---|---|---|
-| `graft_ask` | a question | Ranked nodes with file:line, source inlined — usually the full answer, no follow-up read needed. |
-| `graft_skeleton` | a file path | Every signature in that file, no bodies — the API surface for a tenth of the tokens. |
-| `graft_callers` | a symbol | Who depends on it, or what it depends on with `direction: out`, N levels deep for blast radius. |
-| `graft_grep` | a regex | Every hit, grouped by enclosing symbol, ranked by how coupled that symbol is. |
-| `graft_map` | nothing | A first look at an unfamiliar repo: directory clusters, hubs, hotspots. |
-| `graft_check` | nothing | Whether the local graph has drifted from the code. |
+| `graft_find_code` | a question | Ranked nodes with file:line, source inlined — usually the full answer, no follow-up read needed. |
+| `graft_file_api` | a file path | Every signature in that file, no bodies — the API surface for a tenth of the tokens. |
+| `graft_trace_calls` | a symbol | Who depends on it, or what it depends on with `direction: out`, N levels deep for blast radius. |
+| `graft_find_all` | a regex | Every hit, grouped by enclosing symbol, ranked by how coupled that symbol is. |
+| `graft_repo_map` | nothing | A first look at an unfamiliar repo: directory clusters, hubs, hotspots. |
+| `graft_check_freshness` | nothing | Whether the local graph has drifted from the code. |
 
 Register it by hand if your agent needs it explicit:
 
@@ -384,7 +384,7 @@ normalized on load — no regeneration needed.
 
 An agent that reads the graph should be cheaper and faster without getting more answers wrong. That's the whole claim, so we measured it instead of asserting it.
 
-The harness ran three variants of the same Claude Sonnet 5 agent with the same file tools: **cold** (explores from zero), **Graft** (a `graft ask --source` bundle pushed up front), and **pull** (graft_ask/graft_skeleton tools, nothing injected — context paid for only when asked). An Opus 4.8 judge scored correctness with a required-keyword floor, so a fast-but-wrong answer couldn't win by being fast. Cost is cache-aware: reads ≈0.1×, writes 1.25×, the billing model agents actually run under.
+The harness ran three variants of the same Claude Sonnet 5 agent with the same file tools: **cold** (explores from zero), **Graft** (a `graft ask --source` bundle pushed up front), and **pull** (graft_find_code/graft_file_api tools, nothing injected — context paid for only when asked). An Opus 4.8 judge scored correctness with a required-keyword floor, so a fast-but-wrong answer couldn't win by being fast. Cost is cache-aware: reads ≈0.1×, writes 1.25×, the billing model agents actually run under.
 
 162 runs, two repos (graft itself and a real Node/Express auth service), 3 trials each, tasks split between single-file and multi-file questions.
 

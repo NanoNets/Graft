@@ -123,14 +123,14 @@ test("loadAskIndexCached: caches and invalidates the same way as the graph loade
 // the way. `graph-refresh.test.ts` covers the refresh itself.
 process.env.GRAFT_NO_REFRESH = "1";
 
-test("callTool: graft_callers on the same dir twice doesn't reparse the graph", async () => {
+test("callTool: graft_trace_calls on the same dir twice doesn't reparse the graph", async () => {
   const dir = fixtureDir();
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "math.ts"), "export function add() { return 1; }\n");
   const graph: GraphV1 = {
     version: 1,
     // A real `buildGraph` always emits a `kind: "file"` node per source file;
-    // include one here too so `graft_callers` with depth (a `resolveSymbol` +
+    // include one here too so `graft_trace_calls` with depth (a `resolveSymbol` +
     // `edgeWalk` walk, the old `graft impact`) can resolve the filename-shaped
     // query the way it would against a real build.
     nodes: [
@@ -139,7 +139,7 @@ test("callTool: graft_callers on the same dir twice doesn't reparse the graph", 
     ],
     edges: [],
   } as GraphV1;
-  // graft_callers reads through `contextDirFor(root)`, i.e. `<root>/graft`
+  // graft_trace_calls reads through `contextDirFor(root)`, i.e. `<root>/graft`
   // by default — write the graph there directly rather than round-tripping
   // through a real `graft build`.
   const outDir = join(dir, "graft");
@@ -147,11 +147,11 @@ test("callTool: graft_callers on the same dir twice doesn't reparse the graph", 
   writeGraph(graph, outDir);
   __resetParseCounts();
 
-  const r1 = await callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
+  const r1 = await callTool(dir, "graft_trace_calls", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r1.isError, false);
   assert.equal(__parseCount.graph, 1);
 
-  const r2 = await callTool(dir, "graft_callers", { symbol: "src/math.ts", depth: 2 });
+  const r2 = await callTool(dir, "graft_trace_calls", { symbol: "src/math.ts", depth: 2 });
   assert.equal(r2.isError, false);
   assert.equal(__parseCount.graph, 1, "second call on the same dir must not reparse");
 });

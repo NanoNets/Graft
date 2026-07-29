@@ -4,7 +4,7 @@
  * Kept out of cli.ts (argument wiring only) and out of grep.ts (pure core,
  * unit-testable against hand-built fixture graphs without touching a real
  * repo root) — same split as traverse.ts/traverse-cli.ts. `formatGrepResult`
- * is exported so `graft_grep` in `src/mcp/tools.ts` renders the identical
+ * is exported so `graft_find_all` in `src/mcp/tools.ts` renders the identical
  * report, rather than re-implementing it.
  */
 import { resolve } from "node:path";

@@ -34,7 +34,7 @@ test('initialize → tools/list → tools/call round-trip', async () => {
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
       { jsonrpc: '2.0', method: 'notifications/initialized' },
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'graft_callers', arguments: { symbol: 'x.ts', depth: 2 } } },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'graft_trace_calls', arguments: { symbol: 'x.ts', depth: 2 } } },
     ],
     dir,
     3,
@@ -46,12 +46,12 @@ test('initialize → tools/list → tools/call round-trip', async () => {
   assert.equal(init.result.serverInfo.name, 'graft');
   const list = rs.find((r) => r.id === 2);
   assert.deepEqual(list.result.tools.map((t: any) => t.name), [
-    'graft_ask',
-    'graft_skeleton',
-    'graft_check',
-    'graft_callers',
-    'graft_grep',
-    'graft_map',
+    'graft_find_code',
+    'graft_file_api',
+    'graft_check_freshness',
+    'graft_trace_calls',
+    'graft_find_all',
+    'graft_repo_map',
   ]);
   const call = rs.find((r) => r.id === 3);
   assert.equal(call.result.isError, true); // unbuilt repo → soft error content
@@ -70,8 +70,8 @@ test('initialize carries instructions — the layer that survives tool deferral'
   // A host that defers graft's schemas shows the model six bare names and nothing
   // else, so this string has to carry both the pitch and the recovery instruction.
   assert.match(instructions, /ONE lookup/, 'tells the agent to batch the schema fetch');
-  assert.match(instructions, /select:mcp__graft__graft_ask,/, 'gives a copy-pasteable query');
-  for (const t of ['graft_ask', 'graft_grep', 'graft_callers', 'graft_skeleton', 'graft_map']) {
+  assert.match(instructions, /select:mcp__graft__graft_find_code,/, 'gives a copy-pasteable query');
+  for (const t of ['graft_find_code', 'graft_find_all', 'graft_trace_calls', 'graft_file_api', 'graft_repo_map']) {
     assert.ok(instructions.includes(t), `names ${t}`);
   }
   // Observed sibling servers sit at 660–984 chars; nothing proves a longer one

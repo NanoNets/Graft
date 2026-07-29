@@ -1,6 +1,6 @@
 /**
  * Pure graph-traversal core shared by `graft callers` (its `--direction`/
- * `--depth` flags), the MCP `graft_callers` tool, and `ask`'s structural
+ * `--depth` flags), the MCP `graft_trace_calls` tool, and `ask`'s structural
  * intent path.
  *
  * Centralizes the symbol-resolution contract (bare name, qualified id-suffix,
@@ -203,7 +203,7 @@ export function impactOfFile(graph: GraphV1, fileNode: NodeV1, maxDepth = 2, dir
 }
 
 /**
- * The single entry point behind `graft callers` and the MCP `graft_callers`
+ * The single entry point behind `graft callers` and the MCP `graft_trace_calls`
  * tool, covering all of what were once three commands:
  *   - `direction:in,  depth:1`  → callers      (who calls/references this)
  *   - `direction:out, depth:1`  → callees      (what this calls/references)

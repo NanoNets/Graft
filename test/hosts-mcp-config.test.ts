@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+
+// The MCP launch command is resolved from PATH at init time; pin it to the npx
+// form so these expectations are the same on every machine.
+process.env.GRAFT_MCP_NPX = '1';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { registerMcpConfigs } from '../src/hosts/mcp-config.js';
+import { registerMcpConfigs, serverEntry } from '../src/hosts/mcp-config.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-mcpcfg-')); }
 
@@ -73,4 +77,25 @@ test('JSON with non-object mcpServers value is skipped', () => {
   const w = registerMcpConfigs(repo, ['cursor'], { home });
   assert.deepEqual(w.map((x) => x.action), ['skipped-unparseable']);
   assert.equal(readFileSync(join(repo, '.cursor', 'mcp.json'), 'utf8'), badJson);
+});
+
+// The launch command: bare binary when graft is installed, npx otherwise. Never an
+// absolute path — these files are committed and shared between machines.
+test('serverEntry prefers the installed binary and falls back to npx', () => {
+  const saved = process.env.GRAFT_MCP_NPX;
+  delete process.env.GRAFT_MCP_NPX;
+  try {
+    assert.deepEqual(serverEntry({ onPath: true }), { command: 'graft', args: ['mcp'] });
+    assert.deepEqual(serverEntry({ onPath: false }), { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] });
+    for (const e of [serverEntry({ onPath: true }), serverEntry({ onPath: false })]) {
+      assert.ok(!e.command.startsWith('/'), 'never an absolute path — configs get shared');
+    }
+  } finally {
+    if (saved !== undefined) process.env.GRAFT_MCP_NPX = saved;
+  }
+});
+
+test('GRAFT_MCP_NPX overrides an installed binary', () => {
+  process.env.GRAFT_MCP_NPX = '1';
+  assert.equal(serverEntry({ onPath: true }).command, 'npx', 'the escape hatch wins');
 });

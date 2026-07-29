@@ -8,6 +8,7 @@
  * `registerMcpConfigs()` walks that same list to do the writing.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { PlannedWrite } from './plan.js';
@@ -27,8 +28,50 @@ export interface McpTarget extends PlannedWrite {
   entry?: object;
 }
 
-export const SERVER_ENTRY = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
-const OPENCODE_ENTRY = { type: 'local', command: ['npx', '-y', '@nanonets/graft', 'mcp'], enabled: true };
+/**
+ * How to launch the MCP server, decided once at init time.
+ *
+ * `npx -y` resolves the package before it can serve: measured at a 211 ms
+ * spawn→`initialize` handshake against 80 ms for the installed binary, five runs
+ * each. The harness registers a server's tools only once that handshake lands, and
+ * a slow one can miss the first request entirely — in a traced session graft's
+ * tools arrived 13.9 s in, four model turns too late to shape the approach. (That
+ * 13.9 s is NOT explained by 130 ms; the gap's cause is still unknown. This is the
+ * cheap half of the fix, not the whole of it.)
+ *
+ * Deliberately a bare command name, never an absolute path: these files get
+ * committed and shared, and this repo already carries the scar of the alternative —
+ * a checked-in hook shim with another machine's home directory baked into it. A
+ * bare `graft` works on any machine that has it installed; `npx` remains the
+ * fallback for machines that don't.
+ */
+const NPX_LAUNCH = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
+const BIN_LAUNCH = { command: 'graft', args: ['mcp'] };
+
+function graftOnPath(): boolean {
+  const r = spawnSync('graft', ['--version'], { stdio: 'ignore', timeout: 5000 });
+  return r.status === 0;
+}
+
+/**
+ * JSON hosts: `{ command, args }`.
+ *
+ * `GRAFT_MCP_NPX=1` forces the `npx` form — the escape hatch for a machine whose
+ * global install is stale or shadowed, and what the tests set so their expectations
+ * don't depend on whether the machine running them happens to have graft installed.
+ * `opts.onPath` is the same override for direct unit tests of both branches.
+ */
+export function serverEntry(opts: { onPath?: boolean } = {}): { command: string; args: string[] } {
+  const forced = process.env.GRAFT_MCP_NPX;
+  if (forced !== undefined && forced !== '' && forced !== '0' && forced !== 'false') return NPX_LAUNCH;
+  return (opts.onPath ?? graftOnPath()) ? BIN_LAUNCH : NPX_LAUNCH;
+}
+
+
+function opencodeEntry(): object {
+  const { command, args } = serverEntry();
+  return { type: 'local', command: [command, ...args], enabled: true };
+}
 
 function dirExists(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -60,7 +103,9 @@ function upsertCodexToml(id: string, path: string): McpWrite {
   const existed = existsSync(path);
   const text = existed ? readFileSync(path, 'utf8') : '';
   if (/^\[mcp_servers\.graft\]$/m.test(text)) return { id, path, action: 'unchanged' };
-  const section = `[mcp_servers.graft]\ncommand = "npx"\nargs = ["-y", "@nanonets/graft", "mcp"]\n`;
+  const { command, args } = serverEntry();
+  const argList = args.map((a) => JSON.stringify(a)).join(", ");
+  const section = `[mcp_servers.graft]\ncommand = \"${command}\"\nargs = [${argList}]\n`;
   const sep = text.length === 0 ? '' : text.endsWith('\n') ? '\n' : '\n\n';
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${text}${sep}${section}`);
@@ -89,17 +134,18 @@ export function mcpTargets(
   opts: { home?: string } = {},
 ): McpTarget[] {
   const home = opts.home ?? homedir();
+  const entry = serverEntry();
   const out: McpTarget[] = [];
   for (const id of ids) {
     switch (id) {
       case 'cursor':
-        out.push(jsonTarget(id, id, join(repo, '.cursor', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.cursor', 'mcp.json'), 'mcpServers', entry));
         break;
       case 'gemini':
-        out.push(jsonTarget(id, id, join(repo, '.gemini', 'settings.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.gemini', 'settings.json'), 'mcpServers', entry));
         break;
       case 'kiro':
-        out.push(jsonTarget(id, id, join(repo, '.kiro', 'settings', 'mcp.json'), 'mcpServers', SERVER_ENTRY));
+        out.push(jsonTarget(id, id, join(repo, '.kiro', 'settings', 'mcp.json'), 'mcpServers', entry));
         break;
       case 'agents':
         // Guarded on the CLI actually being installed, so a plan only ever
@@ -111,7 +157,7 @@ export function mcpTargets(
           });
         }
         if (dirExists(join(home, '.config', 'opencode'))) {
-          out.push(jsonTarget(id, 'opencode', join(repo, 'opencode.json'), 'mcp', OPENCODE_ENTRY));
+          out.push(jsonTarget(id, 'opencode', join(repo, 'opencode.json'), 'mcp', opencodeEntry()));
         }
         break;
       default:
