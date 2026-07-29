@@ -10,7 +10,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
-import { readExtractCache } from "../src/graph/extract-cache.js";
+import { extractCachePath, extractorStamp, readExtractCache, stampDir } from "../src/graph/extract-cache.js";
 import { isClean, probeDrift, readFingerprint } from "../src/graph/fingerprint.js";
 import { readAskIndex } from "../src/ask/index-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
@@ -188,4 +188,60 @@ test("an unreadable file is still recorded, so it can't look new on every probe"
   assert.deepEqual(recovered.errors, []);
   const g = readGraph(wiringPath(outOf(d))) as GraphV1;
   assert.ok(g.nodes.some((n) => n.id === "src/secret.ts#secretFn"), "the once-unreadable file is indexed now");
+});
+
+/**
+ * The stamp is the memo's second key: the file hash says "these bytes", the stamp
+ * says "and this is the code that parsed them". Get it wrong and a fixed extractor
+ * silently keeps serving output from the broken one.
+ */
+test("extractorStamp: a real identity for the loaded extraction code", () => {
+  const s = extractorStamp();
+  assert.notEqual(s, "unknown", "path resolution must work under both tsx and dist/, or invalidation silently stops");
+  assert.match(s, /^[0-9a-f]{16}$/);
+  assert.equal(s, extractorStamp(), "memoized — the cost is paid once per process");
+});
+
+test("the stamp moves for any module in the extractor directory, not just one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-stamp-"));
+  writeFileSync(join(dir, "extract.js"), "export const a = 1;\n");
+  writeFileSync(join(dir, "bindings.js"), "export const b = 1;\n");
+  writeFileSync(join(dir, "notes.txt"), "not code\n");
+  const base = stampDir(dir, ".js", "0.8.0");
+
+  assert.equal(stampDir(dir, ".js", "0.8.0"), base, "stable for identical input");
+
+  // The bug this replaces: only `extract.js` was watched, so a receiver-type fix
+  // in bindings.js left the stamp — and therefore every cached parse — untouched.
+  writeFileSync(join(dir, "bindings.js"), "export const b = 2;\n");
+  const afterSibling = stampDir(dir, ".js", "0.8.0");
+  assert.notEqual(afterSibling, base, "a sibling module's content must count");
+
+  // A grammar upgrade changes parse output without touching any of graft's files.
+  assert.notEqual(stampDir(dir, ".js", "0.8.1"), afterSibling, "the package version must count");
+
+  // Non-code in the same directory must not churn the memo.
+  writeFileSync(join(dir, "notes.txt"), "still not code\n");
+  assert.equal(stampDir(dir, ".js", "0.8.0"), afterSibling, "a non-module file in the directory must not churn the memo");
+
+  const beforeRename = afterSibling;
+  rmSync(join(dir, "bindings.js"));
+  writeFileSync(join(dir, "renamed.js"), "export const b = 2;\n");
+  assert.notEqual(stampDir(dir, ".js", "0.8.0"), beforeRename, "a rename at identical content is still a change");
+});
+
+test("a memo written by a different extractor is dropped, not replayed", async () => {
+  const d = repo();
+  await buildGraph(d);
+  const path = extractCachePath(outOf(d));
+  const cache = JSON.parse(readFileSync(path, "utf8"));
+  assert.ok(Object.keys(cache.files).length > 0);
+
+  writeFileSync(path, JSON.stringify({ ...cache, extractor: "deadbeefdeadbeef" }));
+  assert.deepEqual(readExtractCache(outOf(d)).files, {}, "entries from an unknown extractor are worthless");
+
+  // So the next build re-parses everything rather than trusting them.
+  const cold = await buildGraph(d);
+  assert.equal(cold.reused, 0);
+  assert.equal(cold.parsed, cold.files);
 });

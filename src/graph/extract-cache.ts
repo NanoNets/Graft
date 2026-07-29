@@ -19,13 +19,14 @@
  *
  * Lives under `.cache/` (gitignored, regenerate-anytime) next to `ask-index.json`
  * and `summaries.json`. Two things invalidate the whole file: a bump of
- * {@link CACHE_VERSION}, and a change to the extractor module itself (stamped by
- * its mtime+size, so an npm upgrade or a local rebuild drops stale parses without
- * anyone remembering to bump anything).
+ * {@link CACHE_VERSION} for a change of on-disk shape, and a change to the
+ * extraction code itself, caught by content-hashing it — see
+ * {@link extractorStamp}. Neither asks anyone to remember to bump anything.
  */
-import { statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
 import type { RawEdge } from "./extract.js";
@@ -61,17 +62,80 @@ export function extractCachePath(outDir: string): string {
   return join(outDir, CACHE_DIR, EXTRACT_CACHE_FILE);
 }
 
-/** `mtime:size` of the extractor module, or `"unknown"` when it can't be stat'd.
- * Resolved by rewriting this module's own URL, so it works both in `dist/` (.js)
- * and under tsx (.ts) without knowing which layout we're in. */
+/** Computed once per process — this can't change under a running process without
+ * the module graph itself being swapped, and a long-lived MCP server holding the
+ * identity of the code it actually loaded is the correct answer anyway. */
+let memoizedStamp: string | null = null;
+
+/**
+ * Identity of the code that produces the cached parses. Both sidecars key on it,
+ * so *anything* that can change extraction output has to change this string.
+ *
+ * Content-hashed over every sibling module in this directory, plus the package
+ * version. Two earlier instincts are deliberately rejected:
+ *
+ * - **Not a timestamp.** This was `mtime:size` of `extract.js` alone, which is
+ *   wrong in both directions. Too loose: the parse of `db.count()` depends on
+ *   `bindings.ts` deciding that `db` is a `UserRepo` (that answer is stored *in*
+ *   the cached entry, as an edge's `recvType`), and fixing a binding bug leaves
+ *   `extract.js`'s emitted bytes untouched — so any build that skips rewriting
+ *   unchanged output keeps the old stamp and silently replays pre-fix edges. Too
+ *   tight: a rebuild that rewrites identical content moves the mtime and throws
+ *   away the whole memo for nothing.
+ * - **Not a hand-kept list of modules.** A list is correct exactly until someone
+ *   moves parse logic into a module nobody added to it, and the failure is silent.
+ *
+ * Hashing the directory over-invalidates a little — editing any `graph/` module
+ * costs one cold rebuild — which is no more often than a version bump already
+ * costs, and always in the safe direction. The package version is folded in so a
+ * tree-sitter grammar upgrade (which changes parse output without changing any of
+ * graft's own files) invalidates too.
+ *
+ * Measured at ~0.5ms for 21 files / 556KB, paid once per process.
+ */
 export function extractorStamp(): string {
+  if (memoizedStamp === null) memoizedStamp = computeStamp();
+  return memoizedStamp;
+}
+
+function computeStamp(): string {
   try {
-    const url = import.meta.url.replace(/extract-cache\.(c|m)?([jt]s)$/, "extract.$1$2");
-    if (url === import.meta.url) return "unknown";
-    const s = statSync(fileURLToPath(url));
-    return `${s.mtimeMs}:${s.size}`;
+    const self = fileURLToPath(import.meta.url);
+    // `.js` when running from `dist/`, `.ts` under tsx — take the extension from
+    // our own filename rather than guessing which layout we're in.
+    const dir = dirname(self);
+    return stampDir(dir, extname(self), packageVersion(dir));
   } catch {
     return "unknown";
+  }
+}
+
+/**
+ * Hash every `ext` file in `dir`, plus `version`. Separated from
+ * {@link extractorStamp} so a test can prove the property that matters: a change
+ * to *any* module in the directory moves the stamp, not just the one the old
+ * implementation happened to watch.
+ */
+export function stampDir(dir: string, ext: string, version = ""): string {
+  const files = readdirSync(dir).filter((f) => f.endsWith(ext)).sort();
+  if (!files.length) return "unknown";
+  const h = createHash("sha256");
+  h.update(version);
+  for (const f of files) {
+    h.update(f); // a rename is a change, even at identical content
+    h.update(readFileSync(join(dir, f)));
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
+/** graft's own version, or `""` when it can't be read (then the content hash
+ * alone carries the stamp — still correct for every local edit). */
+function packageVersion(graphDir: string): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(graphDir, "..", "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version ?? "";
+  } catch {
+    return "";
   }
 }
 
