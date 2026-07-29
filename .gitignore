@@ -13,3 +13,6 @@ graft/
 
 # OS
 .DS_Store
+
+# Session transcripts and prompt traces — local analysis, not product.
+transcripts/
