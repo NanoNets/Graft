@@ -27,7 +27,17 @@ export function underGraft(dir: string, file: string): boolean {
   const rel = file.startsWith(dir) ? file.slice(dir.length) : file;
   return rel.replace(/^[/\\]+/, '').replace(/\\/g, '/').startsWith('graft/');
 }
-function graftJson(dir: string, args: string[]): any | null {
+/** Default budget for a graft child process invoked from a hook, matching the 8s
+ * the installed hook entries carry. */
+const CHILD_TIMEOUT_MS = 8000;
+/** The prompt hook's `graft ask` gets longer: its hook entry is installed with a
+ * 15s budget (see `settings-merge.ts`) precisely because a query now brings the
+ * graph up to date first, and the first one after an upgrade re-parses the repo
+ * once. Kept under the outer budget so the killer is this timeout — which returns
+ * cleanly — rather than Claude Code cutting the hook off mid-write. */
+const PROMPT_ASK_TIMEOUT_MS = 13000;
+
+function graftJson(dir: string, args: string[], timeout: number = CHILD_TIMEOUT_MS): any | null {
   try {
     // GRAFT_TEST_CLI is a test seam (mirrors GRAFT_TEST_STDIN/GRAFT_TEST_SYNC_RUN) so
     // tests can point the prompt hook's `graft ask`/`graft check` calls at a stub
@@ -35,7 +45,7 @@ function graftJson(dir: string, args: string[]): any | null {
     // out to the real CLI (which isn't built relative to the TS source under test).
     const cliPath = process.env.GRAFT_TEST_CLI ?? graftCliPath();
     const out = execFileSync(process.execPath, [cliPath, ...args],
-      { cwd: dir, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] });
+      { cwd: dir, encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
   } catch (e: any) {
     // `graft check` exits non-zero when the graph is stale (by design) but still
@@ -174,7 +184,7 @@ export async function main(event: string): Promise<void> {
     // repo whose lastFile resolves cleanly to one scope — see lastFileScopeHint.
     const scopeHint = lastFileScopeHint(dir, readStats(dir)?.lastFile);
     if (scopeHint) askArgs.push('--in', scopeHint);
-    const ask = graftJson(dir, askArgs);
+    const ask = graftJson(dir, askArgs, PROMPT_ASK_TIMEOUT_MS);
     if (!ask) return;
     const id = input.session_id || 'default';
     const s = readSession(dir, id);

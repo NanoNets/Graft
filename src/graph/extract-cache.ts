@@ -64,7 +64,7 @@ export function extractCachePath(outDir: string): string {
 /** `mtime:size` of the extractor module, or `"unknown"` when it can't be stat'd.
  * Resolved by rewriting this module's own URL, so it works both in `dist/` (.js)
  * and under tsx (.ts) without knowing which layout we're in. */
-function extractorStamp(): string {
+export function extractorStamp(): string {
   try {
     const url = import.meta.url.replace(/extract-cache\.(c|m)?([jt]s)$/, "extract.$1$2");
     if (url === import.meta.url) return "unknown";

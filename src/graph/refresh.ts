@@ -157,7 +157,14 @@ export async function ensureFreshChildren(
   const refreshedIn: string[] = [];
   let files = 0;
   for (const child of children) {
-    const r = await ensureFreshGraph(resolve(root, child), opts);
+    // Deliberately NOT `opts`: `contextDirFor` returns an override verbatim and
+    // ignores the root it's handed, so forwarding the parent's `--dir` would point
+    // every child at the *parent's* context dir — which holds a workspace index and
+    // no wiring.json, so every child would silently be skipped. (And if it did hold
+    // one, each child would build into that single shared dir in turn, the last
+    // clobbering the rest.) A child's graph always lives in its own `<child>/graft`,
+    // which is exactly how `loadWorkspaceGraphs` reads them back.
+    const r = await ensureFreshGraph(resolve(root, child), { disabled: opts.disabled });
     if (!r.refreshed) continue;
     refreshedIn.push(child);
     files += r.drift ? driftCount(r.drift) : 0;

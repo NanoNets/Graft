@@ -25,7 +25,7 @@ import {
   writeExtractCache,
   type ExtractEntry,
 } from "./extract-cache.js";
-import { writeFingerprint } from "./fingerprint.js";
+import { statUnchanged, writeFingerprint } from "./fingerprint.js";
 import { listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
@@ -152,10 +152,10 @@ export async function buildGraph(
     opts.onProgress?.({ phase: "parse", index: i, total: files.length, file: rel });
     const lang = languageOf(f.abs)!;
     const cached = priorExtract.files[rel];
-    // An entry that failed last time never takes the stat fast path: a `chmod`
-    // that makes the file readable again changes neither size nor mtime, so
-    // trusting the stat would keep it broken until someone edited it.
-    const unchanged = !!cached && !cached.error && cached.size === f.size && cached.mtimeMs === f.mtimeMs;
+    // `statUnchanged` is shared with the freshness probe on purpose: whatever the
+    // probe treats as "moved" must be something this loop will actually re-read,
+    // or a query rebuilds forever and still answers from the old parse.
+    const unchanged = !!cached && statUnchanged(cached, f);
 
     let source: string | null = null;
     if (!unchanged || needAllSources) {
@@ -209,7 +209,7 @@ export async function buildGraph(
   // and a cold build and an incremental build could disagree. The meaning layer
   // has its own cache (wiring.json itself, keyed on body_hash); this one is
   // strictly about not re-parsing.
-  const memoWritten = writeExtractCache(outDir, {
+  writeExtractCache(outDir, {
     ...emptyExtractCache(),
     files: entries,
   });
@@ -248,11 +248,6 @@ export async function buildGraph(
   // The graph is a local, regenerable cache — make sure git ignores it. Runs on
   // every build (cheap, idempotent), so a fresh clone's first build self-ignores.
   ensureGitignored(root, outDir);
-  // The freshness fingerprint claims "the graph on disk describes these exact
-  // bytes", so it may only be written now that wiring.json is actually there —
-  // and only if the memo it projects from made it to disk. If either write fails
-  // the next probe reports drift and rebuilds, which is the safe direction.
-  if (memoWritten) writeFingerprint(outDir, entries);
   // `ask`'s token/IDF sidecar — moves per-query corpus tokenization to build
   // time (~45% of query time on a 32k-node graph, profiled). Lives in the
   // cache dir; `ask` falls back to live tokenization when it's absent/stale.
@@ -277,6 +272,17 @@ export async function buildGraph(
   // Backfill concept nodes with their `covers:` symbol/file:line list (the
   // OKF↔Wiring link). No-op when there are no concept nodes (a $0 build).
   writeCovers(graph, outDir);
+
+  // Dead last, and unconditionally. The fingerprint is the claim "everything graft
+  // wrote describes exactly these bytes", so it may only be made once everything
+  // graft writes is on disk: written before the cards above, a throw in that
+  // projection would leave a half-written `graft/` marked permanently clean, and no
+  // later probe would ever ask for it again. Conversely it must NOT depend on the
+  // extract memo's write succeeding — a missing memo only makes the next rebuild
+  // cold, whereas a missing fingerprint makes *every* query rebuild the repo from
+  // scratch, forever. If this write itself fails, the next probe reports "unknown"
+  // and rebuilds once, which is the safe direction.
+  writeFingerprint(outDir, entries);
 
   const byKind = {} as Record<Kind, number>;
   for (const n of nodes) byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;

@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { contentHash } from "../util/id.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
-import type { ExtractEntry } from "./extract-cache.js";
+import { extractorStamp, type ExtractEntry } from "./extract-cache.js";
 import { listSourceStats } from "./source-files.js";
 
 const FINGERPRINT_FILE = "fingerprint.json";
@@ -34,6 +34,12 @@ type Print = [number, number, string];
 
 export interface Fingerprint {
   version: number;
+  /** The extractor that produced the graph these prints describe — the same stamp
+   * `extract.json` carries. Without it the two sidecars can disagree about whether
+   * the graph is current: an extractor change correctly drops every memo entry,
+   * yet the prints still match the tree byte-for-byte, so the probe would report
+   * clean and queries would keep answering from nodes the old extractor built. */
+  extractor: string;
   files: Record<string, Print>;
 }
 
@@ -54,6 +60,7 @@ export function fingerprintPath(outDir: string): string {
 export function readFingerprint(outDir: string): Fingerprint | null {
   const f = readJson<Fingerprint>(fingerprintPath(outDir));
   if (!f || f.version !== FINGERPRINT_VERSION || typeof f.files !== "object" || !f.files) return null;
+  if (f.extractor !== extractorStamp()) return null; // different extractor — re-extract, don't trust these prints
   return f;
 }
 
@@ -64,11 +71,42 @@ export function writeFingerprint(outDir: string, entries: Record<string, Extract
   const files: Record<string, Print> = {};
   for (const [rel, e] of Object.entries(entries)) files[rel] = [e.size, e.mtimeMs, e.hash];
   try {
-    writeJsonAtomic(fingerprintPath(outDir), { version: FINGERPRINT_VERSION, files }, true);
+    writeJsonAtomic(fingerprintPath(outDir), { version: FINGERPRINT_VERSION, extractor: extractorStamp(), files }, true);
     return true;
   } catch {
     return false;
   }
+}
+
+/** `GRAFT_REFRESH=hash` — never trust a stat, confirm every file by its bytes. */
+export function alwaysHash(): boolean {
+  return process.env.GRAFT_REFRESH === "hash";
+}
+
+/**
+ * May a recorded `(size, mtimeMs, hash)` be trusted for the file `f` as it is on
+ * disk now, without reading it?
+ *
+ * **One definition, shared by the probe and the builder.** They each had their own
+ * once, and the two disagreed in both directions: `GRAFT_REFRESH=hash` was honored
+ * here but not in `build.ts` (so the probe reported drift the rebuild then refused
+ * to repair — a rebuild on every query, forever, still answering from pre-edit
+ * code), and `build.ts` distrusted entries from a failed read while the probe
+ * fast-pathed them (so a `chmod +r` that fixed a file was never noticed, because a
+ * chmod changes neither size nor mtime). Any future rule about what a stat can be
+ * trusted for belongs here and nowhere else.
+ *
+ * An empty `hash` means the last build never got the bytes — always re-read.
+ * A *parse* failure keeps its real hash, so it stays on the fast path: re-reading
+ * bytes that failed to parse yesterday just fails to parse again.
+ */
+export function statUnchanged(
+  rec: { size: number; mtimeMs: number; hash: string },
+  f: { size: number; mtimeMs: number },
+): boolean {
+  if (alwaysHash()) return false;
+  if (!rec.hash) return false;
+  return rec.size === f.size && rec.mtimeMs === f.mtimeMs;
 }
 
 export function isClean(d: Drift): boolean {
@@ -90,7 +128,6 @@ export function driftCount(d: Drift): number {
 export function probeDrift(root: string, outDir: string): Drift | null {
   const fp = readFingerprint(outDir);
   if (!fp) return null;
-  const alwaysHash = process.env.GRAFT_REFRESH === "hash";
 
   const drift: Drift = { changed: [], added: [], removed: [] };
   const seen = new Set<string>();
@@ -103,9 +140,11 @@ export function probeDrift(root: string, outDir: string): Drift | null {
       continue;
     }
     const [size, mtimeMs, hash] = print;
-    if (!alwaysHash && size === f.size && mtimeMs === f.mtimeMs) continue;
+    if (statUnchanged({ size, mtimeMs, hash }, f)) continue;
     // Suspect: confirm by bytes, so a touch (or a checkout that restores the
-    // same content) doesn't cost a rebuild.
+    // same content) doesn't cost a rebuild. An entry with an empty hash lands
+    // here every time by design — that's a file the last build couldn't read, and
+    // the only way to learn it's readable again is to try.
     let now: string;
     try {
       now = contentHash(readFileSync(f.abs, "utf8"));

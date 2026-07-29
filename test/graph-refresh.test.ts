@@ -5,12 +5,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
-import { ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
-import { isClean, probeDrift } from "../src/graph/fingerprint.js";
+import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
+import { extractCachePath } from "../src/graph/extract-cache.js";
+import { fingerprintPath, isClean, probeDrift } from "../src/graph/fingerprint.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { acquireLock, readStats, releaseLock, writeStats, emptyStats } from "../src/util/state.js";
 import { callTool } from "../src/mcp/tools.js";
@@ -182,6 +183,123 @@ test("a failed rebuild still answers from the graph on disk", async (t) => {
   // rebuild-in-flight that will never finish.
   assert.equal(acquireLock(d), true);
   releaseLock(d);
+});
+
+/**
+ * The probe and the builder must agree on what "unchanged" means, in both
+ * directions. Each of the next three tests is a case where they didn't, and the
+ * graph went permanently stale while every surface reported healthy.
+ */
+test("GRAFT_REFRESH=hash: drift the probe reports is drift the rebuild repairs", async () => {
+  const d = repo();
+  await buildGraph(d);
+  const f = join(d, "src", "math.ts");
+
+  // The state mtime-preserving tooling leaves behind: new bytes, but both sidecars
+  // recording the file's current `(size, mtimeMs)` against its *old* hash. Written
+  // out directly rather than via `utimesSync`, which takes float seconds and can't
+  // put a millisecond mtime back exactly.
+  const swapped = MATH.replace("add", "sum");
+  assert.equal(swapped.length, MATH.length, "fixture must be a same-size rewrite");
+  writeFileSync(f, swapped);
+  const now = statSync(f);
+  const fp = JSON.parse(readFileSync(fingerprintPath(outOf(d)), "utf8"));
+  const staleHash = fp.files["src/math.ts"][2];
+  fp.files["src/math.ts"] = [now.size, now.mtimeMs, staleHash];
+  writeFileSync(fingerprintPath(outOf(d)), JSON.stringify(fp));
+  const memo = JSON.parse(readFileSync(extractCachePath(outOf(d)), "utf8"));
+  Object.assign(memo.files["src/math.ts"], { size: now.size, mtimeMs: now.mtimeMs });
+  writeFileSync(extractCachePath(outOf(d)), JSON.stringify(memo));
+
+  // Nobody notices without the flag — that's the documented trade-off, and the
+  // whole reason the flag exists.
+  assert.ok(isClean(probeDrift(d, outOf(d))!));
+
+  process.env.GRAFT_REFRESH = "hash";
+  try {
+    assert.deepEqual(probeDrift(d, outOf(d)), { changed: ["src/math.ts"], added: [], removed: [] });
+    const r = await ensureFreshGraph(d);
+    assert.equal(r.refreshed, true);
+    // The bug: the probe hashed, the builder trusted the stat, so the rebuild
+    // replayed the old parse and the next probe reported the same drift forever.
+    assert.equal(hasSymbol(d, "src/math.ts#sum"), true, "the rebuild must actually re-parse it");
+    assert.equal(hasSymbol(d, "src/math.ts#add"), false);
+    assert.ok(isClean(probeDrift(d, outOf(d))!), "and the drift is now gone, not permanent");
+  } finally {
+    delete process.env.GRAFT_REFRESH;
+  }
+});
+
+test("a file that becomes readable again is picked up through the probe", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root reads anything, so chmod 000 proves nothing");
+  const d = repo();
+  const hidden = join(d, "src", "hidden.ts");
+  writeFileSync(hidden, "export function reachable(): number {\n  return 1;\n}\n");
+  chmodSync(hidden, 0o000);
+  await buildGraph(d);
+  assert.equal(hasSymbol(d, "src/hidden.ts#reachable"), false);
+
+  // Recorded-but-unreadable must not read as new on every query...
+  assert.ok(isClean(probeDrift(d, outOf(d))!), "an unreadable file doesn't churn the probe");
+
+  // ...but a chmod changes neither size nor mtime, so trusting the stat here left
+  // the file permanently missing from the graph.
+  chmodSync(hidden, 0o644);
+  assert.deepEqual(probeDrift(d, outOf(d)), { changed: ["src/hidden.ts"], added: [], removed: [] });
+  const r = await ensureFreshGraph(d);
+  assert.equal(r.refreshed, true);
+  assert.equal(hasSymbol(d, "src/hidden.ts#reachable"), true);
+});
+
+test("the fingerprint is written even when the extract memo can't be", async (t) => {
+  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only file proves nothing");
+  const d = repo();
+  await buildGraph(d);
+
+  // An unwritable memo costs the next build its reuse. It must not cost every
+  // future query a full cold rebuild, which is what gating the fingerprint on it did.
+  const memo = extractCachePath(outOf(d));
+  chmodSync(memo, 0o400);
+  writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
+  await buildGraph(d);
+  chmodSync(memo, 0o600);
+
+  const drift = probeDrift(d, outOf(d));
+  assert.ok(drift, "a fingerprint exists, so the probe has a fast path");
+  assert.ok(isClean(drift), "and it says the graph matches the tree");
+});
+
+test("a fingerprint from a different extractor is not trusted", async () => {
+  const d = repo();
+  await buildGraph(d);
+  assert.ok(isClean(probeDrift(d, outOf(d))!));
+
+  // Same bytes on disk, different extractor: the memo drops its entries, so the
+  // prints describe nodes nothing would rebuild. "Unknown" is the only safe answer.
+  const fp = JSON.parse(readFileSync(fingerprintPath(outOf(d)), "utf8"));
+  writeFileSync(fingerprintPath(outOf(d)), JSON.stringify({ ...fp, extractor: "0:0" }));
+  assert.equal(probeDrift(d, outOf(d)), null);
+});
+
+test("a workspace refreshes its children even under a --dir override", async () => {
+  const d = mkdtempSync(join(tmpdir(), "graft-refresh-ws-"));
+  const child = join(d, "api");
+  mkdirSync(join(child, "src"), { recursive: true });
+  writeFileSync(join(child, "src", "math.ts"), MATH);
+  await buildGraph(child);
+
+  const shared = join(d, "shared-context");
+  mkdirSync(shared, { recursive: true });
+  writeFileSync(join(shared, "workspace.json"), JSON.stringify({ version: 1, children: ["api"] }));
+
+  writeFileSync(join(child, "src", "math.ts"), `${MATH}export function mul(a: number, b: number): number {\n  return a * b;\n}\n`);
+  // `contextDirFor` returns an override verbatim, so forwarding this to the child
+  // resolved it to the parent's dir — no wiring.json there, so every child was
+  // silently skipped and the query answered from a stale child graph.
+  const r = await ensureFreshChildren(d, ["api"], { contextDir: shared });
+  assert.equal(r.refreshed, true);
+  assert.match(r.note ?? "", /api/);
+  assert.equal(hasSymbol(child, "src/math.ts#mul"), true);
 });
 
 test("callTool refreshes before answering — except for graft_check", async () => {
