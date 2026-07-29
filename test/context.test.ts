@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { buildContext } from "../src/context/build.js";
 import { checkContext, indexFreshness, staleBanner } from "../src/context/check.js";
-import { contextDirFor, ensureGitignored } from "../src/context/node-file.js";
+import { contextDirFor, ensureGitignored, ensureSearchable } from "../src/context/node-file.js";
 import { fakeProviders } from "./helpers.js";
 
 // CLI-spawn helper (same pattern as test/graph-traverse-cli.test.ts) — these tests
@@ -299,6 +299,61 @@ test("ensureGitignored: no-op when the graph dir is outside the repo root", () =
   try {
     ensureGitignored(dir, join(tmpdir(), "somewhere-else-graft"));
     assert.equal(existsSync(join(dir, ".gitignore")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ensureSearchable — gitignoring the graph must not also hide it from `grep`.
+// ripgrep honours .gitignore, so without this the cards are unreachable by the
+// one mechanism they were designed around.
+test("ensureSearchable: re-admits the card tree while excluding the caches", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxsearch-"));
+  try {
+    ensureSearchable(dir, contextDirFor(dir));
+    const ig = readFileSync(join(dir, ".ignore"), "utf8");
+    assert.match(ig, /^!graft\/$/m, "the tree is re-admitted to search");
+    assert.match(ig, /^graft\/\.cache\/$/m, "but not the multi-MB parse memo");
+    assert.match(ig, /^graft\/\.graph\/$/m, "and not wiring.json");
+    assert.match(ig, /ripgrep reads/, "carries the why, for whoever finds this file");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureSearchable: appends to an existing .ignore, and is idempotent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxsearch-"));
+  try {
+    writeFileSync(join(dir, ".ignore"), "vendor/\n");
+    ensureSearchable(dir, contextDirFor(dir));
+    const once = readFileSync(join(dir, ".ignore"), "utf8");
+    assert.match(once, /vendor\//, "existing entries survive");
+    ensureSearchable(dir, contextDirFor(dir));
+    const twice = readFileSync(join(dir, ".ignore"), "utf8");
+    assert.equal(once, twice);
+    assert.equal((twice.match(/^!graft\/$/gm) ?? []).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureSearchable: leaves a hand-written negation alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxsearch-"));
+  try {
+    // Someone already had an opinion here — don't append a competing block.
+    writeFileSync(join(dir, ".ignore"), "# mine\n!graft/\n");
+    ensureSearchable(dir, contextDirFor(dir));
+    assert.equal(readFileSync(join(dir, ".ignore"), "utf8"), "# mine\n!graft/\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureSearchable: no-op when the graph dir is outside the repo root", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxsearch-"));
+  try {
+    ensureSearchable(dir, join(tmpdir(), "somewhere-else-graft"));
+    assert.equal(existsSync(join(dir, ".ignore")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

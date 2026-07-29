@@ -58,6 +58,28 @@ test('initialize → tools/list → tools/call round-trip', async () => {
   assert.match(call.result.content[0].text, /graft build/);
 });
 
+test('initialize carries instructions — the layer that survives tool deferral', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'graft-mcpsrv-instr-'));
+  const rs = await rpc(
+    [{ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } }],
+    dir,
+    1,
+  );
+  const { instructions, serverInfo } = rs[0].result;
+  assert.equal(typeof instructions, 'string');
+  // A host that defers graft's schemas shows the model six bare names and nothing
+  // else, so this string has to carry both the pitch and the recovery instruction.
+  assert.match(instructions, /ONE lookup/, 'tells the agent to batch the schema fetch');
+  assert.match(instructions, /select:mcp__graft__graft_ask,/, 'gives a copy-pasteable query');
+  for (const t of ['graft_ask', 'graft_grep', 'graft_callers', 'graft_skeleton', 'graft_map']) {
+    assert.ok(instructions.includes(t), `names ${t}`);
+  }
+  // Observed sibling servers sit at 660–984 chars; nothing proves a longer one
+  // survives un-truncated, so hold the line here rather than discover it later.
+  assert.ok(instructions.length < 1000, `instructions must stay under 1000 chars, got ${instructions.length}`);
+  assert.match(serverInfo.version, /^\d+\.\d+\.\d+$/, 'real version, not the old hardcoded 0');
+});
+
 test('unknown method returns -32601', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'graft-mcpsrv2-'));
   const rs = await rpc([{ jsonrpc: '2.0', id: 9, method: 'resources/list' }], dir, 1);

@@ -1,6 +1,10 @@
 import { basename } from 'node:path';
 import type { Stats, SessionState } from './state.js';
 import type { GraphV1, EdgeV1 } from '../graph/types.js';
+// The injection gate reuses the federation floors rather than inventing its own:
+// "did we hit a real name, or match broadly enough to trust anyway" is the same
+// question in both places, and one set of calibrated numbers beats two.
+import { HIGH_FLOOR, STRONG_FLOOR } from '../ask/fuse.js';
 
 const C = {
   indigo: (s: string) => `\x1b[38;2;84;111;255m${s}\x1b[0m`,
@@ -73,6 +77,10 @@ export interface AskJson {
   saved?: { files: number; baselineChars: number };
   /** Lexical mode: share (0..1) of the query's distinct terms the top hit matched. */
   coverage?: number;
+  /** Lexical mode: the same share over the top hit's NAME field only — "did the
+   * query hit a real symbol, or only words buried in some body?". `ask --json`
+   * has always emitted it; the gate below is what finally reads it. */
+  coverageStrong?: number;
 }
 
 function tokensOf(chars: number): number { return Math.round(chars / 4); }
@@ -123,27 +131,65 @@ export function formatRetrieval(ask: AskJson, cap = 5): string | null {
   );
 }
 
-/** Coverage below this → skip the pack. A floor, not a classifier: lexical
- * coverage can't reliably rank mid-range prompts, so the floor sits where it
- * only rejects flagrantly off-repo prompts (chatter, greetings, unrelated
- * asks — these probe well under 0.1) and never a genuinely on-repo task. The
- * cost asymmetry justifies leaning low: a wrongly-skipped pack is recoverable
- * (the agent pulls with `graft ask`), a wrongly-injected one is pure noise. */
+/**
+ * Superseded by the two-clause strength gate in {@link relevantRetrieval} (see
+ * {@link STRONG_FLOOR} / {@link HIGH_FLOOR}). Kept exported because the old
+ * single-clause floor is still the documented reference point for why it changed:
+ * it sat at 0.15, and a prompt measuring 0.165 / strong 0.033 cleared it by 0.015
+ * and injected three test files for a question whose answer was elsewhere. The
+ * comment it used to carry justified leaning low — "a wrongly-skipped pack is
+ * recoverable, the agent pulls with `graft ask`" — and that assumption is exactly
+ * what a traced session falsified: the agent did not pull. It grepped 38 times.
+ */
 export const INJECT_MIN_COVERAGE = 0.15;
 
 /** How many recently-injected pointers the novelty gate remembers per session. */
 const INJECTED_POINTERS_CAP = 40;
 
-/** The per-prompt injection gate. Returns the pack text to inject, or null to
- * stay silent. Mutates `s` to remember what was shown (caller persists it).
- * Gates, in order:
- *   1. relevance — lexical coverage below {@link INJECT_MIN_COVERAGE} → skip
- *      (structural results carry no coverage; the intent match is the signal);
- *   2. novelty — hits whose pointer was already injected this session are
- *      dropped, and if none remain the whole pack is skipped. */
+/** How many weak-match nudges one session may spend. A line that shows up every
+ * turn stops being read; two is enough to land the habit without becoming
+ * wallpaper. */
+export const NUDGE_CAP = 2;
+
+/** The line injected instead of a weak pack: names the command, says why, once.
+ * Deliberately not an imperative about graft in general — it's a fact about this
+ * prompt's match quality plus the command that fixes it. */
+export function weakMatchNudge(s: SessionState, strong: number): string | null {
+  const spent = s.nudges ?? 0;
+  if (spent >= NUDGE_CAP) return null;
+  s.nudges = spent + 1;
+  return (
+    `[graft] no strong match for this prompt (name-field match ${strong.toFixed(2)}) — the graph ` +
+    `has more than this probe found. Run \`graft ask "<your task>" --source\` before grepping.`
+  );
+}
+
+/**
+ * The per-prompt injection gate. Returns the text to inject, or null to stay
+ * silent. Mutates `s` to remember what was shown (caller persists it).
+ *
+ * Gate 1 — **strength**. A pack earns its place only if the top hit either landed
+ * on a real symbol NAME (`coverageStrong ≥ STRONG_FLOOR`) or matched the query
+ * broadly enough to trust regardless (`coverage ≥ HIGH_FLOOR`). This is the same
+ * two-clause rule `fuse.ts` already uses to decide whether a whole sub-repo joins
+ * a cross-repo ranking — a cheaper decision than this one, previously held to a
+ * stricter standard. Failing it emits {@link weakMatchNudge} rather than nothing:
+ * silence leaves the agent with no signal at all, and a borderline pack is worse
+ * than either, because it reads as orientation and suppresses the very retrieval
+ * call it should have triggered. Structural results carry neither score — the
+ * resolved intent is itself the relevance signal — so they always pass.
+ *
+ * Gate 2 — **novelty**. Hits whose pointer was already injected this session are
+ * dropped; if none remain, the pack is skipped.
+ */
 export function relevantRetrieval(ask: AskJson, s: SessionState, cap = 3): string | null {
   if (!(ask.hits ?? []).length) return null;
-  if (typeof ask.coverage === 'number' && ask.coverage < INJECT_MIN_COVERAGE) return null;
+  const lexical = typeof ask.coverage === 'number' || typeof ask.coverageStrong === 'number';
+  if (lexical) {
+    const strong = ask.coverageStrong ?? 0;
+    const broad = ask.coverage ?? 0;
+    if (strong < STRONG_FLOOR && broad < HIGH_FLOOR) return weakMatchNudge(s, strong);
+  }
   const seen = new Set(s.injectedPointers ?? []);
   const fresh = ask.hits.filter((h) => !seen.has(h.pointer));
   if (!fresh.length) return null;

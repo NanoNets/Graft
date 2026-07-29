@@ -32,10 +32,13 @@ export interface SessionState {
    * a hit whose pointer was shown once is never re-injected). Optional so
    * session files written before this field still parse. */
   injectedPointers?: string[];
+  /** Weak-match nudges spent this session, capped so the line stays signal.
+   * Optional for the same backwards-compatibility reason as above. */
+  nudges?: number;
 }
 
 function emptySession(): SessionState {
-  return { lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [] };
+  return { lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [], nudges: 0 };
 }
 
 function sessionPath(d: string, id: string): string { return join(cacheDir(d), 'session', `${id}.json`); }

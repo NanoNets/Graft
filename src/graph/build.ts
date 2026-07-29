@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
-import { contextDirFor, ensureGitignored } from "../context/node-file.js";
+import { contextDirFor, ensureGitignored, ensureSearchable } from "../context/node-file.js";
 import { extractFile, languageOf, type Language, type RawEdge } from "./extract.js";
 import { contentHash } from "../util/id.js";
 import {
@@ -285,6 +285,10 @@ export async function buildGraph(
     // The graph is a local, regenerable cache — make sure git ignores it. Cheap and
     // idempotent, so a fresh clone's first build self-ignores.
     ensureGitignored(root, outDir);
+    // …and that gitignoring it doesn't hide the cards from search: ripgrep honours
+    // .gitignore, so without this the cards can never be grepped, which is the one
+    // way an agent was supposed to stumble onto them.
+    ensureSearchable(root, outDir);
     cardStats = writeCards(graph, outDir);
     writeIndex(outDir, cardStats.files);
     // Backfill concept nodes with their `covers:` symbol/file:line list (the

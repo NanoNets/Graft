@@ -339,7 +339,7 @@ program
     const { resolve } = await import("node:path");
     const { startMcpServer } = await import("./mcp/server.js");
     const globalOpts = program.opts<{ dir?: string }>();
-    startMcpServer(resolve(dir), globalOpts.dir);
+    startMcpServer(resolve(dir), globalOpts.dir, currentVersion);
   });
 
 program

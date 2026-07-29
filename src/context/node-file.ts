@@ -25,6 +25,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync
 import { join, relative, sep } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
+// Value-only import of a constant; `write.ts` pulls in nothing from here, so no cycle.
+import { GRAPH_DIR } from "../graph/write.js";
 
 /** A source file a node was derived from, with its content hash at generation time. */
 export interface SourceRef {
@@ -126,6 +128,45 @@ export function ensureGitignored(root: string, contextDir: string): void {
   const gap = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
   const block = `${gap}# graft's local graph cache — regenerable, not committed (run \`graft build\`).\n${entry}\n`;
   try { writeFileSync(path, current + block); } catch { /* best-effort — build already succeeded */ }
+}
+
+/**
+ * Keep the card tree greppable even though it's gitignored, by writing a root
+ * `.ignore` that re-admits it.
+ *
+ * The cards exist so that a `grep <symbol>` lands on a ~150-token card instead of
+ * a whole source file. Making the graph a local cache (and so gitignored) silently
+ * broke that: **ripgrep honours `.gitignore`**, and every ripgrep-backed search
+ * tool inherits the blind spot — verified by a card that names a symbol which
+ * default `rg` will not return and `rg -uu` finds instantly. `.ignore` is read at
+ * higher precedence than `.gitignore`, so re-admitting the tree there restores
+ * search without git ever tracking a byte of it.
+ *
+ * The two negative entries matter as much as the positive one: `.cache/` holds a
+ * multi-MB parse memo and `.graph/` holds `wiring.json`, and dropping either into
+ * every repo-wide search would be worse than the problem being fixed.
+ *
+ * Same contract as {@link ensureGitignored}: idempotent, skips a context dir
+ * outside `root`, and swallows write failures — a build that already succeeded
+ * must not fail over a convenience file.
+ */
+export function ensureSearchable(root: string, contextDir: string): void {
+  const rel = relative(root, contextDir).split(sep).join("/");
+  if (rel === "" || rel.startsWith("..")) return; // outside the repo — nothing to re-admit
+  const dir = rel.replace(/\/+$/, "");
+  const entry = `!${dir}/`;
+  const path = join(root, ".ignore");
+  let current = "";
+  try { current = readFileSync(path, "utf8"); } catch { /* no .ignore yet — we create one */ }
+  // Any mention of the negation means a human (or a previous build) has already
+  // had an opinion here; leave it alone rather than append a second copy.
+  if (current.split("\n").some((l) => l.trim() === entry)) return;
+  const gap = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+  const block =
+    `${gap}# graft's cards are gitignored but should stay greppable: ripgrep reads\n` +
+    `# .ignore before .gitignore, so this re-admits the tree to search only.\n` +
+    `${entry}\n${dir}/${CACHE_DIR}/\n${dir}/${GRAPH_DIR}/\n`;
+  try { writeFileSync(path, current + block); } catch { /* best-effort */ }
 }
 
 /** Render the generated body (Summary + Related) for a node. */

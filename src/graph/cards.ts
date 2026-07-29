@@ -194,6 +194,14 @@ export function writeIndex(outDir: string, files: CardFileInfo[]): void {
     'filename here, or run `graft ask "<task>"`. Each node carries prose plus exact',
     "`file:line`; open a source file only to edit the named span.",
     "",
+    // Whoever reads this file has already decided to look at graft, so this is the
+    // one place a pointer to the richer surface is welcome rather than noise. Stated
+    // as what exists, not as an instruction — see `mcp/instructions.ts` for why.
+    "The same graph is queryable as MCP tools (`graft_ask`, `graft_grep`,",
+    "`graft_callers`, `graft_skeleton`, `graft_map`) where a host exposes them, and",
+    "as the `graft` CLI everywhere else. Edges — who calls what — live only in the",
+    "graph, not in these files: `graft callers <symbol>` is the only way to read them.",
+    "",
   ];
 
   const concepts = readNodes(outDir).sort((a, b) => a.slug.localeCompare(b.slug));

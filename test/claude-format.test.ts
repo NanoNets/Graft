@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStatusline, incomingEdges, formatBlastRadius, formatRetrieval, formatOrientation, renderSubagent, relevantRetrieval, INJECT_MIN_COVERAGE } from '../src/claude/format.js';
+import { renderStatusline, incomingEdges, formatBlastRadius, formatRetrieval, formatOrientation, renderSubagent, relevantRetrieval, INJECT_MIN_COVERAGE, NUDGE_CAP } from '../src/claude/format.js';
 import { emptyStats } from '../src/claude/state.js';
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -102,10 +102,44 @@ test('relevantRetrieval injects on good coverage and records pointers', () => {
   assert.deepEqual(s.injectedPointers, ['src/pkce.ts:L1-L4', 'src/pkce.ts:L6-L9']);
 });
 
-test('relevantRetrieval skips when coverage is below the floor', () => {
+test('relevantRetrieval nudges instead of injecting when the match is weak both ways', () => {
   const s = freshSession();
-  assert.equal(relevantRetrieval(gateAsk({ coverage: INJECT_MIN_COVERAGE - 0.01 }), s), null);
-  assert.deepEqual(s.injectedPointers, [], 'nothing recorded on skip');
+  const txt = relevantRetrieval(gateAsk({ coverage: 0.2, coverageStrong: 0.05 }), s);
+  assert.match(txt ?? '', /no strong match/, 'a weak pack is replaced by a named command');
+  assert.match(txt ?? '', /graft ask/, 'the nudge names the command to run');
+  assert.deepEqual(s.injectedPointers, [], 'nothing recorded — no pack was shown');
+});
+
+test('relevantRetrieval passes on a NAME hit even when broad coverage is low', () => {
+  // The whole point of the second clause: a short prompt naming one real symbol
+  // has low broad coverage and high strength, and must not be gated out.
+  const txt = relevantRetrieval(gateAsk({ coverage: 0.2, coverageStrong: 0.45 }), freshSession());
+  assert.ok(txt && /verify/.test(strip(txt)), 'strong name match injects');
+});
+
+test('relevantRetrieval: the traced turn-1 regression is now rejected', () => {
+  // Measured from session ce3ca5f4: this exact pair cleared the old 0.15 floor by
+  // 0.015 and injected three test files for a question answered elsewhere.
+  const s = freshSession();
+  const txt = relevantRetrieval(gateAsk({ coverage: 0.1649, coverageStrong: 0.0329 }), s);
+  assert.match(txt ?? '', /no strong match/);
+  assert.match(txt ?? '', /0\.03/, 'the nudge reports the strength it measured');
+  assert.deepEqual(s.injectedPointers, []);
+});
+
+test('relevantRetrieval caps the nudge so it cannot become wallpaper', () => {
+  const s = freshSession();
+  const weak = () => gateAsk({ coverage: 0.1, coverageStrong: 0 });
+  assert.ok(relevantRetrieval(weak(), s), 'first weak prompt nudges');
+  assert.ok(relevantRetrieval(weak(), s), 'second still nudges');
+  assert.equal(relevantRetrieval(weak(), s), null, 'third is silent');
+  assert.equal(s.nudges, NUDGE_CAP);
+});
+
+test('INJECT_MIN_COVERAGE is retained as the superseded reference floor', () => {
+  // Documented history, not live logic: 0.1649 used to clear this and no longer does.
+  assert.equal(INJECT_MIN_COVERAGE, 0.15);
+  assert.ok(0.1649 > INJECT_MIN_COVERAGE, 'the regression case cleared the old floor');
 });
 
 test('relevantRetrieval treats missing coverage (structural mode) as relevant', () => {

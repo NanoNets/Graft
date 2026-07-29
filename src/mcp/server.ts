@@ -4,6 +4,7 @@
  */
 import { createInterface } from 'node:readline';
 import { TOOLS, callTool } from './tools.js';
+import { mcpInstructions } from './instructions.js';
 
 function send(msg: object): void {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -17,7 +18,12 @@ function replyError(id: unknown, code: number, message: string): void {
   send({ jsonrpc: '2.0', id, error: { code, message } });
 }
 
-export function startMcpServer(root: string, dirOverride?: string): void {
+/**
+ * `version` is threaded in from the CLI rather than read here: `readCurrentVersion`
+ * resolves package.json relative to the calling module, and from `dist/mcp/` that
+ * lookup misses. The caller already knows it.
+ */
+export function startMcpServer(root: string, dirOverride?: string, version = '0'): void {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on('line', (line) => {
     const text = line.trim();
@@ -36,7 +42,9 @@ export function startMcpServer(root: string, dirOverride?: string): void {
         reply(id, {
           protocolVersion: params?.protocolVersion ?? '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'graft', version: '0' },
+          serverInfo: { name: 'graft', version },
+          // The one channel that survives tool deferral — see ./instructions.ts.
+          instructions: mcpInstructions(),
         });
         return;
       case 'notifications/initialized':
