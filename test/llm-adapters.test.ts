@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type OpenAI from "openai";
+import OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import { OpenAIChatModel } from "../src/ai/llm/openai.js";
 import { AnthropicChatModel } from "../src/ai/llm/anthropic.js";
@@ -29,6 +29,8 @@ function openAiResp(over: Partial<any> = {}): any {
     ...over,
   };
 }
+
+const REJECTED_OBJECT_TOOL_CHOICE = "Invalid tool_choice type: 'object'. Supported string values: none, auto, required";
 
 test("openai: plain text — system/user map to strings, usage is uncached-only", async () => {
   const { client, box } = fakeOpenAI(openAiResp());
@@ -112,6 +114,69 @@ test("openai: assistant providerRaw replays verbatim", async () => {
     ],
   });
   assert.deepEqual(box.params.messages[1], raw);
+});
+
+test("openai: retries with tool_choice \"required\" when the server rejects the object form (single tool)", async () => {
+  const calls: any[] = [];
+  const resp = openAiResp({
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: [{ id: "c1", type: "function", function: { name: "emit_json", arguments: '{"correct":true}' } }],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+  const client = {
+    chat: {
+      completions: {
+        create: async (params: any) => {
+          calls.push(params);
+          if (calls.length === 1) {
+            throw new OpenAI.APIError(400, { message: REJECTED_OBJECT_TOOL_CHOICE }, REJECTED_OBJECT_TOOL_CHOICE, new Headers());
+          }
+          return resp;
+        },
+      },
+    },
+  } as unknown as OpenAI;
+  const m = new OpenAIChatModel({ apiKey: "x", model: "local-model", client });
+  const res = await m.create({ messages: [{ role: "user", content: "grade" }], responseFormat: { kind: "json" } });
+
+  assert.equal(calls.length, 2); // first attempt (object form) + retry (string form)
+  assert.deepEqual(calls[0].tool_choice, { type: "function", function: { name: "emit_json" } });
+  assert.equal(calls[1].tool_choice, "required");
+  assert.equal(res.text, '{"correct":true}');
+});
+
+test("openai: does NOT paper over a rejected object tool_choice when multiple tools are offered", async () => {
+  let callCount = 0;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => {
+          callCount++;
+          throw new OpenAI.APIError(400, { message: REJECTED_OBJECT_TOOL_CHOICE }, REJECTED_OBJECT_TOOL_CHOICE, new Headers());
+        },
+      },
+    },
+  } as unknown as OpenAI;
+  const m = new OpenAIChatModel({ apiKey: "x", model: "local-model", client });
+  await assert.rejects(
+    () =>
+      m.create({
+        messages: [{ role: "user", content: "go" }],
+        tools: [
+          { name: "a", description: "d", parameters: { type: "object" } },
+          { name: "b", description: "d", parameters: { type: "object" } },
+        ],
+        responseFormat: { kind: "tool", name: "a" },
+      }),
+    OpenAI.APIError,
+  );
+  assert.equal(callCount, 1); // no ambiguous retry — the caller asked for "a" specifically
 });
 
 // --- Anthropic adapter ------------------------------------------------------
