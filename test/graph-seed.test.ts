@@ -14,7 +14,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
@@ -69,6 +78,22 @@ test("mainWorktreeRoot refuses a submodule", () => {
   mkdirSync(sub, { recursive: true });
   writeFileSync(join(sub, ".git"), `gitdir: ${gitdir}\n`);
   assert.equal(mainWorktreeRoot(sub), null);
+});
+
+test("mainWorktreeRoot reads the pointer whatever whitespace it arrives with", () => {
+  // No regex does this parsing (a lazy group next to a trailing `[ \t]*` is the
+  // polynomial-ReDoS shape CodeQL flagged in 44a191e), so the padding cases are worth
+  // pinning: a CRLF checkout, tabs, and a `.git` file with other lines in it.
+  for (const suffix of ["\n", "\r\n", "   \n", "\t\t\n", "\n# a stray line\n"]) {
+    const { main, wt } = fakePair();
+    const gitdir = join(main, ".git", "worktrees", "w");
+    writeFileSync(join(wt, ".git"), `gitdir:\t ${gitdir}${suffix}`);
+    assert.equal(mainWorktreeRoot(wt), main, `suffix ${JSON.stringify(suffix)}`);
+  }
+
+  const { wt: empty } = fakePair();
+  writeFileSync(join(empty, ".git"), "gitdir:   \n");
+  assert.equal(mainWorktreeRoot(empty), null, "a pointer to nowhere is not a worktree");
 });
 
 test("mainWorktreeRoot survives every broken .git it can be handed", () => {
@@ -164,11 +189,26 @@ test("a git worktree starts with no graph, and one query gives it a correct one"
   );
   assert.ok(graph?.nodes.some((n) => n.id === "src/math.ts#add"), "and kept what didn't change");
 
-  // The passive surface came across too — it's what `grep` and the repo map read.
-  assert.equal(existsSync(join(outOf(wt), "INDEX.md")), true);
+  // A query writes only what a query reads (the rule in refresh.ts's header). The
+  // parent's cards describe the parent's *branch*, and nothing on the query path would
+  // ever correct them, so they must not travel — `graft build` regenerates them below.
+  assert.equal(existsSync(join(outOf(wt), "INDEX.md")), false, "a query writes no markdown");
+  assert.equal(existsSync(join(outOf(wt), "graph-extraction-and-loading.md")), false, "nor cards");
+
+  // What did travel is what makes the repair cheap and the answer correct.
+  assert.equal(existsSync(join(outOf(wt), ".cache", "ask-index.json")), true, "the ask sidecar");
+  assert.ok(
+    readdirSync(join(outOf(wt), ".cache")).some((f) => f.startsWith("extract.")),
+    "the extraction memo, or every file would be re-parsed",
+  );
 
   assert.equal(existsSync(join(outOf(wt), ".cache", "session")), false, "no session transcripts");
   assert.equal(existsSync(join(outOf(wt), ".cache", "stats.json")), false, "no borrowed savings");
+
+  // …and an explicit build is what produces this checkout's own passive surface.
+  const built = await buildGraph(wt);
+  assert.ok(built.cards > 0, "the build writes cards for this checkout");
+  assert.equal(existsSync(join(outOf(wt), "INDEX.md")), true);
 
   // Seeding reads the parent; it must never write to it.
   assert.equal(readFileSync(wiringPath(outOf(main)), "utf8"), parentGraph, "parent graph untouched");

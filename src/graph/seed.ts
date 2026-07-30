@@ -7,6 +7,9 @@
  * session, and the passive surface (`INDEX.md`, the cards) is missing too. The agent
  * that was supposed to be cheapest in a fresh worktree is instead blind in one.
  *
+ * What travels is the graph and the sidecars a query reads — never the markdown; see
+ * `seedable` for why the cards are the parent's branch and not this one's.
+ *
  * The parent checkout has not gone anywhere, though — a worktree's `.git` is a *file*
  * naming it, and the harness that creates these worktrees already reaches back the
  * same way (Claude Code symlinks `node_modules` to the parent's). So: copy the
@@ -42,8 +45,14 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { ASK_INDEX_FILE } from "../ask/index-file.js";
 import { CACHE_DIR, contextDirFor } from "../context/node-file.js";
-import { GRAPH_DIR, GRAPH_FILE, wiringPath } from "./write.js";
+import { EXTRACT_CACHE_PREFIX } from "./extract-cache.js";
+import { FINGERPRINT_PREFIX } from "./fingerprint.js";
+import { GRAPH_DIR, wiringPath } from "./write.js";
+
+/** The one line a linked worktree's `.git` file carries. */
+const GITDIR_KEY = "gitdir:";
 
 /** Env kill switch, mirroring `GRAFT_NO_REFRESH` in ./refresh.ts. */
 export function seedDisabled(): boolean {
@@ -72,9 +81,17 @@ export function mainWorktreeRoot(root: string): string | null {
   try {
     const dot = join(root, ".git");
     if (statSync(dot).isDirectory()) return null;
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(dot, "utf8"));
-    if (!m) return null;
-    const gitdir = isAbsolute(m[1]) ? m[1] : resolve(root, m[1]);
+    // Read the pointer without a regex. `/^gitdir:[ \t]*(.+?)[ \t]*$/m` is the
+    // polynomial-ReDoS shape CodeQL flagged on `ensureSearchable` (`js/polynomial-redos`,
+    // fixed in 44a191e): `.` also matches space and tab, so the lazy group and the
+    // trailing `[ \t]*` overlap and a line of blanks costs O(n²). Same conclusion as
+    // that fix — the ambiguity buys nothing, and split/startsWith/trim is linear and
+    // plainer. `trim` also absorbs the `\r` of a CRLF checkout.
+    const line = readFileSync(dot, "utf8").split("\n").find((l) => l.startsWith(GITDIR_KEY));
+    if (line === undefined) return null;
+    const target = line.slice(GITDIR_KEY.length).trim();
+    if (!target) return null;
+    const gitdir = isAbsolute(target) ? target : resolve(root, target);
     if (basename(dirname(gitdir)) !== "worktrees") return null;
     const rel = readFileSync(join(gitdir, "commondir"), "utf8").trim();
     if (!rel) return null;
@@ -99,25 +116,42 @@ export interface SeedResult {
 const NOT_SEEDED: SeedResult = { seeded: false };
 
 /**
- * Repo-relative paths (posix) that a seed deliberately leaves behind.
+ * An allowlist, not a skip list: is this repo-relative path (posix) one of the few
+ * files a seed may bring across?
  *
- * `wiring.json` is here because it is copied last and atomically — see `installGraph`.
- * The rest is state that belongs to the checkout that produced it: another process's
- * lock, another session's transcripts, and another checkout's savings/dirty counters.
+ * The gate that calls this promises "writes only what a query reads — the graph, the
+ * `ask` sidecar, the freshness record" (see the header of ./refresh.ts). A copy that
+ * wrote anything else would turn a read into a write of the repo, so the copy honours
+ * the same list. The extraction memo is on it because the refresh immediately after
+ * rewrites that file anyway, and replaying it is what keeps the repair cheap.
+ *
+ * **Deliberately absent: the cards and `INDEX.md`.** They would land as this
+ * checkout's documentation while describing the *parent's* branch, and nothing on the
+ * query path rewrites them (`writeCards`/`writeIndex` sit behind `!graphOnly`), so they
+ * would stay wrong indefinitely. An explicit `graft build` regenerates them from this
+ * checkout's own graph — and prunes the ones that no longer apply — which is both
+ * correct and nearly free once the graph is here.
+ *
+ * Also absent, because it belongs to the checkout that produced it: `.cache/session/`
+ * (another session's transcripts), `.sync.lock` (another process's lock), and
+ * `stats.json` (this checkout earns its own savings and dirty flag).
  */
-const SKIP = new Set([
-  `${GRAPH_DIR}/${GRAPH_FILE}`,
-  `${CACHE_DIR}/.sync.lock`,
-  `${CACHE_DIR}/session`,
-  `${CACHE_DIR}/stats.json`,
-]);
+function seedable(rel: string): boolean {
+  // The dirs themselves, or cpSync would never look inside them.
+  if (rel === "" || rel === GRAPH_DIR || rel === CACHE_DIR) return true;
+  if (!rel.startsWith(`${CACHE_DIR}/`)) return false; // incl. the graph: `installGraph` places it
+  const name = rel.slice(CACHE_DIR.length + 1);
+  return (
+    name === ASK_INDEX_FILE ||
+    name.startsWith(`${EXTRACT_CACHE_PREFIX}.`) ||
+    name.startsWith(`${FINGERPRINT_PREFIX}.`)
+  );
+}
 
 function copyTree(srcDir: string, outDir: string): void {
   cpSync(srcDir, outDir, {
     recursive: true,
-    // A directory that returns false is skipped whole, which is what keeps
-    // `.cache/session/` (one file per session, forever) out of the copy.
-    filter: (src) => !SKIP.has(relative(srcDir, src).split(sep).join("/")),
+    filter: (src) => seedable(relative(srcDir, src).split(sep).join("/")),
   });
 }
 

@@ -34,7 +34,7 @@ import type { NodeV1 } from "./types.js";
 
 /** Bump when the on-disk shape below changes. */
 const CACHE_VERSION = 1;
-const EXTRACT_CACHE_PREFIX = "extract";
+export const EXTRACT_CACHE_PREFIX = "extract";
 
 export interface ExtractEntry {
   size: number;

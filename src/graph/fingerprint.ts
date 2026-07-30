@@ -26,7 +26,7 @@ import { readJson, writeJsonAtomic } from "../util/state.js";
 import { extractorStamp, pruneSidecars, type ExtractEntry } from "./extract-cache.js";
 import { listSourceStats } from "./source-files.js";
 
-const FINGERPRINT_PREFIX = "fingerprint";
+export const FINGERPRINT_PREFIX = "fingerprint";
 const FINGERPRINT_VERSION = 1;
 
 /** The identity this graft's prints are filed under. Unlike the extract memo, a

@@ -121,9 +121,16 @@ async function waitForLock(cache: string): Promise<boolean> {
  * already there and reports nothing — which is why the caller re-checks the file
  * rather than trusting this return value.
  */
-async function seedUnderLock(dir: string, outDir: string, contextDir?: string): Promise<SeedResult> {
+async function seedUnderLock(
+  dir: string,
+  outDir: string,
+  contextDir?: string,
+): Promise<SeedResult & { busy?: boolean }> {
   const lockCache = join(outDir, CACHE_DIR);
-  if (!(await waitForLock(lockCache))) return { seeded: false };
+  // `busy` matters: with no graph on disk there is nothing to fall back to, so a
+  // caller that stayed silent here would emit the bare "no matching nodes" this whole
+  // mechanism exists to remove. Say what happened instead.
+  if (!(await waitForLock(lockCache))) return { seeded: false, busy: true };
   const unhook = releaseOnSignal(lockCache);
   try {
     return seedGraph(dir, { contextDir });
@@ -151,13 +158,18 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
       // worktree, whose parent checkout's `graft/` git could not check out. Copy it
       // in and carry on — the drift below is then exactly the diff between the two
       // checkouts, and repairing it is what makes the copied graph honest here.
-      seededFrom = (await seedUnderLock(dir, outDir, opts.contextDir)).from;
+      const seed = await seedUnderLock(dir, outDir, opts.contextDir);
+      seededFrom = seed.from;
       // Still nothing (not a worktree, parent never built, or a concurrent seed we
       // lost the race for and which we now re-check for): the caller's own "no graph
       // — run graft build" message is the right answer. Auto-building a whole repo
       // under a query is a surprise, and it's the one case where the user hasn't
       // opted into graft at all yet.
-      if (!existsSync(wiringPath(outDir))) return CLEAN;
+      if (!existsSync(wiringPath(outDir))) {
+        return seed.busy
+          ? { refreshed: false, note: "another process is still copying the graph into this worktree — retry the query in a moment" }
+          : CLEAN;
+      }
     }
     const seedNote = seededFrom ? `copied the graph from the main checkout (${seededFrom})` : undefined;
 

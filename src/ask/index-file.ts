@@ -68,7 +68,7 @@ export interface AskIndex {
   docs: AskIndexDoc[];
 }
 
-const ASK_INDEX_FILE = "ask-index.json";
+export const ASK_INDEX_FILE = "ask-index.json";
 
 /** Absolute path to the ask sidecar for a context dir: `<dir>/.cache/ask-index.json`.
  * `.cache/` is the established uncommitted-cache location — this sidecar is a

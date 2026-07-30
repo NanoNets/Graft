@@ -56,12 +56,14 @@
   a fresh worktree answered `no matching nodes` / `no graph found` for the whole session,
   and `INDEX.md` and the cards were missing too, so `grep` and the repo map came up empty.
 
-  A query in a worktree now copies the parent checkout's `graft/` in and then treats the
-  difference between the two checkouts as ordinary drift. The worktree's `.git` is a file
-  naming its parent, so there is nothing to configure; the copy is $0 and offline, and the
-  Tier-2 meaning layer survives it (a cold rebuild would have thrown away every summary
-  you paid for and re-parsed the repo). `graft build` in a worktree starts from the same
-  copy, so it is incremental too.
+  A query in a worktree now copies the parent checkout's graph and query sidecars in, then
+  treats the difference between the two checkouts as ordinary drift. The worktree's `.git`
+  is a file naming its parent, so there is nothing to configure; the copy is $0 and
+  offline, and the Tier-2 meaning layer survives it (a cold rebuild would have thrown away
+  every summary you paid for and re-parsed the repo). `graft build` in a worktree starts
+  from the same copy, so it is incremental too — and it is what writes the worktree's
+  cards and `INDEX.md`, generated from *this* checkout's code rather than copied from the
+  parent's branch. A query still writes only what a query reads.
 
   Reads the parent, never writes to it. No-ops unless there is genuinely a built parent
   checkout on disk — a fresh clone, CI, or a cloned (rather than worktree'd) cloud session
