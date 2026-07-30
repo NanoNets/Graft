@@ -25,6 +25,11 @@
  *   at the end of a turn — so retrieval stays cheap and a read stays a read. It
  *   also leaves `stats.json` alone, so that same `Stop` hook still sees `dirty` and
  *   still rebuilds the passive surface.
+ *
+ * One case is not drift but absence: inside a git worktree there is no graph at all,
+ * because `graft/` is gitignored and so was never checked out. The gate covers that
+ * too — it copies the parent checkout's graph in (`./seed.ts`) and then treats the
+ * difference between the two checkouts as ordinary drift, which is exactly what it is.
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -34,6 +39,7 @@ import { CACHE_DIR } from "../context/node-file.js";
 import { buildGraph } from "./build.js";
 import { driftCount, isClean, probeDrift, type Drift } from "./fingerprint.js";
 import { invalidateGraphCaches } from "./load.js";
+import { seedGraph, type SeedResult } from "./seed.js";
 import { wiringPath } from "./write.js";
 
 /** How long to wait for another process's in-flight rebuild before giving up and
@@ -108,6 +114,26 @@ async function waitForLock(cache: string): Promise<boolean> {
 }
 
 /**
+ * Copy a parent checkout's graph in, holding the same lock a rebuild would.
+ *
+ * Two MCP tool calls in a fresh worktree arrive here at the same moment, and an 8 MB
+ * copy is long enough for both to start one. The loser waits, then finds the graph
+ * already there and reports nothing — which is why the caller re-checks the file
+ * rather than trusting this return value.
+ */
+async function seedUnderLock(dir: string, outDir: string, contextDir?: string): Promise<SeedResult> {
+  const lockCache = join(outDir, CACHE_DIR);
+  if (!(await waitForLock(lockCache))) return { seeded: false };
+  const unhook = releaseOnSignal(lockCache);
+  try {
+    return seedGraph(dir, { contextDir });
+  } finally {
+    unhook();
+    releaseLockIn(lockCache);
+  }
+}
+
+/**
  * Rebuild `root`'s structural graph if the working tree has moved since the last
  * build. Cheap and side-effect-free when nothing changed, which is the usual case.
  *
@@ -119,26 +145,38 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
   try {
     const dir = resolve(root);
     const outDir = contextDirFor(dir, opts.contextDir);
-    // Nothing built yet: the caller's own "no graph — run graft build" message is
-    // the right answer. Auto-building a whole repo under a query is a surprise,
-    // and it's the one case where the user hasn't opted into graft at all yet.
-    if (!existsSync(wiringPath(outDir))) return CLEAN;
+    let seededFrom: string | undefined;
+    if (!existsSync(wiringPath(outDir))) {
+      // One case has a graph to work with even though this checkout has none: a git
+      // worktree, whose parent checkout's `graft/` git could not check out. Copy it
+      // in and carry on — the drift below is then exactly the diff between the two
+      // checkouts, and repairing it is what makes the copied graph honest here.
+      seededFrom = (await seedUnderLock(dir, outDir, opts.contextDir)).from;
+      // Still nothing (not a worktree, parent never built, or a concurrent seed we
+      // lost the race for and which we now re-check for): the caller's own "no graph
+      // — run graft build" message is the right answer. Auto-building a whole repo
+      // under a query is a surprise, and it's the one case where the user hasn't
+      // opted into graft at all yet.
+      if (!existsSync(wiringPath(outDir))) return CLEAN;
+    }
+    const seedNote = seededFrom ? `copied the graph from the main checkout (${seededFrom})` : undefined;
 
     // null = no fingerprint at all: a graph built before this mechanism existed,
     // or by a different extractor build. Rebuild once — that lays the fingerprint
     // down, so it costs exactly one build, not one per query.
     const drift = probeDrift(dir, outDir);
-    if (drift && isClean(drift)) return CLEAN;
+    if (drift && isClean(drift)) return seedNote ? { refreshed: false, note: seedNote } : CLEAN;
 
     // On the default layout this is `<root>/graft/.cache/.sync.lock`, the very file
     // the Claude Code hooks lock — so this refresh and the background sync can
     // never rebuild at the same time.
     const lockCache = join(outDir, CACHE_DIR);
     if (!(await waitForLock(lockCache))) {
+      const busy = "a graph rebuild is already in flight — answering from the current graph";
       return {
         refreshed: false,
         drift: drift ?? undefined,
-        note: "a graph rebuild is already in flight — answering from the current graph",
+        note: seedNote ? `${seedNote}; ${busy}` : busy,
       };
     }
     const unhook = releaseOnSignal(lockCache);
@@ -152,7 +190,7 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
       const now = drift ? probeDrift(dir, outDir) : null;
       if (now && isClean(now)) {
         invalidateGraphCaches(outDir);
-        return CLEAN;
+        return seedNote ? { refreshed: false, note: seedNote } : CLEAN;
       }
       // Tier-1 only: no summarizer, so no LLM call and no network, ever. And
       // `graphOnly`: write the graph, the ask sidecar and the fingerprint, nothing
@@ -161,7 +199,7 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
       // card's mtime, and skipping them is most of what keeps this cheap.
       await buildGraph(dir, { contextDir: opts.contextDir, graphOnly: true });
       invalidateGraphCaches(outDir);
-      return { refreshed: true, drift: drift ?? undefined };
+      return { refreshed: true, drift: drift ?? undefined, note: seedNote };
     } finally {
       unhook();
       releaseLockIn(lockCache);
@@ -209,8 +247,11 @@ export async function ensureFreshChildren(
 /** The one-line note a CLI/MCP surface prints when a refresh actually happened.
  * Null when there's nothing to say (the overwhelmingly common case). */
 export function refreshNote(r: RefreshResult): string | null {
-  if (r.note) return `[graft] ${r.note}`;
-  if (!r.refreshed) return null;
+  if (!r.refreshed) return r.note ? `[graft] ${r.note}` : null;
   const n = r.drift ? driftCount(r.drift) : 0;
-  return `[graft] refreshed the graph (${n || "?"} file${n === 1 ? "" : "s"} changed) before answering`;
+  const built = `refreshed the graph (${n || "?"} file${n === 1 ? "" : "s"} changed) before answering`;
+  // Both facts, when a worktree was seeded *and* the copy needed repairing: the
+  // count is the interesting half (it's the branch diff), the provenance explains
+  // where a graph came from in a directory the user knows they never built.
+  return r.note ? `[graft] ${built} — ${r.note}` : `[graft] ${built}`;
 }

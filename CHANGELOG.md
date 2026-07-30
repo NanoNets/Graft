@@ -49,6 +49,24 @@
 - **`GRAFT_REFRESH=hash`** — confirm every file by hashing its contents instead of trusting
   size and mtime, for tooling that rewrites files while preserving both.
 
+### Fixed
+
+- **A git worktree is no longer blind.** `graft/` is gitignored, so `git worktree add`
+  never checks it out — and the graph is the only thing the MCP tools read. Every tool in
+  a fresh worktree answered `no matching nodes` / `no graph found` for the whole session,
+  and `INDEX.md` and the cards were missing too, so `grep` and the repo map came up empty.
+
+  A query in a worktree now copies the parent checkout's `graft/` in and then treats the
+  difference between the two checkouts as ordinary drift. The worktree's `.git` is a file
+  naming its parent, so there is nothing to configure; the copy is $0 and offline, and the
+  Tier-2 meaning layer survives it (a cold rebuild would have thrown away every summary
+  you paid for and re-parsed the repo). `graft build` in a worktree starts from the same
+  copy, so it is incremental too.
+
+  Reads the parent, never writes to it. No-ops unless there is genuinely a built parent
+  checkout on disk — a fresh clone, CI, or a cloned (rather than worktree'd) cloud session
+  behaves exactly as before. `GRAFT_NO_SEED=1` turns it off.
+
 ## 0.8.0
 
 ### Changed

@@ -26,6 +26,7 @@ import {
   type ExtractEntry,
 } from "./extract-cache.js";
 import { writeFingerprint } from "./fingerprint.js";
+import { seedGraph, type SeedResult } from "./seed.js";
 import { listSourceStats } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
@@ -96,6 +97,9 @@ export interface GraphBuildResult {
   parsed: number;
   /** Files replayed from the extraction cache. */
   reused: number;
+  /** The parent checkout this build copied a starting graph from, when it was run in
+   * a git worktree that had none of its own. See `./seed.ts`. */
+  seededFrom?: string;
   nodes: number;
   edges: number;
   byKind: Record<Kind, number>;
@@ -139,6 +143,14 @@ export async function buildGraph(
   const sources = new Map<string, string>();
   const langs = new Set<Language>();
   const errors: string[] = [];
+
+  // In a git worktree there is nothing to reuse *yet* — `graft/` is gitignored, so
+  // git never checked it out — but the parent checkout's graph is one directory away.
+  // Copy it in before reading the priors below and this build is incremental and
+  // keeps its paid-for summaries, instead of being a cold parse of the whole repo.
+  // No-ops everywhere else, including on an explicit cold build (`reuse: false`).
+  const seed: SeedResult =
+    opts.reuse === false ? { seeded: false } : seedGraph(root, { contextDir: opts.contextDir });
 
   // Tier-1 memo: unchanged files replay their last parse. `entries` is rebuilt
   // from scratch each run and keyed only by files currently on disk, so deletions
@@ -308,6 +320,7 @@ export async function buildGraph(
     files: files.length,
     parsed,
     reused,
+    seededFrom: seed.from,
     nodes: nodes.length,
     edges: edges.length,
     byKind,
