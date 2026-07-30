@@ -70,6 +70,20 @@ function toChatTool(t: ToolSpec): OpenAI.Chat.Completions.ChatCompletionTool {
   return { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } };
 }
 
+/**
+ * Some OpenAI-compatible servers — LM Studio's local server, at least as of
+ * 2026 — reject the object form of `tool_choice` outright with a 400
+ * ("Invalid tool_choice type: 'object'. Supported string values: none, auto,
+ * required"), even though the upstream OpenAI spec allows it.
+ */
+function isRejectedObjectToolChoice(err: unknown): boolean {
+  return (
+    err instanceof OpenAI.APIError &&
+    err.status === 400 &&
+    /tool_choice/i.test(String((err as { message?: string }).message ?? ""))
+  );
+}
+
 export class OpenAIChatModel implements ChatModel {
   readonly label: string;
   private client: OpenAI;
@@ -110,8 +124,29 @@ export class OpenAIChatModel implements ChatModel {
       params.tools = tools;
     }
 
-    const resp = await this.client.chat.completions.create(params);
+    const resp = await this.createChatCompletion(params);
     return this.fromResponse(resp, fmt.kind);
+  }
+
+  /**
+   * Wraps `chat.completions.create` with a narrow, safe fallback: if the
+   * server rejects an object-form `tool_choice` and exactly one tool was
+   * offered, "required" is behaviorally identical (the model has nothing
+   * else to pick), so retry once with the string form instead of failing
+   * the whole build. Left alone when more than one tool is offered, since
+   * "required" would then let the model choose freely instead of the
+   * caller-specified tool — that ambiguity isn't safe to paper over
+   * automatically.
+   */
+  private async createChatCompletion(params: ChatParams): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+    try {
+      return await this.client.chat.completions.create(params);
+    } catch (err) {
+      if (isRejectedObjectToolChoice(err) && typeof params.tool_choice === "object" && params.tools?.length === 1) {
+        return this.client.chat.completions.create({ ...params, tool_choice: "required" });
+      }
+      throw err;
+    }
   }
 
   private fromResponse(
