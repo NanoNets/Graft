@@ -35,7 +35,9 @@ export class FileBindings {
 const FN_VALUE_TYPES = new Set(["arrow_function", "function", "function_expression", "generator_function"]);
 
 // Duplicated from extract.ts's own CS_METHOD_TYPES/CS_TYPE_KINDS (keys only) —
-// same no-value-import-of-extract rule as goReceiverTypeOf below.
+// same no-value-import-of-extract rule as goReceiverTypeOf below. `defName` also
+// handles `property_declaration`/`local_function_statement`, which extract.ts
+// recognizes individually rather than through either set.
 const CS_METHOD_TYPES = new Set(["method_declaration", "constructor_declaration", "destructor_declaration"]);
 const CS_TYPE_NODE_TYPES = new Set([
   "class_declaration",
@@ -102,13 +104,13 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
   if (lang === "r") return rDefName(node);
   if (lang === "swift") return swiftDefName(node);
   if (lang === "csharp") {
-    if (CS_METHOD_TYPES.has(node.type)) {
+    if (CS_METHOD_TYPES.has(node.type) || node.type === "property_declaration") {
       const name = node.childForFieldName("name")?.text;
       if (!name) return null;
       const iface = csExplicitInterfaceOf(node);
       return iface ? `${iface}.${name}` : name;
     }
-    if (CS_TYPE_NODE_TYPES.has(node.type)) {
+    if (CS_TYPE_NODE_TYPES.has(node.type) || node.type === "local_function_statement") {
       return node.childForFieldName("name")?.text ?? null;
     }
     return null;

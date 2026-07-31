@@ -1518,31 +1518,49 @@ const CS_TYPE_KINDS: Record<string, Kind> = {
   struct_declaration: "struct",
   interface_declaration: "interface",
   // tree-sitter-c-sharp emits the same node for `record`, `record class`, and
-  // `record struct` — the struct/class keyword isn't distinguishable in the
-  // tree without re-scanning raw tokens, so all three land on "class".
+  // `record struct`; the value here is the default for a bare `record`, and
+  // describeCSharp() narrows it per-declaration via csRecordKind().
   record_declaration: "class",
   enum_declaration: "enum",
   delegate_declaration: "type",
 };
 
-// Method-shaped members. Operator/conversion-operator declarations are
-// intentionally excluded: neither carries a `name` field in this grammar (the
-// operator symbol/target type isn't a nameable identifier), so describeCSharp
-// would just return null for them anyway — this documents that as deliberate.
+// Method-shaped members. Operator/conversion-operator and indexer declarations
+// are intentionally excluded: none carries a `name` field in this grammar (the
+// operator symbol / indexer `this[…]` isn't a nameable identifier), so
+// describeCSharp would just return null for them anyway — this documents that as
+// deliberate. Naming them would mean synthesizing one from positional children.
 const CS_METHOD_TYPES = new Set(["method_declaration", "constructor_declaration", "destructor_declaration"]);
 
+/** `record`, `record class`, and `record struct` all parse as `record_declaration`;
+ * the distinguishing keyword rides along as an *anonymous* child token, which the
+ * named-child/field reads elsewhere in this file never see. Only `record struct`
+ * is a value type — bare `record` and `record class` are both classes. */
+function csRecordKind(node: Parser.SyntaxNode): Kind {
+  return node.children.some((c) => !c.isNamed && c.type === "struct") ? "struct" : "class";
+}
+
+/** A property's body opener: the accessor block (`{ get; set; }`) or the
+ * expression-bodied arrow (`=> expr`). Neither is exposed as a `body` field, so
+ * the header span has to find it among the named children. */
+function csPropertyBody(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+  return node.namedChildren.find((c) => c.type === "accessor_list" || c.type === "arrow_expression_clause") ?? null;
+}
+
 /** C# definition shapes: type declarations (class/struct/interface/record/enum/
- * delegate) and method-shaped members. Methods get an explicit-interface-qualified
- * `idName` when present (`void IFoo.Bar() {}`) because the bare name can legally
- * collide with a public member of the same name in the same class — mirrors how
- * Go's `idName` disambiguates receiver-qualified methods. */
+ * delegate), method-shaped members, properties, and local functions. Methods and
+ * properties get an explicit-interface-qualified `idName` when present
+ * (`void IFoo.Bar() {}`) because the bare name can legally collide with a public
+ * member of the same name in the same class — mirrors how Go's `idName`
+ * disambiguates receiver-qualified methods. */
 function describeCSharp(node: Parser.SyntaxNode): DefDescriptor | null {
   const typeKind = CS_TYPE_KINDS[node.type];
   if (typeKind) {
     const name = node.childForFieldName("name")?.text;
     if (!name) return null;
+    const kind = node.type === "record_declaration" ? csRecordKind(node) : typeKind;
     const body = node.childForFieldName("body");
-    return { name, kind: typeKind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+    return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
   }
   if (CS_METHOD_TYPES.has(node.type)) {
     const name = node.childForFieldName("name")?.text;
@@ -1556,6 +1574,28 @@ function describeCSharp(node: Parser.SyntaxNode): DefDescriptor | null {
       headerEnd: body ? body.startIndex : node.endIndex,
       hashNode: node,
     };
+  }
+  if (node.type === "property_declaration") {
+    const name = node.childForFieldName("name")?.text;
+    if (!name) return null;
+    const body = csPropertyBody(node);
+    const iface = csExplicitInterface(node);
+    return {
+      name,
+      idName: iface ? `${iface}.${name}` : undefined,
+      kind: "property",
+      headerEnd: body ? body.startIndex : node.endIndex,
+      hashNode: node,
+    };
+  }
+  // A local function is a method-body statement, not a class member — the walk
+  // reaches it by descending through the enclosing method's `block`, so its id
+  // nests under that method (`File.cs#Class.Method.Local`).
+  if (node.type === "local_function_statement") {
+    const name = node.childForFieldName("name")?.text;
+    if (!name) return null;
+    const body = node.childForFieldName("body");
+    return { name, kind: "function", headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
   }
   return null;
 }
@@ -2239,9 +2279,9 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
   }
   if (ctx.lang === "csharp") {
     // `class Foo : Base, IBar` — base_list doesn't syntactically distinguish a base
-    // class from an interface, so every entry is emitted as "extends"; resolve.ts's
-    // "extends" already matches class-or-interface targets, so an interface base
-    // still resolves — it just isn't labeled "implements".
+    // class from an interface, so every entry is emitted as "extends"; resolve.ts
+    // relabels the ones whose target resolves to an interface as "implements", and
+    // leaves an unresolved (external) base as "extends".
     const baseList = node.namedChildren.find((c) => c.type === "base_list");
     for (const t of baseList?.namedChildren ?? []) {
       const name = csTypeName(t);
@@ -2413,7 +2453,10 @@ if (lang === "kotlin") {
     // bare `Foo()` inside a method is an implicit-`this` member call (unlike
     // TS/Python/Go, where a bare call is always a real free function). Route it
     // through the member-call path so it resolves against the enclosing type's
-    // methods instead of the (always-empty, for C#) "function" kind.
+    // methods. The one C# shape this can't reach is a call to a local function
+    // (kind "function", nested under its declaring method): resolving those needs
+    // block-scoped lookup, since a bare name is scope-blind here and would happily
+    // wire a call to a same-named local function in a sibling method.
     if (lang === "csharp") return { name: fn.text, viaMember: true, receiver: "this" };
     return { name: fn.text, viaMember: false };
   }
