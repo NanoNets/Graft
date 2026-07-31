@@ -96,6 +96,14 @@
   matches. Pass a real prefix (`--in server/src/gpu`), a full file path
   (`--in src/a.ts`), or use `grep`'s pattern to match on content.
 
+- **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
+  Groundwork for adding new language grammars that require the 0.25 runtime.
+  `tree-sitter-typescript@0.23.2` is still the latest release and declares a
+  `peerOptional tree-sitter@^0.21.0`, so an npm `overrides` entry pins its
+  nested `tree-sitter` dependency to the root one and lets the install resolve
+  cleanly. No behavior change; the grammar's native binding loads and parses
+  correctly under tree-sitter 0.25.1, and the full suite is green.
+
 [#33]: https://github.com/NanoNets/Graft/issues/33
 [#35]: https://github.com/NanoNets/Graft/issues/35
 [#36]: https://github.com/NanoNets/Graft/issues/36

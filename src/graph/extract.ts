@@ -194,11 +194,12 @@ interface DefDescriptor {
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
 }
 
-/** tree-sitter's string `parse()` fails with "Invalid argument" on any input
- * ≥ 32 KB, which silently drops large files — often the most important ones (a
- * 2000-line command module, a core tab implementation). The callback form has
- * no such limit as long as each returned chunk is under 32 KB, so we always feed
- * the source in <32 KB slices. Code-unit indexing matches `String.slice`. */
+/** The chunked-callback parse predates tree-sitter 0.25, which lifted the
+ * string `parse()` size limit that used to fail with "Invalid argument" on
+ * any input ≥ 32 KB and silently drop large files — often the most important
+ * ones (a 2000-line command module, a core tab implementation). Kept because
+ * it is behavior-identical and exercised by existing tests. Code-unit
+ * indexing matches `String.slice`. */
 const PARSE_CHUNK = 16384;
 function parseSource(source: string): Parser.SyntaxNode {
   return parser.parse((index: number) => source.slice(index, index + PARSE_CHUNK)).rootNode;
