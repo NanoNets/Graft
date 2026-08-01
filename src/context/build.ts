@@ -17,6 +17,7 @@ import { walkDir } from "../ingest/fs.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
 import { readSourceFile } from "../util/source.js";
+import { readIncludeDirs } from "../util/state.js";
 import type { Summarizer } from "../ai/summarize.js";
 import type { FileSummary, SynthNode, Synthesizer } from "../ai/synthesize.js";
 import {
@@ -102,7 +103,10 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
   const exts = opts.extensions ?? CODE_EXTENSIONS;
-  const files = walkDir(root)
+  // Read root's persisted `--include-dir` override (same lookup source-files.ts
+  // does for the Tier-1 wiring graph) so an included dir like `build/` isn't
+  // invisible to the Tier-2 concept pipeline while the wiring graph sees it.
+  const files = walkDir(root, readIncludeDirs(root))
     .filter((f) => exts.some((e) => f.toLowerCase().endsWith(e)))
     .filter((f) => !f.startsWith(outDir));
 
