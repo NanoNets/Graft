@@ -4,13 +4,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { buildContext } from "../src/context/build.js";
 import { checkContext, indexFreshness, staleBanner } from "../src/context/check.js";
 import { contextDirFor, ensureGitignored, ensureSearchable } from "../src/context/node-file.js";
+import { writeBuildConfig } from "../src/util/state.js";
 import { fakeProviders } from "./helpers.js";
 
 // CLI-spawn helper (same pattern as test/graph-traverse-cli.test.ts) — these tests
@@ -156,6 +157,47 @@ test("check detects a new file not yet in the graph (coverage drift)", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A5 — a persisted `--include-dir` override must reach the Tier-2 markdown
+// pipeline (context/build.ts) and its freshness check (context/check.ts), not
+// just the Tier-1 wiring graph (graph/build.ts, via source-files.ts). Both
+// sides must agree, in both directions: build/ shows up in buildContext's
+// file listing, and checkContext neither reports it removed (disagreeing
+// about what "current" means) nor as new coverage.
+test("A5: a persisted --include-dir override reaches context/build.ts's file listing and context/check.ts's freshness check", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ctxgraph-include-dir-"));
+  try {
+    writeFileSync(
+      join(dir, "auth.ts"),
+      `// [[Auth Service]]\nexport const auth = 1;\n`,
+    );
+    mkdirSync(join(dir, "build"), { recursive: true });
+    writeFileSync(
+      join(dir, "build", "gen.ts"),
+      `// [[Generated Widget]]\nexport const genWidget = 1;\n`,
+    );
+    writeBuildConfig(dir, { includeDirs: ["build"] });
+
+    const r = await buildContext(dir, buildOpts());
+    assert.deepEqual(r.errors, [], "build should not error");
+    assert.ok(
+      manifestFiles(dir).includes("build/gen.ts"),
+      "build/gen.ts must be walked and recorded once --include-dir is persisted",
+    );
+
+    const check = checkContext(dir);
+    assert.equal(check.ok, true, `expected no drift, got ${JSON.stringify(check)}`);
+    assert.deepEqual(check.removed, [], "build/ must not be reported removed — check.ts must see it too");
+    assert.deepEqual(check.coverage, [], "build/ must not be reported as new/uncovered — it's already in the manifest");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function manifestFiles(dir: string): string[] {
+  const manifest = JSON.parse(readFileSync(join(dir, "graft", "manifest.json"), "utf8"));
+  return manifest.files.map((f: { path: string }) => f.path);
+}
 
 test("re-running init clears drift", async () => {
   const dir = makeFixture();
