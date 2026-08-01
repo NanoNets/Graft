@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **PowerShell code graphs.** `.ps1` and `.psm1` files now contribute functions,
+  classes, methods, enums, calls, imports, and case-insensitive receiver bindings.
+  Dot-sourcing, `Import-Module`, and `using module` resolve local modules, while
+  UTF-16LE source from Windows PowerShell is decoded during graph ingestion.
+
 ### Changed
 
 - **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
