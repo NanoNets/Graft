@@ -21,6 +21,7 @@ import { extractFile, languageLabelOf, languageOf, type RawEdge } from "./extrac
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
 import { readSourceFile } from "../util/source.js";
+import { readIncludeDirs } from "../util/state.js";
 import {
   emptyExtractCache,
   readExtractCache,
@@ -138,8 +139,9 @@ export async function buildGraph(
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
   // Enumerate once: source extraction, scope discovery, and Go module
-  // resolution must agree on the same Git-ignore-aware working-tree view.
-  const repoFiles = walkDir(root);
+  // resolution must agree on the same Git-ignore-aware working-tree view —
+  // including the repo's persisted `--include-dir` override.
+  const repoFiles = walkDir(root, readIncludeDirs(root));
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
