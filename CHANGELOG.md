@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- **`graft build --include-dir <name>`** — an explicit, persisted override for
+  `SKIP_DIRS` (repeatable: `--include-dir build --include-dir tools`). Some
+  ecosystems keep genuine hand-written source under a directory name graft
+  otherwise treats as build output (e.g. a `build/` that isn't generated).
+  The override is persisted per repo: set it once and every later no-flag
+  `graft build`, plus the hooks/refresh path (which never sees CLI flags at
+  all), include it identically. It lifts only graft's own skip list — in a
+  Git repository, Git's ignore rules stay authoritative, so a directory that
+  is both skip-listed and gitignored needs un-ignoring (or `git add -f`) too,
+  the same contract indexing already applies to tracked-but-ignored files.
+  Dot-directories are never overridable. Reaches the wiring graph, the Tier-2
+  markdown/concept pipeline, Go module discovery, and workspace child builds
+  alike, and is validated up front (a bare directory name only — no paths, no
+  dot-prefixes).
+
 ### Fixed
 
 - **`graft map` no longer promotes unrelated methods into hubs and hotspots.**
