@@ -161,7 +161,7 @@ test('grepGraph: a hit outside every symbol span groups as file-level (symbol: n
   assert.match(moduleLevel!.hits[0].text, /NEEDLE at module level/);
 });
 
-test('A3: a duplicate-named definition displays its minted ordinal in the grouped symbol name', () => {
+test('W2: a duplicate-named definition displays its minted ordinal in the grouped symbol name', () => {
   const d = mkdtempSync(join(tmpdir(), 'graft-grep-dup-'));
   mkdirSync(join(d, 'src'), { recursive: true });
   writeFileSync(

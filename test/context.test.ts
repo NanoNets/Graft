@@ -158,13 +158,16 @@ test("check detects a new file not yet in the graph (coverage drift)", async () 
   }
 });
 
-// A5 — a persisted `--include-dir` override must reach the Tier-2 markdown
+// V2 — a persisted `--include-dir` override must reach the Tier-2 markdown
 // pipeline (context/build.ts) and its freshness check (context/check.ts), not
-// just the Tier-1 wiring graph (graph/build.ts, via source-files.ts). Both
-// sides must agree, in both directions: build/ shows up in buildContext's
-// file listing, and checkContext neither reports it removed (disagreeing
-// about what "current" means) nor as new coverage.
-test("A5: a persisted --include-dir override reaches context/build.ts's file listing and context/check.ts's freshness check", async () => {
+// just the Tier-1 wiring graph (graph/build.ts, via source-files.ts). Before
+// this fix, both modules' own `walkDir(root)` call never saw the persisted
+// include list, so an included `build/` stayed invisible to buildContext AND
+// checkContext alike — inconsistently with the wiring graph, which already
+// read it. Both sides must agree, in both directions: build/ shows up in
+// buildContext's file listing, and checkContext neither reports it removed
+// (it disagreeing about what "current" means) nor as new coverage.
+test("V2: a persisted --include-dir override reaches context/build.ts's file listing and context/check.ts's freshness check", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ctxgraph-include-dir-"));
   try {
     writeFileSync(

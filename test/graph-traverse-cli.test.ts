@@ -121,7 +121,7 @@ function ambiguousRepo(): string {
   return d;
 }
 
-test('A6: an ambiguous name (2 definitions) states the candidate count in the zero-hit note', () => {
+test('W6: an ambiguous name (2 definitions) states the candidate count in the zero-hit note', () => {
   const d = ambiguousRepo();
   const r = runCli(['callers', 'shared', d]);
   assert.equal(r.status, 0);
@@ -132,7 +132,7 @@ test('A6: an ambiguous name (2 definitions) states the candidate count in the ze
   assert.match(r.stdout, /dropped rather than guessed/);
 });
 
-test('A6 --json: the ambiguous-name note includes the candidate count', () => {
+test('W6 --json: the ambiguous-name note includes the candidate count', () => {
   const d = ambiguousRepo();
   const r = runCli(['callers', 'shared', d, '--json']);
   assert.equal(r.status, 0);

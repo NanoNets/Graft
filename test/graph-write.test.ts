@@ -143,7 +143,7 @@ test("buildGraph: the serialized wiring.json has no body_text key on ANY node", 
   }
 });
 
-test("A3 PERMANENT gate: duplicate-named definitions still produce unique node ids in the written wiring.json", async () => {
+test("W2 PERMANENT gate: duplicate-named definitions still produce unique node ids in the written wiring.json", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-write-dup-"));
   try {
     writeFileSync(

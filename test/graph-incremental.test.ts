@@ -49,7 +49,7 @@ test("an incremental rebuild writes byte-identical wiring.json to a cold one", a
   assert.equal(wiringOf(d), cold, "replaying cached parses must not change a single byte of the graph");
 });
 
-test("A3: an incremental rebuild is still byte-identical to a cold one on a duplicate-name-bearing fixture", async () => {
+test("W2: an incremental rebuild is still byte-identical to a cold one on a duplicate-name-bearing fixture", async () => {
   const d = mkdtempSync(join(tmpdir(), "graft-incr-dup-"));
   mkdirSync(join(d, "src"), { recursive: true });
   writeFileSync(join(d, "src", "dup.ts"), "export function helper(): void {}\nexport function helper(): void {}\n");

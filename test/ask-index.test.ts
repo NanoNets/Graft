@@ -221,7 +221,7 @@ test("an unparseable sidecar file falls back to live tokenization", async () => 
   }
 });
 
-test("A3: a duplicate-named definition still gets its own ask-index doc (unique ids -> docs.length === nodes.length)", async () => {
+test("W2: a duplicate-named definition still gets its own ask-index doc (unique ids -> docs.length === nodes.length)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-ask-index-dup-"));
   try {
     writeFileSync(

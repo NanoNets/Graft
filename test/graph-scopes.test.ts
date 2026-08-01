@@ -171,7 +171,7 @@ test("discoverWorkspaceChildren finds immediate git children only", () => {
   rmSync(d, { recursive: true, force: true });
 });
 
-test("A5: discoverScopes finds a marker under a SKIP_DIRS name once persisted via --include-dir state, absent otherwise", () => {
+test("W4: discoverScopes finds a marker under a SKIP_DIRS name once persisted via --include-dir state, absent otherwise", () => {
   const d = fx({ "build/package.json": "{}" });
   assert.deepEqual(discoverScopes(d), [{ prefix: "", label: "", markers: [] }], "build/ is skipped by default — no scope found");
 
