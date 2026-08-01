@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PKG_NAME = "@nanonets/graft";
@@ -33,7 +33,7 @@ export function readCurrentVersion(moduleUrl: string): string {
 /** True when the running module lives under an npx cache dir (e.g.
  * `~/.npm/_npx/<hash>/node_modules/...`) rather than a regular global install. */
 export function isRunningViaNpx(moduleUrl: string): boolean {
-  return fileURLToPath(moduleUrl).includes("/_npx/");
+  return fileURLToPath(moduleUrl).split(sep).join("/").includes("/_npx/");
 }
 
 export interface NpmViewResult {

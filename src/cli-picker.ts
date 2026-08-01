@@ -13,7 +13,9 @@ const amber = (s: string) => `\x1b[38;5;179m${s}\x1b[0m`;
 
 /** `/Users/me/.codex/x` → `~/.codex/x`, for display only. */
 export function tilde(path: string, home: string): string {
-  return path === home || path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path;
+  const p = path.split(sep).join("/");
+  const h = home.split(sep).join("/");
+  return p === h || p.startsWith(h + "/") ? `~${p.slice(h.length)}` : path;
 }
 
 /** Deepest directory containing every given path. */

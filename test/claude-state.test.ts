@@ -50,7 +50,7 @@ test('acquireLock reclaims a stale lock', () => {
 });
 
 test('writeJsonAtomic leaves no scratch file behind when the write fails', (t) => {
-  if (process.getuid?.() === 0) return t.skip('root writes anywhere, so a read-only dir proves nothing');
+  if (process.platform === 'win32' || process.getuid?.() === 0) return t.skip('Windows NTFS / root does not prevent file creation on chmod 500');
   const d = fresh();
   const dir = join(d, 'locked');
   mkdirSync(dir, { recursive: true });

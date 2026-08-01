@@ -18,7 +18,7 @@ test('writes shim + hooks.json entry, idempotent on re-run', () => {
   assert.equal(w.length, 2);
   const shim = join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs');
   assert.ok(existsSync(shim));
-  assert.ok(statSync(shim).mode & 0o111, 'shim is executable');
+  if (process.platform !== 'win32') assert.ok(statSync(shim).mode & 0o111, 'shim is executable');
   const cfg = JSON.parse(readFileSync(join(home, '.codex', 'hooks.json'), 'utf8'));
   const entries = cfg.hooks.PostToolUse;
   assert.equal(entries.length, 1);
@@ -67,7 +67,8 @@ test('non-array PostToolUse (foreign single object) is never rewritten', () => {
   assert.equal(readFileSync(join(home, '.codex', 'hooks.json'), 'utf8'), original);
 });
 
-test('re-heals shim exec bit when a prior install had its mode stripped', () => {
+test('re-heals shim exec bit when a prior install had its mode stripped', (t) => {
+  if (process.platform === 'win32') return t.skip('Windows does not support file executable mode bits');
   const home = fresh();
   mkdirSync(join(home, '.codex'), { recursive: true });
   installCodexHooks(home);

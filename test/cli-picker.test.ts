@@ -140,7 +140,7 @@ test('describeWrites names out-of-repo writes as machine-wide', () => {
   const agents = planInit(repo, { home, ids: ['agents'] })[0];
   const summary = describeWrites(agents.writes, repo, home);
   assert.match(summary, /AGENTS\.md/);
-  assert.match(summary, /\+ 3 in ~\/\.codex\/ \(machine-wide\)/);
+  assert.match(summary.replace(/\\/g, "/"), /\+ 3 in ~\/\.codex\/ \(machine-wide\)/);
 });
 
 test('describeWrites flags hosts with no MCP target', () => {
@@ -175,7 +175,7 @@ test('formatPlan separates repo writes from machine-wide ones', () => {
   const repoAt = text.indexOf('would write — this repo:');
   const globalAt = text.indexOf('affects ALL repos:');
   assert.ok(repoAt >= 0 && globalAt > repoAt, 'repo section comes first');
-  assert.match(text, /~\/\.codex\/hooks\.json/);
+  assert.match(text.replace(/\\/g, "/"), /~\/\.codex\/hooks\.json/);
   assert.match(text, /PostToolUse: Write\|Edit\|MultiEdit/);
   assert.match(text, /nothing was written \(--dry-run\)/);
   assert.match(text, /--no-global/);

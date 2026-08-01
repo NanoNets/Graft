@@ -106,7 +106,7 @@ test('runHostsInit registers MCP configs for selected hosts', () => {
   const home = fresh(); const repo = fresh();
   const r = runHostsInit(repo, { home, agents: ['cursor'] });
   assert.equal(r.mcp.length, 1);
-  assert.match(r.mcp[0].path, /\.cursor\/mcp\.json$/);
+  assert.match(r.mcp[0].path.replace(/\\/g, "/"), /\.cursor\/mcp\.json$/);
   const cfg = JSON.parse(readFileSync(join(repo, '.cursor', 'mcp.json'), 'utf8'));
   assert.equal(cfg.mcpServers.graft.command, 'npx');
 });
@@ -168,7 +168,7 @@ function cliStderr(repo: string, home: string, extra: string[] = []): string {
   const res = spawnSync(
     process.execPath,
     ['--import', 'tsx', 'src/cli.ts', 'init', repo, '--no-build', ...extra],
-    { encoding: 'utf8', env: { ...process.env, HOME: home } },
+    { encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home } },
   );
   assert.equal(res.status, 0, `exited ${res.status}: ${res.stderr}`);
   return res.stderr ?? '';
@@ -190,10 +190,10 @@ test('CLI: --dry-run prints the plan, both sections, and writes nothing', () => 
   const out = cliStderr(repo, home, ['--dry-run']);
 
   assert.match(out, /would write — this repo:/);
-  assert.match(out, /\.claude\/settings\.json/);
+  assert.match(out.replace(/\\/g, "/"), /\.claude\/settings\.json/);
   assert.match(out, /AGENTS\.md/);
   assert.match(out, /affects ALL repos:/);
-  assert.match(out, /~\/\.codex\/hooks\.json/);
+  assert.match(out.replace(/\\/g, "/"), /~\/\.codex\/hooks\.json/);
   assert.match(out, /nothing was written/);
 
   assert.deepEqual(readdirSync(repo), []);
@@ -241,7 +241,7 @@ test('CLI: --dry-run respects an explicit --agents list', () => {
   const home = fresh(); const repo = fresh();
   mkdirSync(join(home, '.codex'), { recursive: true });
   const out = cliStderr(repo, home, ['--agents', 'adal', '--dry-run']);
-  assert.match(out, /\.adal\/skills\/graft\/SKILL\.md/);
+  assert.match(out.replace(/\\/g, "/"), /\.adal\/skills\/graft\/SKILL\.md/);
   assert.doesNotMatch(out, /AGENTS\.md/);
   assert.doesNotMatch(out, /affects ALL repos/);
 });

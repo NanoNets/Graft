@@ -159,7 +159,7 @@ test("every file on disk lands in the fingerprint", async () => {
 });
 
 test("an unreadable file is still recorded, so it can't look new on every probe", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root reads anything, so chmod 000 proves nothing");
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("Windows NTFS / root does not revoke read access on chmod 000");
   const d = repo();
   const secret = join(d, "src", "secret.ts");
   writeFileSync(secret, "export function secretFn(): number {\n  return 1;\n}\n");
