@@ -148,7 +148,7 @@ test("A5: --include-dir does not override gitignore — an ignored directory sta
     write(dir, "src/app.ts");
     write(dir, "build/gen.ts");
 
-    assert.deepEqual(walked(dir, new Set(["build"])), [".gitignore", "src/app.ts"]);
+    assert.deepEqual(walked(dir, new Set(["build"])), ["src/app.ts"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
