@@ -7,7 +7,7 @@
  * {@link listSourceFiles} so its existing importers are unaffected.
  */
 import { statSync } from "node:fs";
-import { relative } from "node:path";
+import { relative, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { languageOf } from "./extract.js";
 
@@ -40,7 +40,7 @@ export function listSourceStats(root: string, outDir: string): SourceStat[] {
     } catch {
       continue;
     }
-    out.push({ abs, rel: relative(root, abs), size: s.size, mtimeMs: s.mtimeMs });
+    out.push({ abs, rel: relative(root, abs).split(sep).join("/"), size: s.size, mtimeMs: s.mtimeMs });
   }
   return out;
 }

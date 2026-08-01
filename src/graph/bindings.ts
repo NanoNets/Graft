@@ -55,6 +55,14 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     }
     return null;
   }
+  if (lang === "dart") {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "identifier" || c.type === "type_identifier");
+    return nameNode?.text ?? null;
+  }
+  if (lang === "kotlin") {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "type_identifier" || c.type === "simple_identifier" || c.type === "identifier");
+    return nameNode ? nameNode.text : (node.type === "companion_object" ? "Companion" : null);
+  }
   const defTypes =
     lang === "python"
       ? new Set(["class_definition", "function_definition"])
@@ -122,6 +130,8 @@ export function resolveRecvType(
 
 function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean {
   if (lang === "python") return node.type === "class_definition";
+  if (lang === "dart") return node.type === "class_definition" || node.type === "mixin_declaration" || node.type === "extension_declaration";
+  if (lang === "kotlin") return node.type === "class_declaration" || node.type === "object_declaration" || node.type === "companion_object";
   if (lang === "typescript" || lang === "tsx") {
     return node.type === "class_declaration" || node.type === "abstract_class_declaration";
   }
@@ -169,6 +179,8 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  else if (lang === "dart") handleDart(node, scope, bindings);
+  else if (lang === "kotlin") handleKotlin(node, scope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -318,5 +330,23 @@ function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindin
       if (fn?.type === "identifier" && /^New[A-Z]/.test(fn.text)) typeName = fn.text.slice(3);
     }
     if (typeName) bindings.set(scopePath, nameNode.text, typeName);
+  }
+}
+
+function handleDart(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {
+  const scopePath = scope.join(".");
+  if (node.type === "declaration" || node.type === "initialized_variable_definition") {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "identifier");
+    const typeNode = node.childForFieldName("type") ?? node.namedChildren.find((c) => c.type === "type_identifier");
+    if (nameNode && typeNode) bindings.set(scopePath, nameNode.text, typeNode.text);
+  }
+}
+
+function handleKotlin(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {
+  const scopePath = scope.join(".");
+  if (node.type === "property_declaration" || node.type === "parameter" || node.type === "variable_declaration") {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "simple_identifier" || c.type === "identifier");
+    const typeNode = node.childForFieldName("type") ?? node.namedChildren.find((c) => c.type === "user_type" || c.type === "type_identifier");
+    if (nameNode && typeNode) bindings.set(scopePath, nameNode.text, typeNode.text);
   }
 }

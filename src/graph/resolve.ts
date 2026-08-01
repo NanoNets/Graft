@@ -15,7 +15,7 @@ import { sep } from "node:path";
 import type { EdgeV1, Kind, NodeV1, Relation } from "./types.js";
 import type { RawEdge } from "./extract.js";
 
-const IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"];
+const IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".dart", ".kt", ".kts"];
 
 // Builtin container/value types whose methods are never user-defined symbols in the
 // repo. A typed member call on one of these receivers (`deg.set(...)` where
@@ -31,6 +31,8 @@ const BUILTIN_CONTAINER_TYPES = new Set([
   "Map", "Set", "WeakMap", "WeakSet", "Array", "Promise", "Object", "Date", "RegExp", "Error",
   // Python
   "dict", "list", "set", "tuple", "str", "frozenset", "bytes",
+  // Dart & Kotlin
+  "List", "Map", "Set", "String", "int", "double", "num", "bool", "Future", "Stream", "ArrayList", "HashMap", "HashSet",
 ]);
 
 /** A Go module discovered in the repo: its `module` path from `go.mod` and the repo
@@ -217,10 +219,20 @@ function resolveTypedMember(
  * otherwise return the raw specifier (external package or unresolved path).
  */
 function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): string {
+  if (spec.startsWith("package:")) {
+    const parts = spec.slice(8).split("/");
+    if (parts.length > 1) {
+      const relPath = posix.join("lib", ...parts.slice(1));
+      for (const id of byId.keys()) {
+        if (id.endsWith(relPath) || id === relPath) return id;
+      }
+    }
+    return spec;
+  }
   if (!spec.startsWith(".")) return spec;
   const dir = posix.dirname(file.split(sep).join("/"));
   const base = posix.normalize(posix.join(dir, spec));
-  const noExt = base.replace(/\.(js|jsx|mjs|cjs|ts|tsx|py)$/, "");
+  const noExt = base.replace(/\.(js|jsx|mjs|cjs|ts|tsx|py|dart|kt|kts)$/, "");
   const candidates = [
     base,
     ...IMPORT_EXTS.map((e) => noExt + e),

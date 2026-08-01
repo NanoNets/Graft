@@ -48,7 +48,7 @@ test('the three ~/.codex writes are scoped global', () => {
   const globals = agents.writes.filter((w) => w.scope === 'global');
   assert.equal(globals.length, 3);
   assert.deepEqual(
-    globals.map((w) => w.path.slice(home.length)).sort(),
+    globals.map((w) => w.path.slice(home.length).replace(/\\/g, "/")).sort(),
     ['/.codex/config.toml', '/.codex/hooks.json', '/.codex/hooks/graft/graft-hooks.cjs'],
   );
 });
@@ -72,7 +72,7 @@ test('adal is an instruction-only host — no MCP target', () => {
   const adal = planInit(fresh(), { home: fullHome(), ids: ['adal'] })[0];
   assert.equal(adal.writes.length, 1);
   assert.equal(adal.writes[0].kind, 'instruction');
-  assert.match(adal.writes[0].path, /\.adal\/skills\/graft\/SKILL\.md$/);
+  assert.match(adal.writes[0].path.replace(/\\/g, "/"), /\.adal\/skills\/graft\/SKILL\.md$/);
 });
 
 // The assertion that keeps the plan honest: whatever a real run writes must be

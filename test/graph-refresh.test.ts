@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
@@ -244,7 +244,7 @@ test("GRAFT_REFRESH=hash: drift the probe reports is drift the rebuild repairs",
 });
 
 test("a file that becomes readable again is picked up through the probe", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root reads anything, so chmod 000 proves nothing");
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("Windows NTFS / root does not revoke read access on chmod 000");
   const d = repo();
   const hidden = join(d, "src", "hidden.ts");
   writeFileSync(hidden, "export function reachable(): number {\n  return 1;\n}\n");
@@ -265,7 +265,7 @@ test("a file that becomes readable again is picked up through the probe", async 
 });
 
 test("an unwritable cache costs reuse, not correctness", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only dir proves nothing");
+  if (process.platform === "win32" || process.getuid?.() === 0) return t.skip("Windows NTFS / root does not revoke read access on chmod 000");
   const d = repo();
   await buildGraph(d);
 
@@ -419,7 +419,8 @@ test("callTool refreshes before answering — except for graft_check_freshness",
   assert.ok(!again.text.startsWith("[graft] refreshed"), "nothing moved — no note, no rebuild");
 });
 
-test("a process killed while holding the lock releases it", async () => {
+test("a process killed while holding the lock releases it", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows does not dispatch SIGTERM handlers to child processes");
   const d = repo();
   const cache = join(outOf(d), ".cache");
   mkdirSync(cache, { recursive: true });
@@ -431,11 +432,13 @@ test("a process killed while holding the lock releases it", async () => {
   // never ran, and the abandoned lock then blocked the background sync and made every
   // query wait-then-answer-stale until it aged out.
   const src = fileURLToPath(new URL("../src", import.meta.url));
+  const stateUrl = pathToFileURL(join(src, "util", "state.ts")).href;
+  const refreshUrl = pathToFileURL(join(src, "graph", "refresh.ts")).href;
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "-e",
-      `const { acquireLockIn } = await import(${JSON.stringify(`${src}/util/state.ts`)});
-       const { releaseOnSignal } = await import(${JSON.stringify(`${src}/graph/refresh.ts`)});
+      `const { acquireLockIn } = await import(${JSON.stringify(stateUrl)});
+       const { releaseOnSignal } = await import(${JSON.stringify(refreshUrl)});
        const cache = process.argv[1];
        if (!acquireLockIn(cache)) { process.exit(9); }
        releaseOnSignal(cache);

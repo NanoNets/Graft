@@ -13,7 +13,7 @@
  *   index       a node's frontmatter disagrees with the manifest (hand-edited)
  */
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contentHash } from "../util/id.js";
 import { CODE_EXTENSIONS } from "./build.js";
@@ -60,7 +60,7 @@ export function checkContext(dir: string, opts: CheckOptions = {}): CheckResult 
     if (file.startsWith(outDir)) continue;
     if (!exts.some((e) => file.toLowerCase().endsWith(e))) continue;
     try {
-      current.set(relative(root, file), contentHash(readFileSync(file, "utf8")));
+      current.set(relative(root, file).split(sep).join("/"), contentHash(readFileSync(file, "utf8")));
     } catch {
       // Unreadable now → treat as removed below (it won't be in `current`).
     }

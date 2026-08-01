@@ -10,12 +10,14 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import Dart from "@driftlog/tree-sitter-dart";
+import Kotlin from "tree-sitter-kotlin";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "dart" | "kotlin";
 
 /** Map a file path to a supported language, or null if unsupported. */
 export function languageOf(path: string): Language | null {
@@ -24,6 +26,8 @@ export function languageOf(path: string): Language | null {
   if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return "typescript";
   if (p.endsWith(".py") || p.endsWith(".pyi")) return "python";
   if (p.endsWith(".go")) return "go";
+  if (p.endsWith(".dart")) return "dart";
+  if (p.endsWith(".kt") || p.endsWith(".kts")) return "kotlin";
   return null;
 }
 
@@ -111,11 +115,33 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+const DART_KINDS: Record<string, Kind> = {
+  class_definition: "class",
+  mixin_declaration: "class",
+  extension_declaration: "class",
+  enum_declaration: "enum",
+  function_signature: "function",
+  method_signature: "method",
+  type_alias: "type",
+};
+
+const KOTLIN_KINDS: Record<string, Kind> = {
+  class_declaration: "class",
+  object_declaration: "class",
+  companion_object: "class",
+  interface_declaration: "interface",
+  enum_entry: "enum",
+  function_declaration: "function",
+  property_declaration: "type",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  dart: DART_KINDS,
+  kotlin: KOTLIN_KINDS,
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -131,6 +157,8 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  dart: Dart,
+  kotlin: Kotlin,
 };
 
 export interface WalkCtx {
@@ -281,6 +309,8 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "dart") return describeDart(node, ctx);
+  if (ctx.lang === "kotlin") return describeKotlin(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -355,6 +385,38 @@ function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | nul
   return null;
 }
 
+function describeDart(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = ctx.kinds[node.type];
+  if (mapped) {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "identifier" || c.type === "type_identifier");
+    if (!nameNode) return null;
+    const name = nameNode.text;
+    let kind = mapped;
+    if (mapped === "function" && ctx.enclosingKind === "class") {
+      kind = "method";
+    }
+    const body = node.childForFieldName("body") ?? node.namedChildren.find((c) => c.type === "block" || c.type === "function_body");
+    return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+  }
+  return null;
+}
+
+function describeKotlin(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = ctx.kinds[node.type];
+  if (mapped) {
+    const nameNode = node.childForFieldName("name") ?? node.namedChildren.find((c) => c.type === "type_identifier" || c.type === "simple_identifier" || c.type === "identifier");
+    const name = nameNode ? nameNode.text : (node.type === "companion_object" ? "Companion" : null);
+    if (!name) return null;
+    let kind = mapped;
+    if (mapped === "function" && ctx.enclosingKind === "class") {
+      kind = "method";
+    }
+    const body = node.childForFieldName("body") ?? node.namedChildren.find((c) => c.type === "class_body" || c.type === "function_body" || c.type === "block");
+    return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+  }
+  return null;
+}
+
 /** The receiver's base type name for a Go method, unwrapping a pointer receiver
  * (`func (u *User) …` → `User`). Null if it can't be read. */
 function goReceiverType(node: Parser.SyntaxNode): string | null {
@@ -380,6 +442,32 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     for (const c of supers?.namedChildren ?? []) {
       if (c.type === "identifier") {
         edges.push({ source: classId, relation: "extends", name: c.text, file: ctx.rel });
+      }
+    }
+    return edges;
+  }
+  if (ctx.lang === "dart") {
+    for (const child of node.namedChildren) {
+      if (child.type === "superclass" || child.type === "interfaces" || child.type === "mixins") {
+        const relation: Relation = child.type === "interfaces" ? "implements" : "extends";
+        for (const t of child.namedChildren) {
+          if (t.type === "identifier" || t.type === "type_identifier") {
+            edges.push({ source: classId, relation, name: t.text, file: ctx.rel });
+          }
+        }
+      }
+    }
+    return edges;
+  }
+  if (ctx.lang === "kotlin") {
+    for (const child of node.namedChildren) {
+      if (child.type === "delegation_specifier" || child.type === "delegation_specifiers") {
+        const typeNode = child.namedChildren.find((c) => c.type === "constructor_invocation" || c.type === "user_type" || c.type === "type_identifier" || c.type === "simple_identifier") ?? child;
+        const nameNode = typeNode.namedChildren.find((c) => c.type === "user_type" || c.type === "type_identifier" || c.type === "simple_identifier") ?? typeNode;
+        const name = nameNode.text.replace(/\(.*\)$/, "").trim();
+        if (name) {
+          edges.push({ source: classId, relation: "extends", name, file: ctx.rel });
+        }
       }
     }
     return edges;
@@ -424,6 +512,14 @@ function calleeName(
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
+  if (lang === "dart") {
+    const p = fn.childForFieldName("method") ?? fn.namedChildren.at(-1);
+    return p ? { name: p.text, viaMember: true } : null;
+  }
+  if (lang === "kotlin") {
+    const p = fn.namedChildren.at(-1);
+    return p ? { name: p.text, viaMember: true } : null;
+  }
   return null;
 }
 
@@ -457,6 +553,8 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "dart") return node.type === "import_or_export" || node.type === "import_statement";
+  if (lang === "kotlin") return node.type === "import_header";
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -471,6 +569,14 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
+  }
+  if (lang === "dart") {
+    const match = node.text.match(/['"]([^'"]+)['"]/);
+    return match ? match[1] : null;
+  }
+  if (lang === "kotlin") {
+    const id = node.namedChildren.find((c) => c.type === "identifier" || c.type === "dotted_identifier" || c.type === "user_type");
+    return id ? id.text : null;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;

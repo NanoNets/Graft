@@ -23,18 +23,19 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
-import { SKIP_DIRS } from "../ingest/fs.js";
+import { SKIP_DIRS, loadGraftIgnore } from "../ingest/fs.js";
 import type { GraphV1, ScopeV1 } from "./types.js";
 
 /** Project-marker files, checked in this order (also the order `markers` is built in). */
-const MARKERS = ["package.json", "go.mod", "pyproject.toml", "setup.py", "Cargo.toml"];
+const MARKERS = ["package.json", "go.mod", "pyproject.toml", "setup.py", "Cargo.toml", "pubspec.yaml", "build.gradle.kts", "build.gradle"];
 
 const CANONICAL_ROOT: ScopeV1[] = [{ prefix: "", label: "", markers: [] }];
 
 /** Recursively collect every directory under `root` (posix rel path, "" = root itself),
- * reusing `walkDir`'s skip rules (dot-dirs, `SKIP_DIRS`) so build-output and dependency
+ * reusing `walkDir`'s skip rules (dot-dirs, `SKIP_DIRS`, `.graftignore`) so build-output and dependency
  * trees are never scanned for markers. */
 function collectDirs(root: string): string[] {
+  const ig = loadGraftIgnore(root);
   const out: string[] = [""];
   const walk = (absDir: string, relDir: string): void => {
     let entries: Dirent[];
@@ -47,6 +48,7 @@ function collectDirs(root: string): string[] {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
       const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+      if (ig && (ig.ignores(rel) || ig.ignores(`${rel}/`))) continue;
       out.push(rel);
       walk(join(absDir, entry.name), rel);
     }

@@ -56,13 +56,16 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.113.0",
+    "@driftlog/tree-sitter-dart": "^1.0.4",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "gray-matter": "^4.0.3",
+    "ignore": "^7.0.6",
     "openai": "^6.45.0",
-    "tree-sitter": "^0.21.1",
-    "tree-sitter-go": "^0.23.4",
-    "tree-sitter-python": "^0.21.0",
+    "tree-sitter": "^0.25.1",
+    "tree-sitter-go": "^0.25.0",
+    "tree-sitter-kotlin": "^0.3.8",
+    "tree-sitter-python": "^0.25.0",
     "tree-sitter-typescript": "^0.23.2"
   },
   "devDependencies": {
@@ -72,5 +75,8 @@
     "esbuild": "^0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "tree-sitter": "^0.25.1"
   }
 }
