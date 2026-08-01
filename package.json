@@ -60,6 +60,7 @@
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "gray-matter": "^4.0.3",
+    "ignore": "^7.0.6",
     "openai": "^6.45.0",
     "tree-sitter": "^0.25.1",
     "tree-sitter-go": "^0.25.0",
