@@ -18,8 +18,8 @@ function write(root: string, path: string, content = "export const value = 1;\n"
   writeFileSync(join(root, path), content);
 }
 
-function walked(root: string): string[] {
-  return walkDir(root)
+function walked(root: string, includes?: ReadonlySet<string>): string[] {
+  return walkDir(root, includes)
     .map((path) => relative(root, path).replace(/\\/g, "/"))
     .sort();
 }
@@ -75,16 +75,21 @@ test("walkDir retains fixed skips and filesystem fallback outside Git", () => {
 });
 
 /**
- * A4 — shouldSkipDir consolidation.
+ * A5 — `shouldSkipDir` and its `--include-dir` override.
  *
  * "Is this name dot-prefixed or in SKIP_DIRS" is re-implemented by hand in
  * three places: `skippedPath`'s per-segment predicate and `walkFilesystem`'s
  * directory check (both src/ingest/fs.ts), and `discoverWorkspaceChildren`'s
- * git-child filter (src/graph/scopes.ts). `shouldSkipDir` is the single
- * source of truth now; these tests pin the predicate's contract and prove
- * every consumer — the file walk, marker-scope discovery and workspace-glob
- * resolution (both derived from the walked file set), and git-child
- * discovery — agrees on exactly the same skip set.
+ * git-child filter (src/graph/scopes.ts). This introduces `shouldSkipDir` as
+ * the single source of truth, with an optional `includes` param: a name in it
+ * is removed from the effective skip set for this repo's walks (persisted via
+ * `graft build --include-dir`), while a dot-directory stays non-overridable
+ * regardless.
+ *
+ * `--include-dir` lifts only graft's OWN skip list. In a Git repo, Git's
+ * ignore rules stay authoritative: an ignored directory remains excluded even
+ * when named — un-ignore it (or `git add -f`) to index it, the same contract
+ * the walker already applies to tracked-but-ignored files.
  */
 
 test("shouldSkipDir: every SKIP_DIRS name and any dot-prefixed name is skipped; an ordinary name is not", () => {
@@ -94,6 +99,59 @@ test("shouldSkipDir: every SKIP_DIRS name and any dot-prefixed name is skipped; 
   assert.equal(shouldSkipDir("."), true);
   assert.equal(shouldSkipDir("src"), false);
   assert.equal(shouldSkipDir("app"), false);
+});
+
+test("A5: shouldSkipDir(name, includes) removes a SKIP_DIRS name from the skip set, but never a dot-dir", () => {
+  const includes = new Set(["build", ".git"]);
+  assert.equal(shouldSkipDir("build", includes), false, "an included SKIP_DIRS name is no longer skipped");
+  assert.equal(shouldSkipDir("vendor", includes), true, "a SKIP_DIRS name NOT in includes is still skipped");
+  assert.equal(shouldSkipDir(".git", includes), true, "a dot-dir is never overridable, even if explicitly included");
+  assert.equal(shouldSkipDir("src", includes), false);
+});
+
+test("A5: walkDir(dir, includes) descends into an included SKIP_DIRS-named directory (filesystem fallback)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-walkdir-include-"));
+  try {
+    mkdirSync(join(dir, "build"), { recursive: true });
+    writeFileSync(join(dir, "build", "real.ts"), "export const X = 1;\n");
+    mkdirSync(join(dir, "vendor"), { recursive: true });
+    writeFileSync(join(dir, "vendor", "other.ts"), "export const Y = 1;\n");
+
+    const withoutIncludes = walkDir(dir).map((f) => f.slice(dir.length + 1));
+    assert.ok(!withoutIncludes.some((f) => f.startsWith("build")), "default: build/ is skipped");
+
+    const withIncludes = walkDir(dir, new Set(["build"])).map((f) => f.slice(dir.length + 1));
+    assert.ok(withIncludes.some((f) => f.startsWith("build")), "build/ is walked once included");
+    assert.ok(!withIncludes.some((f) => f.startsWith("vendor")), "vendor/ stays skipped — only the named dir is included");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("A5: in a Git repo, --include-dir lifts the built-in skip for git-visible files", () => {
+  const dir = fixture("include-git");
+  try {
+    write(dir, "src/app.ts");
+    write(dir, "vendor/lib.ts"); // vendored dep committed to the repo — visible to git, skipped by the built-in list
+
+    assert.ok(!walked(dir).includes("vendor/lib.ts"), "default: vendor/ is skipped by the built-in list");
+    assert.deepEqual(walked(dir, new Set(["vendor"])), ["src/app.ts", "vendor/lib.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("A5: --include-dir does not override gitignore — an ignored directory stays excluded even when named", () => {
+  const dir = fixture("include-ignored");
+  try {
+    write(dir, ".gitignore", "build/\n");
+    write(dir, "src/app.ts");
+    write(dir, "build/gen.ts");
+
+    assert.deepEqual(walked(dir, new Set(["build"])), [".gitignore", "src/app.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** One subdirectory per SKIP_DIRS name, plus a dot-directory and a normal
