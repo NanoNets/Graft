@@ -115,7 +115,12 @@ export interface GraphBuildResult {
 /** Every Go module in the repo: each `go.mod`'s declared `module` path and the repo
  * directory it lives in (posix, `.` for the root). Found anywhere in the tree, so a
  * monorepo whose module is in a subdir (e.g. `backend/go.mod`) resolves too. Lets edge
- * resolution map Go import paths to in-repo files. */
+ * resolution map Go import paths to in-repo files.
+ *
+ * `repoFiles` is buildGraph's single enumeration, which already carries root's
+ * persisted `--include-dir` override — so a `go.mod` living under an included
+ * dir (e.g. `build/go.mod`) is found here exactly when its `.go` files are
+ * indexed, and its intra-module imports resolve. */
 function readGoModules(root: string, repoFiles: string[]): GoModule[] {
   const mods: GoModule[] = [];
   for (const f of repoFiles) {
