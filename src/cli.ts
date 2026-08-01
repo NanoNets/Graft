@@ -33,6 +33,7 @@ import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
 import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
+import { writeBuildConfig } from "./util/state.js";
 
 const program = new Command();
 const currentVersion = readCurrentVersion(import.meta.url);
@@ -119,11 +120,39 @@ program
   .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py")')
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean }) => {
+  .option(
+    "--include-dir <name>",
+    "override SKIP_DIRS for this repo's walks — repeatable (e.g. --include-dir build --include-dir tools); " +
+      "persisted, so a later build (and the hooks/refresh path) include it without the flag; dot-dirs are never overridable",
+    (val: string, prev: string[]) => [...prev, val],
+    [] as string[],
+  )
+  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean; includeDir?: string[] }) => {
     const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
     if (opts.concurrency && !Number.isFinite(concurrency)) {
       console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
       process.exit(1);
+    }
+    // Persisted BEFORE the build itself runs, so this invocation's walks (and
+    // every later no-flag build / hooks refresh) see it identically — the
+    // walkDir call sites read it from state, not from a threaded option.
+    if (opts.includeDir && opts.includeDir.length > 0) {
+      // --include-dir takes bare SKIP_DIRS-style directory NAMES (shouldSkipDir
+      // compares a single path segment), never paths, and dot-dirs are never
+      // overridable at all (see the option's own help text) — reject anything
+      // else up front instead of silently persisting a value that can never
+      // match a real directory name.
+      for (const name of opts.includeDir) {
+        if (name.startsWith(".")) {
+          console.error(`✗ --include-dir "${name}": dot-directories are never overridable`);
+          process.exit(1);
+        }
+        if (name.includes("/") || name.includes("\\")) {
+          console.error(`✗ --include-dir "${name}": expected a bare directory name, not a path`);
+          process.exit(1);
+        }
+      }
+      writeBuildConfig(resolve(dir), { includeDirs: opts.includeDir });
     }
     const engine = engineFrom();
     const fmt = (o: Record<string, number>) =>
@@ -159,6 +188,7 @@ program
         concurrency,
         childConfig: cliConfig(),
         override: buildGlobalDir,
+        includeDirs: opts.includeDir,
       });
       return;
     }
