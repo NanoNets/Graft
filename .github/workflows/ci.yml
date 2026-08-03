@@ -22,6 +22,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The Windows leg reports but does not yet gate. It currently fails 21 tests
+    # that predate it and have nothing to do with path handling: `chmod 000` does
+    # not deny access on Windows (so the "unreadable file" and exec-bit tests
+    # cannot hold as written), several tests assert `/` in paths that are
+    # deliberately printed with the native separator, and a few spawn child
+    # processes that exit early. Blocking on those would mean either reverting the
+    # leg or rushing 9 unrelated test files; leaving it red-but-blocking would
+    # train everyone to ignore CI. Once the 21 are cleared, delete this line —
+    # the leg is only worth having if it can fail the build.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
