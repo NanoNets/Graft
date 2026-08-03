@@ -48,7 +48,9 @@ export function describeWrites(
   }
   if (globals.length > 0) {
     const where = tilde(commonDir(globals.map((w) => w.path)), home);
-    parts.push(`+ ${globals.length} in ${where}/ (machine-wide)`);
+    // `sep`, not a literal `/`: every other path on this line is native, so a
+    // hardcoded slash produced `~\.codex/` — one path, both separators.
+    parts.push(`+ ${globals.length} in ${where}${sep} (machine-wide)`);
   }
   if (!writes.some((w) => w.kind === 'mcp')) parts.push('no MCP');
   return parts.join(' · ');

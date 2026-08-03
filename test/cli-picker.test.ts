@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { planInit } from '../src/hosts/plan.js';
 import {
   KEY_CTRL_C, KEY_DOWN, KEY_ESC, KEY_UP,
@@ -128,11 +128,17 @@ test('abort sets aborted and never done', () => {
   assert.ok(!state.done);
 });
 
+// These are *display* paths, which deliberately keep the platform separator — so
+// the fixtures are built with `join`/`sep` rather than `/`-separated literals.
+// `tilde` keys on `sep`, so a posix literal simply never matched on Windows.
+
 test('tilde shortens home paths and leaves others alone', () => {
-  assert.equal(tilde('/Users/me/.codex/config.toml', '/Users/me'), '~/.codex/config.toml');
-  assert.equal(tilde('/repo/AGENTS.md', '/Users/me'), '/repo/AGENTS.md');
+  const home = join(sep, 'Users', 'me');
+  assert.equal(tilde(join(home, '.codex', 'config.toml'), home), `~${sep}${join('.codex', 'config.toml')}`);
+  assert.equal(tilde(join(sep, 'repo', 'AGENTS.md'), home), join(sep, 'repo', 'AGENTS.md'));
   // A sibling directory that merely shares a prefix is not the home dir.
-  assert.equal(tilde('/Users/mediocre/x', '/Users/me'), '/Users/mediocre/x');
+  const sibling = join(sep, 'Users', 'mediocre', 'x');
+  assert.equal(tilde(sibling, home), sibling);
 });
 
 test('describeWrites names out-of-repo writes as machine-wide', () => {
@@ -140,7 +146,12 @@ test('describeWrites names out-of-repo writes as machine-wide', () => {
   const agents = planInit(repo, { home, ids: ['agents'] })[0];
   const summary = describeWrites(agents.writes, repo, home);
   assert.match(summary, /AGENTS\.md/);
-  assert.match(summary, /\+ 3 in ~\/\.codex\/ \(machine-wide\)/);
+  // `includes` rather than a regex: the expectation contains `sep`, which needs
+  // escaping in a pattern on Windows and reads worse for it.
+  assert.ok(
+    summary.includes(`+ 3 in ~${sep}.codex${sep} (machine-wide)`),
+    `machine-wide summary should name ~${sep}.codex${sep}, got: ${summary}`,
+  );
 });
 
 test('describeWrites flags hosts with no MCP target', () => {
@@ -175,7 +186,7 @@ test('formatPlan separates repo writes from machine-wide ones', () => {
   const repoAt = text.indexOf('would write — this repo:');
   const globalAt = text.indexOf('affects ALL repos:');
   assert.ok(repoAt >= 0 && globalAt > repoAt, 'repo section comes first');
-  assert.match(text, /~\/\.codex\/hooks\.json/);
+  assert.ok(text.includes(`~${sep}${join('.codex', 'hooks.json')}`), `plan should name the codex hooks file:\n${text}`);
   assert.match(text, /PostToolUse: Write\|Edit\|MultiEdit/);
   assert.match(text, /nothing was written \(--dry-run\)/);
   assert.match(text, /--no-global/);

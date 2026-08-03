@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import {
   formatVersionReport,
   formatUpgradeReport,
@@ -68,13 +68,22 @@ test('readCurrentVersion reads the real package.json version', () => {
 });
 
 // --- isRunningViaNpx: pure path heuristic ---
+//
+// Built with `join` rather than a `/`-separated literal so the path carries the
+// platform separator: `fileURLToPath` hands back `…\_npx\…` on Windows, where the
+// original `includes("/_npx/")` was always false and `graft upgrade` would have run
+// `npm install -g` on top of an npx invocation. On posix this is the identity case.
 
 test('isRunningViaNpx detects an npx cache path', () => {
-  const npxPath = pathToFileURL('/Users/x/.npm/_npx/abc123/node_modules/@nanonets/graft/dist/cli.js').href;
+  const npxPath = pathToFileURL(
+    join(sep, 'Users', 'x', '.npm', '_npx', 'abc123', 'node_modules', '@nanonets', 'graft', 'dist', 'cli.js'),
+  ).href;
   assert.equal(isRunningViaNpx(npxPath), true);
 });
 
 test('isRunningViaNpx is false for a regular global install', () => {
-  const globalPath = pathToFileURL('/usr/local/lib/node_modules/@nanonets/graft/dist/cli.js').href;
+  const globalPath = pathToFileURL(
+    join(sep, 'usr', 'local', 'lib', 'node_modules', '@nanonets', 'graft', 'dist', 'cli.js'),
+  ).href;
   assert.equal(isRunningViaNpx(globalPath), false);
 });
