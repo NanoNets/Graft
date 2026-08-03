@@ -38,10 +38,4 @@ jobs:
         run: npm ci
 
       - name: Test
-        # `npm test` is `node --test test/*.test.ts` — that glob is expanded by the
-        # shell, and PowerShell (the Windows runner default) passes it through
-        # literally while Node 20's `--test` does not glob. Pinning bash, which the
-        # Windows runners ship via Git for Windows, makes both legs run the same
-        # file set instead of the Windows one silently testing nothing.
-        shell: bash
         run: npm test

@@ -42,6 +42,22 @@ export function relPosix(from: string, to: string): string {
 }
 
 /**
+ * Trailing `/` off a repo-relative path, in linear time.
+ *
+ * The obvious `replace(/\/+$/, "")` is a polynomial-ReDoS shape — `\/+$` can begin
+ * matching at any point inside a run of slashes, so a path ending in many slashes
+ * and then anything else costs O(n²). CodeQL flags it (`js/polynomial-redos`), and
+ * rightly: these inputs are a `--dir` or `--in` value rather than anything
+ * attacker-controlled, but the ambiguity buys nothing and a loop is both faster
+ * and plainer.
+ */
+export function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path[end - 1] === "/") end--;
+  return path.slice(0, end);
+}
+
+/**
  * Normalize a user-supplied path prefix (`--in`) so it can be compared against
  * a stored `node.path`: posix separators, no leading `./`, no trailing
  * separator. Windows users type — and their shell's tab-completion produces —
@@ -52,5 +68,5 @@ export function normalizePathPrefix(p: string): string {
   while (out.startsWith("./")) out = out.slice(2);
   // Trailing separators only; a bare "/" normalizes to "" (match everything),
   // which is exactly how `pathUnderPrefix` reads an empty prefix.
-  return out.replace(/\/+$/, "");
+  return stripTrailingSlashes(out);
 }

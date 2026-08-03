@@ -25,7 +25,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync
 import { join } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
-import { relPosix } from "../util/paths.js";
+import { relPosix, stripTrailingSlashes } from "../util/paths.js";
 // Value-only import of a constant; `write.ts` pulls in nothing from here, so no cycle.
 import { GRAPH_DIR } from "../graph/write.js";
 
@@ -103,21 +103,6 @@ export function digestSources(sources: SourceRef[]): string {
 export function contextDirFor(root: string, override?: string): string {
   if (override) return override;
   return join(root, "graft");
-}
-
-/**
- * Trailing `/` off a repo-relative dir path, in linear time.
- *
- * The obvious `replace(/\/+$/, "")` is a polynomial-ReDoS shape — `\/+$` can begin
- * matching at any point inside a run of slashes, so a path ending in many slashes
- * and then anything else costs O(n²). CodeQL flags it (`js/polynomial-redos`), and
- * rightly: the input here is a `--dir` value, so it is not attacker-controlled, but
- * the ambiguity buys nothing and a loop is both faster and plainer.
- */
-function stripTrailingSlashes(path: string): string {
-  let end = path.length;
-  while (end > 0 && path[end - 1] === "/") end--;
-  return path.slice(0, end);
 }
 
 /**

@@ -19,7 +19,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join, sep } from "node:path";
-import { normalizePathPrefix, relPosix, toPosixPath } from "../src/util/paths.js";
+import { normalizePathPrefix, relPosix, stripTrailingSlashes, toPosixPath } from "../src/util/paths.js";
 import { pathUnderPrefix } from "../src/graph/scopes.js";
 
 test("toPosixPath: identity on an already-posix path, and idempotent", () => {
@@ -63,6 +63,17 @@ test("normalizePathPrefix: a native-separator prefix normalizes to posix", () =>
   // reported verbatim as matching nothing.
   assert.equal(normalizePathPrefix(join("server", "src", "gpu")), "server/src/gpu");
   assert.equal(normalizePathPrefix(join("server", "src", "gpu") + sep), "server/src/gpu");
+});
+
+test("stripTrailingSlashes: linear-time, and leaves interior slashes alone", () => {
+  assert.equal(stripTrailingSlashes("src/util"), "src/util");
+  assert.equal(stripTrailingSlashes("src/util/"), "src/util");
+  assert.equal(stripTrailingSlashes("src/util///"), "src/util");
+  assert.equal(stripTrailingSlashes("/"), "");
+  assert.equal(stripTrailingSlashes(""), "");
+  // The regex this replaces was a polynomial-ReDoS shape (js/polynomial-redos):
+  // a long run of trailing slashes must stay cheap, not quadratic.
+  assert.equal(stripTrailingSlashes("a" + "/".repeat(50_000)), "a");
 });
 
 test("pathUnderPrefix: segment-aware, so a prefix is not a substring", () => {
