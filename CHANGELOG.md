@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **Windows: `graft upgrade` no longer reinstalls over an npx run.** The npx-cache check
+  matched `/_npx/` against a path that arrives with the platform separator, so it was
+  always false on Windows and `graft upgrade` ran `npm install -g` instead of explaining
+  that npx already fetches the latest build on every run.
+
+- **Windows: a git worktree kept the graph it was seeded with, but not the record that
+  makes it cheap.** The seed's copy filter dropped every sidecar next to the graph — the
+  freshness fingerprint included — so the query right behind the seed found no
+  fingerprint, could not diff against the parent checkout, and re-parsed the whole repo.
+  It answered correctly the whole time, which is why nothing reported it; the only
+  visible trace was a `(? files changed)` note instead of a count.
+
+- **`graft init` printed one path with two separators** on Windows (`~\.codex/`), from a
+  `/` concatenated onto an otherwise native display path.
+
+- The `windows-latest` CI leg now **gates** rather than merely reporting. The 21 failures
+  it shipped with are resolved: two were the real bugs above, most of the rest were tests
+  asserting `/` in paths that are deliberately printed with the native separator or
+  pointing a child process at `HOME` (Windows reads `USERPROFILE`), and four are now
+  explicit named skips — nothing in Node's `fs` can deny a *read* on Windows, and there
+  is no exec bit or `SIGTERM` to test.
+
 - **Windows: path scoping and `map` work again.** graft stores a repo-relative path
   for every indexed file — in node ids, `node.path`, the extract cache, the freshness
   fingerprint — and it was produced with `relative()`, which returns the *platform*
