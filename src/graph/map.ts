@@ -19,7 +19,7 @@
  * `buildRepoMap` + `formatRepoMap` directly.
  */
 import type { GraphV1, NodeV1 } from "./types.js";
-import { languageOf } from "./extract.js";
+import { languageLabelOf } from "./extract.js";
 import { WALK_RELATIONS } from "./relations.js";
 import { scopeLabel, scopeOf, scopesOfGraph } from "./scopes.js";
 import { savingsFooter, savingsFor, type Savings } from "../context/savings.js";
@@ -127,11 +127,13 @@ function topHubs(nodes: NodeV1[], inDegree: Map<string, number>, cap: number): H
     .slice(0, cap);
 }
 
+/** Display labels, not tree-sitter grammars: a `scripts/` tree of `.mjs` files is
+ * "javascript" here, not "typescript". See {@link languageLabelOf}. */
 function sortedLanguages(paths: string[]): string[] {
   const set = new Set<string>();
   for (const p of paths) {
-    const lang = languageOf(p);
-    if (lang) set.add(lang);
+    const label = languageLabelOf(p);
+    if (label) set.add(label);
   }
   return [...set].sort();
 }

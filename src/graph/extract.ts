@@ -17,14 +17,52 @@ import type { Kind, NodeV1, Relation } from "./types.js";
 
 export type Language = "typescript" | "tsx" | "python" | "go";
 
+/**
+ * Extension → the tree-sitter grammar that parses it, and the label a human expects
+ * to see for it.
+ *
+ * The two are not the same, and conflating them under-reported coverage: `.mjs` is
+ * parsed by the typescript grammar, so a JS repo's build banner read `[typescript]`
+ * and a `.jsx` one read `[tsx]`. Both are true about the *parser* and misleading
+ * about the repo — people went looking for why their JavaScript hadn't been indexed
+ * when it had, and could not tell a language that was merely unlabelled from one
+ * that really was skipped (see issue #36).
+ *
+ * One table, both readings derived from it, so adding an extension cannot fix
+ * extraction and forget the label. Ordered longest-suffix-first: `.tsx` has to be
+ * tested before `.ts` would match it.
+ */
+const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string }> = [
+  { ext: ".tsx", grammar: "tsx", label: "tsx" },
+  { ext: ".jsx", grammar: "tsx", label: "jsx" },
+  { ext: ".mts", grammar: "typescript", label: "typescript" },
+  { ext: ".cts", grammar: "typescript", label: "typescript" },
+  { ext: ".ts", grammar: "typescript", label: "typescript" },
+  { ext: ".mjs", grammar: "typescript", label: "javascript" },
+  { ext: ".cjs", grammar: "typescript", label: "javascript" },
+  { ext: ".js", grammar: "typescript", label: "javascript" },
+  { ext: ".pyi", grammar: "python", label: "python" },
+  { ext: ".py", grammar: "python", label: "python" },
+  { ext: ".go", grammar: "go", label: "go" },
+];
+
+function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
+  const p = path.toLowerCase();
+  return EXTENSIONS.find((e) => p.endsWith(e.ext));
+}
+
 /** Map a file path to a supported language, or null if unsupported. */
 export function languageOf(path: string): Language | null {
-  const p = path.toLowerCase();
-  if (p.endsWith(".tsx") || p.endsWith(".jsx")) return "tsx";
-  if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return "typescript";
-  if (p.endsWith(".py") || p.endsWith(".pyi")) return "python";
-  if (p.endsWith(".go")) return "go";
-  return null;
+  return entryFor(path)?.grammar ?? null;
+}
+
+/**
+ * What to *call* the language of this file, for a banner or a repo map — or null when
+ * the file isn't indexed at all, which is the distinction {@link languageOf} shares
+ * and the one that matters to a reader checking coverage.
+ */
+export function languageLabelOf(path: string): string | null {
+  return entryFor(path)?.label ?? null;
 }
 
 /**
