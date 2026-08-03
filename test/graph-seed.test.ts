@@ -282,6 +282,10 @@ test("GRAFT_NO_SEED leaves the worktree exactly as it was", async () => {
 test("seedGraph declines a --dir override and a checkout that already has a graph", async () => {
   const main = gitRepo();
   await buildGraph(main);
+  // Present so the negative assertions below mean something: both belong to the
+  // checkout that produced them and must not travel.
+  mkdirSync(join(outOf(main), ".cache", "session"), { recursive: true });
+  writeFileSync(join(outOf(main), ".cache", "stats.json"), '{"tokens_saved":999}');
   const wt = addWorktree(main, "guards");
 
   // A custom output dir can't be mapped onto a sibling checkout, so don't guess.
@@ -292,13 +296,20 @@ test("seedGraph declines a --dir override and a checkout that already has a grap
   assert.equal(seedGraph(wt).seeded, true, "first call copies");
   assert.deepEqual(seedGraph(wt), { seeded: false }, "second call has nothing to do");
 
-  // The freshness record has to travel with the graph, or the query right after the
-  // seed finds no fingerprint, cannot diff against the parent, and rebuilds the whole
-  // repo — which is the expensive thing seeding exists to avoid. Asserted on the
-  // direct `seedGraph` call because the refresh gate writes a fresh fingerprint of its
-  // own moments later, which would mask a copy that never happened.
+  // The allowlist contract, asserted on a *direct* seed. The end-to-end test above
+  // checks the same files, but only after the refresh gate has run — and that gate
+  // writes a fresh fingerprint of its own, which masked a copy that never happened.
+  // It did never happen on Windows: `cpSync`'s filter dropped every sidecar while the
+  // graph itself (placed separately) arrived, so `probeDrift` found no fingerprint and
+  // the query behind the seed rebuilt the whole repo instead of the diff.
   assert.ok(existsSync(fingerprintPath(outOf(main))), "the parent has a fingerprint to give");
-  assert.ok(existsSync(fingerprintPath(outOf(wt))), "and the seed brought it across");
+  const landed = readdirSync(join(outOf(wt), ".cache")).sort();
+  const why = `seeded .cache holds ${JSON.stringify(landed)}`;
+  assert.ok(existsSync(fingerprintPath(outOf(wt))), `the freshness record travels — ${why}`);
+  assert.ok(landed.includes("ask-index.json"), `the ask sidecar travels — ${why}`);
+  assert.ok(landed.some((f) => f.startsWith("extract.")), `the extraction memo travels — ${why}`);
+  assert.ok(!landed.includes("stats.json"), `borrowed savings do not — ${why}`);
+  assert.ok(!landed.includes("session"), `another session's transcripts do not — ${why}`);
 
   rmSync(main, { recursive: true, force: true });
   rmSync(wt, { recursive: true, force: true });

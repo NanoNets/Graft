@@ -36,16 +36,15 @@
  */
 import {
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { relPosix } from "../util/paths.js";
 import { ASK_INDEX_FILE } from "../ask/index-file.js";
 import { CACHE_DIR, contextDirFor } from "../context/node-file.js";
 import { EXTRACT_CACHE_PREFIX } from "./extract-cache.js";
@@ -149,11 +148,35 @@ function seedable(rel: string): boolean {
   );
 }
 
+/**
+ * Copy `srcDir` into `outDir`, keeping only what {@link seedable} allows.
+ *
+ * Walked by hand rather than through `cpSync`'s `filter`, which did not hold on
+ * Windows: the graph arrived — it is placed directly, by {@link installGraph} — while
+ * every allowlisted sidecar next to it was dropped. A seeded worktree therefore had no
+ * fingerprint, `probeDrift` read that as "never built", and the query right behind the
+ * seed rebuilt the whole repo instead of the diff against the parent: precisely the
+ * cost seeding exists to avoid, and silent, because a full rebuild still answers
+ * correctly. It only surfaced as a `(? files changed)` note on the CI leg.
+ *
+ * Composing `rel` from the segments this walk joined itself is what fixes it — the
+ * allowlist no longer depends on the form `cpSync` chooses to hand its callback, and
+ * `rel` is posix by construction rather than by conversion. Also narrower than the old
+ * copy in one way worth keeping: only real files and directories travel, never a
+ * symlink, and nothing in the allowlist is one.
+ */
 function copyTree(srcDir: string, outDir: string): void {
-  cpSync(srcDir, outDir, {
-    recursive: true,
-    filter: (src) => seedable(relPosix(srcDir, src)),
-  });
+  const walk = (rel: string): void => {
+    const from = rel ? join(srcDir, rel) : srcDir;
+    mkdirSync(rel ? join(outDir, rel) : outDir, { recursive: true });
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (!seedable(childRel)) continue;
+      if (entry.isDirectory()) walk(childRel);
+      else if (entry.isFile()) copyFileSync(join(from, entry.name), join(outDir, childRel));
+    }
+  };
+  walk("");
 }
 
 /**
