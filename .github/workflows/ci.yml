@@ -11,7 +11,17 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    # Windows is not redundant coverage here: graft stores repo-relative paths and
+    # parses them with `/` by hand, so a platform-separator leak matches nothing
+    # rather than erroring. That class of bug is invisible to a posix-only matrix
+    # (it shipped in 0.8.2 and took three user reports to find). `fail-fast: false`
+    # so a Windows-only failure still reports the Linux result.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -28,4 +38,10 @@ jobs:
         run: npm ci
 
       - name: Test
+        # `npm test` is `node --test test/*.test.ts` — that glob is expanded by the
+        # shell, and PowerShell (the Windows runner default) passes it through
+        # literally while Node 20's `--test` does not glob. Pinning bash, which the
+        # Windows runners ship via Git for Windows, makes both legs run the same
+        # file set instead of the Windows one silently testing nothing.
+        shell: bash
         run: npm test

@@ -164,11 +164,25 @@ test('grepGraph: a hit outside every symbol span groups as file-level (symbol: n
 test('grepGraph: `in` filter narrows to matching file paths only', () => {
   const repo = needleRepo();
   const graph = loadBuiltGraph(repo);
-  const r = grepGraph(graph, repo, 'NEEDLE', { in: 'a.ts' });
+  const r = grepGraph(graph, repo, 'NEEDLE', { in: 'src/a.ts' });
 
   assert.equal(r.filesSearched, 1);
   assert.equal(r.totalHits, 2);
   assert.ok(r.groups.every((g) => g.path === 'src/a.ts'));
+});
+
+test('grepGraph: `in` is a path prefix, not a substring, and errors when it matches nothing', () => {
+  const repo = needleRepo();
+  const graph = loadBuiltGraph(repo);
+
+  // A bare filename is a mid-path fragment of 'src/a.ts', not a prefix of it.
+  assert.throws(() => grepGraph(graph, repo, 'NEEDLE', { in: 'a.ts' }), /nothing indexed under "a\.ts\//);
+
+  // A directory prefix works, and either separator is accepted.
+  assert.equal(grepGraph(graph, repo, 'NEEDLE', { in: 'src' }).filesSearched, 2);
+  assert.equal(grepGraph(graph, repo, 'NEEDLE', { in: 'src/' }).filesSearched, 2);
+  // Native separator — `src\a.ts` on Windows, where this used to match nothing.
+  assert.equal(grepGraph(graph, repo, 'NEEDLE', { in: join('src', 'a.ts') }).filesSearched, 1);
 });
 
 test('grepGraph: `fixed` escapes regex metacharacters — "a.b" does not match "axb"', () => {

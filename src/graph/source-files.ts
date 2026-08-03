@@ -7,8 +7,8 @@
  * {@link listSourceFiles} so its existing importers are unaffected.
  */
 import { statSync } from "node:fs";
-import { relative } from "node:path";
 import { walkDir } from "../ingest/fs.js";
+import { relPosix } from "../util/paths.js";
 import { languageOf } from "./extract.js";
 
 /** The source files a graph build parses: supported languages, minus the output dir. */
@@ -19,8 +19,9 @@ export function listSourceFiles(root: string, outDir: string): string[] {
 export interface SourceStat {
   /** Absolute path. */
   abs: string;
-  /** `relative(root, abs)` — exactly the form `buildGraph` uses for node ids and
-   * `checkGraph` diffs against, so cache keys and ids can never disagree. */
+  /** Repo-relative, posix (`relPosix`) — exactly the form `buildGraph` uses for
+   * node ids and `checkGraph` diffs against, so cache keys and ids can never
+   * disagree. Posix on every platform: see `../util/paths.ts`. */
   rel: string;
   size: number;
   mtimeMs: number;
@@ -40,7 +41,7 @@ export function listSourceStats(root: string, outDir: string): SourceStat[] {
     } catch {
       continue;
     }
-    out.push({ abs, rel: relative(root, abs), size: s.size, mtimeMs: s.mtimeMs });
+    out.push({ abs, rel: relPosix(root, abs), size: s.size, mtimeMs: s.mtimeMs });
   }
   return out;
 }

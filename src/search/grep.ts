@@ -13,6 +13,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GraphV1, NodeV1 } from "../graph/types.js";
 import { WALK_RELATIONS } from "../graph/relations.js";
+import { assertPrefixIndexed, pathUnderPrefix } from "../graph/scopes.js";
+import { normalizePathPrefix } from "../util/paths.js";
 import { savingsFor, type Savings } from "../context/savings.js";
 
 export interface GrepHit {
@@ -65,7 +67,8 @@ export interface GrepOptions {
   ignoreCase?: boolean;
   /** Treat `pattern` as a literal string (regex-escaped), not a regex. */
   fixed?: boolean;
-  /** Narrow to file nodes whose path contains this substring. */
+  /** Narrow to file nodes at or under this repo-relative path prefix — the same
+   * segment-aware rule `ask --in` and `callers --in` use. Either separator. */
   in?: string;
   /** Stop collecting hits after this many; the rest are tallied into
    * `truncated.hits`. Default 300. */
@@ -140,7 +143,14 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
   const regex = new RegExp(source, opts.ignoreCase ? "i" : "");
 
   const inDegree = computeInDegree(graph);
-  const fileNodes = graph.nodes.filter((n) => n.kind === "file" && (!opts.in || n.path.includes(opts.in)));
+  // Same segment-aware prefix rule as `ask --in` / `callers --in`, and the same
+  // loud failure when it matches nothing — `--in` used to mean a bare substring
+  // here and a path prefix there, so `--in src` also swept up `lib/mysrc/`.
+  const inPrefix = opts.in ? normalizePathPrefix(opts.in) : undefined;
+  if (inPrefix) assertPrefixIndexed(graph, inPrefix);
+  const fileNodes = graph.nodes.filter(
+    (n) => n.kind === "file" && (inPrefix === undefined || pathUnderPrefix(n.path, inPrefix)),
+  );
 
   const groups = new Map<string, GrepGroup>();
   let collected = 0;

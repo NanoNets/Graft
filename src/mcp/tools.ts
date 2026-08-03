@@ -90,7 +90,7 @@ export const TOOLS: ToolDef[] = [
           description: '"in" (default) = callers/dependents; "out" = callees/dependencies',
         },
         depth: { description: 'transitive walk depth for blast radius (default 1 = direct edges only); pass "all" for the full connected closure — every source that would be affected' },
-        in: { type: 'string', description: 'narrow matches to nodes whose path contains this substring' },
+        in: { type: 'string', description: 'narrow matches to nodes at or under this repo-relative path prefix, e.g. server/src' },
       },
       required: ['symbol'],
     },
@@ -103,7 +103,7 @@ export const TOOLS: ToolDef[] = [
       type: 'object',
       properties: {
         pattern: { type: 'string', description: 'regex pattern (or literal string with fixed: true)' },
-        in: { type: 'string', description: 'narrow to files whose path contains this substring' },
+        in: { type: 'string', description: 'narrow to files at or under this repo-relative path prefix, e.g. server/src' },
         ignore_case: { type: 'boolean', description: 'case-insensitive match' },
         fixed: { type: 'boolean', description: 'treat pattern as a literal string, not a regex' },
       },

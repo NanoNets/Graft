@@ -96,7 +96,10 @@ export function runGrepCommand(pattern: string, dir: string, opts: GrepCliOption
   try {
     result = grepGraph(graph, root, pattern, { ignoreCase: opts.ignoreCase, fixed: opts.fixed, in: opts.in });
   } catch (err) {
-    console.error(`✗ invalid pattern "${pattern}": ${err instanceof Error ? err.message : String(err)}`);
+    // `new RegExp` throws SyntaxError; anything else (an unindexed `--in` prefix)
+    // is a different mistake and must not be reported as a bad pattern.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(err instanceof SyntaxError ? `✗ invalid pattern "${pattern}": ${message}` : `✗ ${message}`);
     process.exit(1);
     return;
   }

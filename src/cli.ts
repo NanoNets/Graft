@@ -353,7 +353,7 @@ program
   .argument("[dir]", "repository root", ".")
   .option("--direction <in|out>", 'edge direction: "in" = callers (default), "out" = callees')
   .option("-d, --depth <n>", 'walk transitively up to N hops for blast radius, or "all" for the full connected closure (default 1)')
-  .option("--in <path>", "narrow matches to nodes whose path contains this substring")
+  .option("--in <path>", "narrow matches to nodes at or under this path prefix")
   .option("--json", "output as JSON")
   .option(...NO_REFRESH_FLAG)
   .action(
@@ -392,7 +392,7 @@ program
   .argument("[dir]", "repository root", ".")
   .option("-i, --ignore-case", "case-insensitive match")
   .option("--fixed", "treat pattern as a literal string, not a regex")
-  .option("--in <path>", "narrow to files whose path contains this substring")
+  .option("--in <path>", "narrow to files at or under this path prefix")
   .option("--json", "output as JSON")
   .option(...NO_REFRESH_FLAG)
   .action(

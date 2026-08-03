@@ -22,9 +22,10 @@
  * LLM and without re-reading every node body.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
+import { relPosix } from "../util/paths.js";
 // Value-only import of a constant; `write.ts` pulls in nothing from here, so no cycle.
 import { GRAPH_DIR } from "../graph/write.js";
 
@@ -129,7 +130,7 @@ function stripTrailingSlashes(path: string): string {
  * must never abort a build, so write failures are swallowed.
  */
 export function ensureGitignored(root: string, contextDir: string): void {
-  const rel = relative(root, contextDir).split(sep).join("/");
+  const rel = relPosix(root, contextDir);
   if (rel === "" || rel.startsWith("..")) return; // dir is at/above the repo root — nothing sane to ignore
   const entry = `${stripTrailingSlashes(rel)}/`;
   const path = join(root, ".gitignore");
@@ -166,7 +167,7 @@ export function ensureGitignored(root: string, contextDir: string): void {
  * must not fail over a convenience file.
  */
 export function ensureSearchable(root: string, contextDir: string): void {
-  const rel = relative(root, contextDir).split(sep).join("/");
+  const rel = relPosix(root, contextDir);
   if (rel === "" || rel.startsWith("..")) return; // outside the repo — nothing to re-admit
   const dir = stripTrailingSlashes(rel);
   const entry = `!${dir}/`;

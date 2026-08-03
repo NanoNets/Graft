@@ -11,7 +11,7 @@
  * rather than guessed, so we never wire an edge to the wrong symbol.
  */
 import { posix } from "node:path";
-import { sep } from "node:path";
+import { toPosixPath } from "../util/paths.js";
 import type { EdgeV1, Kind, NodeV1, Relation } from "./types.js";
 import type { RawEdge } from "./extract.js";
 
@@ -65,7 +65,7 @@ export function resolveEdges(
   for (const n of nodes) {
     if (n.kind === "file") {
       if (hasGoModules && n.path.endsWith(".go")) {
-        const dir = posix.dirname(n.path.split(sep).join("/"));
+        const dir = posix.dirname(toPosixPath(n.path));
         push(goFilesByDir, dir, n.id);
       }
       continue;
@@ -218,7 +218,9 @@ function resolveTypedMember(
  */
 function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): string {
   if (!spec.startsWith(".")) return spec;
-  const dir = posix.dirname(file.split(sep).join("/"));
+  // Belt-and-braces: `node.path` is posix by construction (`../util/paths.ts`),
+  // but this also accepts a hand-written or hand-edited graph.
+  const dir = posix.dirname(toPosixPath(file));
   const base = posix.normalize(posix.join(dir, spec));
   const noExt = base.replace(/\.(js|jsx|mjs|cjs|ts|tsx|py)$/, "");
   const candidates = [

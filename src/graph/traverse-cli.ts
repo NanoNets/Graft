@@ -133,7 +133,17 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
     process.exit(1);
   }
 
-  const matches = resolveSymbol(graph, query, opts.in ? { in: opts.in } : {});
+  // `resolveSymbol` throws on an `--in` prefix that matches nothing indexed —
+  // a caller mistake, reported in the same shape as the ones around it rather
+  // than as a bare stack-trace message from the top-level handler.
+  let matches: NodeV1[];
+  try {
+    matches = resolveSymbol(graph, query, opts.in ? { in: opts.in } : {});
+  } catch (err) {
+    console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+    return;
+  }
   if (matches.length === 0) {
     console.error(`✗ no symbol "${query}" in the graph — check spelling or run graft build`);
     process.exit(1);

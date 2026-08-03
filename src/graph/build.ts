@@ -14,11 +14,12 @@
  * one — the invariant `test/graph-incremental.test.ts` pins down.
  */
 import { readFileSync } from "node:fs";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contextDirFor, ensureGitignored, ensureSearchable } from "../context/node-file.js";
 import { extractFile, languageOf, type Language, type RawEdge } from "./extract.js";
 import { contentHash } from "../util/id.js";
+import { relPosix } from "../util/paths.js";
 import {
   emptyExtractCache,
   readExtractCache,
@@ -120,7 +121,7 @@ function readGoModules(root: string): GoModule[] {
     try {
       const m = readFileSync(f, "utf8").match(/^\s*module\s+(\S+)/m);
       if (!m) continue;
-      const rel = relative(root, dirname(f)).split(sep).join("/");
+      const rel = relPosix(root, dirname(f));
       mods.push({ module: m[1], dir: rel === "" ? "." : rel });
     } catch {
       /* unreadable go.mod — skip this module */

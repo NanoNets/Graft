@@ -15,7 +15,8 @@
  * `signature`, so cards are useful even in a $0 structure-only build.
  */
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
+import { relPosix } from "../util/paths.js";
 import matter from "gray-matter";
 import type { GraphV1, NodeV1 } from "./types.js";
 import { CACHE_DIR, readNodes } from "../context/node-file.js";
@@ -166,7 +167,7 @@ export function writeCards(graph: GraphV1, outDir: string): CardStats {
     mkdirSync(dirname(cardPath), { recursive: true });
     writeFileSync(cardPath, renderCard(sourcePath, fileNode, symbols, concepts.get(sourcePath) ?? []));
     written.add(cardPath);
-    files.push({ card: relative(outDir, cardPath), path: sourcePath, symbols: symbols.length });
+    files.push({ card: relPosix(outDir, cardPath), path: sourcePath, symbols: symbols.length });
   }
 
   let pruned = 0;

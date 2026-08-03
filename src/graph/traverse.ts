@@ -14,6 +14,8 @@
  */
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "./types.js";
 import { WALK_RELATIONS } from "./relations.js";
+import { assertPrefixIndexed, pathUnderPrefix } from "./scopes.js";
+import { normalizePathPrefix } from "../util/paths.js";
 
 /** Which way to walk the wiring graph: `in` = incoming edges (who points at
  * the symbol — callers / blast radius), `out` = outgoing edges (what the symbol
@@ -27,7 +29,9 @@ export interface SymbolMatch {
 }
 
 export interface ResolveSymbolOptions {
-  /** Narrow candidates to nodes whose `path` contains this substring. */
+  /** Narrow candidates to nodes at or under this repo-relative path prefix —
+   * the same segment-aware rule `ask --in` and `grep --in` use, so `--in` means
+   * one thing across every command. Normalized here, so either separator works. */
   in?: string;
 }
 
@@ -73,7 +77,11 @@ export function resolveSymbol(graph: GraphV1, query: string, opts: ResolveSymbol
     );
   }
 
-  if (opts.in) matches = matches.filter((n) => n.path.includes(opts.in!));
+  if (opts.in) {
+    const prefix = normalizePathPrefix(opts.in);
+    assertPrefixIndexed(graph, prefix);
+    matches = matches.filter((n) => pathUnderPrefix(n.path, prefix));
+  }
   return matches;
 }
 

@@ -44,7 +44,8 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { relPosix } from "../util/paths.js";
 import { ASK_INDEX_FILE } from "../ask/index-file.js";
 import { CACHE_DIR, contextDirFor } from "../context/node-file.js";
 import { EXTRACT_CACHE_PREFIX } from "./extract-cache.js";
@@ -151,7 +152,7 @@ function seedable(rel: string): boolean {
 function copyTree(srcDir: string, outDir: string): void {
   cpSync(srcDir, outDir, {
     recursive: true,
-    filter: (src) => seedable(relative(srcDir, src).split(sep).join("/")),
+    filter: (src) => seedable(relPosix(srcDir, src)),
   });
 }
 

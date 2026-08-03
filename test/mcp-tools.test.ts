@@ -147,12 +147,13 @@ test('graft_trace_calls round-trips a caller on the built fixture', async () => 
 
 test('graft_trace_calls: qualified/--in narrowing still resolves through the shared resolver', async () => {
   const d = builtRepo();
-  const r = await callTool(d, 'graft_trace_calls', { symbol: 'add', in: 'math' });
+  const r = await callTool(d, 'graft_trace_calls', { symbol: 'add', in: 'src' });
   assert.equal(r.isError, false);
   assert.match(r.text, /calls ← sub/);
+  // `in` is a path prefix: an unindexed one is a caller mistake, reported as such.
   const miss = await callTool(d, 'graft_trace_calls', { symbol: 'add', in: 'nowhere' });
   assert.equal(miss.isError, true);
-  assert.match(miss.text, /no symbol "add" in the graph/);
+  assert.match(miss.text, /nothing indexed under "nowhere\//);
 });
 
 test('graft_trace_calls direction:out round-trips a callee, and reports a loud note when there are none', async () => {

@@ -12,9 +12,10 @@
  *   5. Write one markdown file per node (preserving human notes) + a manifest.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contentHash } from "../util/id.js";
+import { relPosix } from "../util/paths.js";
 import type { Summarizer } from "../ai/summarize.js";
 import type { FileSummary, SynthNode, Synthesizer } from "../ai/synthesize.js";
 import {
@@ -118,7 +119,7 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
 
   // Phase 1: summarize each file, concurrent, content-hash cached.
   const work = await mapWithConcurrency(files, 8, async (file, i): Promise<FileWork | undefined> => {
-    const rel = relative(root, file);
+    const rel = relPosix(root, file);
     opts.onProgress?.({ phase: "summarize", index: i, total: files.length, file: rel });
     let code: string;
     try {

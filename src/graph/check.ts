@@ -18,7 +18,8 @@
  * `pending` (never summarized) is not drift — it's a deliberate Tier-1-only build.
  */
 import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
+import { relPosix } from "../util/paths.js";
 import { contextDirFor } from "../context/node-file.js";
 import { extractFile, languageOf } from "./extract.js";
 import { listSourceFiles } from "./build.js";
@@ -71,7 +72,7 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
       continue; // unreadable now → its nodes show up as `removed` below
     }
     try {
-      const { nodes } = extractFile(relative(root, file), source, lang);
+      const { nodes } = extractFile(relPosix(root, file), source, lang);
       for (const n of nodes) current.set(n.id, n.body_hash);
     } catch {
       // parse failure → skip; the committed nodes for this file become `removed`.

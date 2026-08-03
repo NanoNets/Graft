@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Windows: path scoping and `map` work again.** graft stores a repo-relative path
+  for every indexed file — in node ids, `node.path`, the extract cache, the freshness
+  fingerprint — and it was produced with `relative()`, which returns the *platform*
+  separator. So on Windows every stored path was `src\gate.ts`, while the query layer
+  parses those strings with `/` by hand. Nothing errored; it just matched nothing:
+
+  - `ask --in <path>` reported `nothing indexed under "…"` for **every** prefix,
+    making path scoping unusable on the platform ([#33]).
+  - `map` saw one path segment instead of several, so it emitted one single-file
+    "directory" per file — on a large repo spending its whole token budget describing
+    ~16 arbitrary files instead of the repo's shape ([#35]).
+  - `callers <file.ts>`-style filename lookups missed.
+
+  Repo-relative paths are now normalized to posix once, where they are created
+  (`src/util/paths.ts`), instead of defensively at each consumer. Mac and Linux are
+  unaffected — the conversion is the identity there, and existing graphs are
+  byte-identical. **On Windows every cache key changes**, so the first `graft build`
+  after upgrading re-parses the repo once and `graft check` may report drift until it
+  runs. One-time, and `graft/` is a local gitignored cache — nothing to migrate.
+
+  CI now runs a `windows-latest` leg, because this whole class of bug is invisible to
+  a posix-only matrix.
+
+### Changed
+
+- **`--in` means the same thing on every command.** `ask --in` matched a segment-aware
+  path prefix while `grep --in` and `callers --in` matched a bare substring, so
+  `grep --in src` also swept up `lib/mysrc/`. All three now use the prefix rule, and
+  all three accept either separator (`--in server\src\gpu` works on Windows). A prefix
+  matching nothing indexed is now a loud error on all three rather than — for `grep`
+  and `callers` — empty output the caller had to interpret.
+
+  This is stricter: a mid-path fragment like `--in gpu` for `server/src/gpu` no longer
+  matches. Pass a real prefix (`--in server/src/gpu`), a full file path
+  (`--in src/a.ts`), or use `grep`'s pattern to match on content.
+
+[#33]: https://github.com/NanoNets/Graft/issues/33
+[#35]: https://github.com/NanoNets/Graft/issues/35
+
 ## 0.8.2
 
 ### Fixed

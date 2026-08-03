@@ -254,7 +254,7 @@ graft callers <symbol> --direction out  # the reverse: what the symbol itself ca
 graft callers <symbol> -d N          # walk transitively out to depth N — full blast radius (was `graft impact`)
 
 graft grep "<regex>" [dir]           # exhaustive regex search over indexed files, grouped by enclosing symbol (no LLM, no key)
-graft grep "<regex>" --in <path>     # narrow to files whose path contains this substring
+graft grep "<regex>" --in <path>     # narrow to files at or under this path prefix
 graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a literal string, not a regex
 
 graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)

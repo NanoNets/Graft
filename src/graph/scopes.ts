@@ -342,6 +342,23 @@ export function pathUnderPrefix(path: string, prefix: string): boolean {
   return prefix === "" || path === prefix || path.startsWith(`${prefix}/`);
 }
 
+/**
+ * Validate a normalized `--in` prefix against the graph before a query runs. A
+ * prefix matching no indexed node is a caller mistake (typo, wrong sub-project,
+ * or a mid-path fragment where a prefix is required) rather than a legitimate
+ * zero-hit query, so every `--in`-taking command fails loudly and identically
+ * instead of printing empty output the caller has to interpret.
+ *
+ * Pass the prefix through `normalizePathPrefix` first — an un-normalized
+ * `src\gpu` or `src/` will not match anything here.
+ */
+export function assertPrefixIndexed(graph: GraphV1, prefix: string): void {
+  if (!prefix || graph.nodes.some((n) => pathUnderPrefix(n.path, prefix))) return;
+  throw new Error(
+    `nothing indexed under "${prefix}/"${scopesHereClause(scopesOfGraph(graph))} (or any path prefix)`,
+  );
+}
+
 /** Immediate subdirs of `root` that are themselves git repos (have `.git`).
  * Used by workspace federation (Task 5). */
 export function discoverWorkspaceChildren(root: string): string[] {

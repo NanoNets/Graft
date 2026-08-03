@@ -19,7 +19,15 @@ import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
 import { savingsFooter, savingsFor, SAVINGS_TURN_NUDGE, type Savings } from "../context/savings.js";
 import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
-import { pathUnderPrefix, scopeLabel, scopeOf, scopesHereClause, scopesOfGraph } from "../graph/scopes.js";
+import {
+  assertPrefixIndexed,
+  pathUnderPrefix,
+  scopeLabel,
+  scopeOf,
+  scopesHereClause,
+  scopesOfGraph,
+} from "../graph/scopes.js";
+import { normalizePathPrefix } from "../util/paths.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { rankScopesAndFuse } from "./fuse.js";
@@ -799,21 +807,16 @@ export function ask(dir: string, query: string, opts: AskOptions = {}): AskResul
   const limit = opts.limit ?? 8;
   const corpus = loadCorpus(outDir);
   const graphRank = opts.graphRank ?? true;
-  // Trailing slash(es) stripped ONCE, up front, and this normalized value used
-  // everywhere below (validation, filtering, structural). `ask --in frontend/`
-  // must work exactly like `--in frontend` — `scopeLabel`/the footer's own
-  // `--in <scope>/` suggestion always includes the slash, so rejecting it
-  // would make the tool's own suggested next command fail.
-  const inPrefix = opts.in ? opts.in.replace(/\/+$/, "") : undefined;
+  // Normalized ONCE, up front, and this value used everywhere below
+  // (validation, filtering, structural). `ask --in frontend/` must work exactly
+  // like `--in frontend` — `scopeLabel`/the footer's own `--in <scope>/`
+  // suggestion always includes the slash, so rejecting it would make the tool's
+  // own suggested next command fail — and `--in frontend\sub` must work too,
+  // because that is what a Windows shell's tab-completion produces.
+  const inPrefix = opts.in ? normalizePathPrefix(opts.in) : undefined;
 
-  // `--in` validated up front, before any mode runs: a prefix matching no
-  // indexed node is a caller mistake (typo, wrong sub-project), not a
-  // legitimate zero-hit query, so it's a loud error rather than an empty pack.
-  if (inPrefix && corpus.graph && !corpus.graph.nodes.some((n) => pathUnderPrefix(n.path, inPrefix))) {
-    throw new Error(
-      `nothing indexed under "${inPrefix}/"${scopesHereClause(scopesOfGraph(corpus.graph))} (or any path prefix)`,
-    );
-  }
+  // `--in` validated up front, before any mode runs.
+  if (inPrefix && corpus.graph) assertPrefixIndexed(corpus.graph, inPrefix);
 
   let result: AskResult;
   if (corpus.graph) {

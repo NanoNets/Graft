@@ -9,6 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { resolveSymbol, callersOf, calleesOf, impactOf, impactOfMany, impactOfFile } from "../src/graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../src/graph/types.js";
 
@@ -96,10 +97,42 @@ test("resolveSymbol: multi-match returns all matching nodes", () => {
   );
 });
 
-test("resolveSymbol: --in filters candidates by path substring", () => {
+test("resolveSymbol: --in filters candidates by path prefix", () => {
   const g = baseGraph();
-  const matches = resolveSymbol(g, "get", { in: "cache" });
-  assert.deepEqual(matches.map((n) => n.id), ["src/cache.ts#Cache.get"]);
+  // An exact file path is a prefix of itself, so it narrows to that one file.
+  assert.deepEqual(
+    resolveSymbol(g, "get", { in: "src/cache.ts" }).map((n) => n.id),
+    ["src/cache.ts#Cache.get"],
+  );
+  // A directory prefix keeps every match under it.
+  assert.deepEqual(
+    resolveSymbol(g, "get", { in: "src" }).map((n) => n.id).sort(),
+    ["src/cache.ts#Cache.get", "src/other.ts#get"].sort(),
+  );
+});
+
+test("resolveSymbol: --in is a path prefix, not a substring, and says so when it matches nothing", () => {
+  const g = baseGraph();
+  // "cache" is a mid-path fragment of "src/cache.ts". Substring matching used to
+  // accept it, which also meant `--in src` swept up a sibling `lib/mysrc/`.
+  // Failing loudly beats silently returning zero matches the caller must guess at.
+  assert.throws(
+    () => resolveSymbol(g, "get", { in: "cache" }),
+    /nothing indexed under "cache\/"/,
+  );
+});
+
+test("resolveSymbol: --in accepts a native-separator prefix", () => {
+  const g = baseGraph();
+  // `join` produces whatever separator this platform's shell and tab-completion
+  // produce — `src\cache.ts` on Windows, where every `--in` used to match
+  // nothing. Asserted via `join` rather than a literal `\` because a posix
+  // filename may legitimately contain a backslash, so normalization is
+  // deliberately keyed to the platform separator rather than to both.
+  assert.deepEqual(
+    resolveSymbol(g, "get", { in: join("src", "cache.ts") }).map((n) => n.id),
+    ["src/cache.ts#Cache.get"],
+  );
 });
 
 test("resolveSymbol: kind:'file' nodes are excluded when a symbol matches", () => {
