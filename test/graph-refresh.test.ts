@@ -8,7 +8,6 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildGraph } from "../src/graph/build.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
@@ -18,6 +17,7 @@ import { readGraph, wiringPath } from "../src/graph/write.js";
 import { acquireLock, readStats, releaseLock, writeStats, emptyStats } from "../src/util/state.js";
 import { callTool } from "../src/mcp/tools.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { chmodDenialUnavailable } from "./helpers.js";
 
 const MATH = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
 /** A *function*, because a plain `export const` is not extracted as a symbol node. */
@@ -244,7 +244,8 @@ test("GRAFT_REFRESH=hash: drift the probe reports is drift the rebuild repairs",
 });
 
 test("a file that becomes readable again is picked up through the probe", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root reads anything, so chmod 000 proves nothing");
+  const why = chmodDenialUnavailable();
+  if (why) return t.skip(why);
   const d = repo();
   const hidden = join(d, "src", "hidden.ts");
   writeFileSync(hidden, "export function reachable(): number {\n  return 1;\n}\n");
@@ -265,7 +266,10 @@ test("a file that becomes readable again is picked up through the probe", async 
 });
 
 test("an unwritable cache costs reuse, not correctness", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root writes anywhere, so a read-only dir proves nothing");
+  // A mode on a *directory* is the one denial Windows ignores completely, so unlike
+  // the read-only-file case below there is no portable way to run this there.
+  const why = chmodDenialUnavailable();
+  if (why) return t.skip(why);
   const d = repo();
   await buildGraph(d);
 
@@ -419,7 +423,13 @@ test("callTool refreshes before answering — except for graft_check_freshness",
   assert.ok(!again.text.startsWith("[graft] refreshed"), "nothing moved — no note, no rebuild");
 });
 
-test("a process killed while holding the lock releases it", async () => {
+test("a process killed while holding the lock releases it", async (t) => {
+  // Windows has no SIGTERM: `child.kill()` there calls TerminateProcess, so no
+  // handler runs and nothing can release the lock on the way out. The safety net on
+  // that platform is the stale-lock reclaim (`LOCK_STALE_MS`), covered above.
+  if (process.platform === "win32") {
+    return t.skip("no SIGTERM on Windows — kill() terminates without unwinding, so a handler cannot run");
+  }
   const d = repo();
   const cache = join(outOf(d), ".cache");
   mkdirSync(cache, { recursive: true });
@@ -430,12 +440,14 @@ test("a process killed while holding the lock releases it", async () => {
   // for that is to exit without unwinding. So the `finally` that releases the lock
   // never ran, and the abandoned lock then blocked the background sync and made every
   // query wait-then-answer-stale until it aged out.
-  const src = fileURLToPath(new URL("../src", import.meta.url));
+  // `file://` URLs, not native paths: a dynamic `import("D:\\…\\state.ts")` fails on
+  // Windows, where ESM reads the drive letter as a URL scheme.
+  const mod = (rel: string) => JSON.stringify(new URL(rel, import.meta.url).href);
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "-e",
-      `const { acquireLockIn } = await import(${JSON.stringify(`${src}/util/state.ts`)});
-       const { releaseOnSignal } = await import(${JSON.stringify(`${src}/graph/refresh.ts`)});
+      `const { acquireLockIn } = await import(${mod("../src/util/state.ts")});
+       const { releaseOnSignal } = await import(${mod("../src/graph/refresh.ts")});
        const cache = process.argv[1];
        if (!acquireLockIn(cache)) { process.exit(9); }
        releaseOnSignal(cache);

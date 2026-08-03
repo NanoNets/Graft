@@ -15,6 +15,7 @@ import { fingerprintPath, isClean, probeDrift, readFingerprint } from "../src/gr
 import { readAskIndex } from "../src/ask/index-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { chmodDenialUnavailable } from "./helpers.js";
 
 const MATH = [
   "export function add(a: number, b: number): number {",
@@ -159,7 +160,8 @@ test("every file on disk lands in the fingerprint", async () => {
 });
 
 test("an unreadable file is still recorded, so it can't look new on every probe", async (t) => {
-  if (process.getuid?.() === 0) return t.skip("root reads anything, so chmod 000 proves nothing");
+  const why = chmodDenialUnavailable();
+  if (why) return t.skip(why);
   const d = repo();
   const secret = join(d, "src", "secret.ts");
   writeFileSync(secret, "export function secretFn(): number {\n  return 1;\n}\n");

@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { planInit, selectedWrites } from '../src/hosts/plan.js';
 import { runHostsInit } from '../src/hosts/init.js';
 import { hostIds } from '../src/hosts/registry.js';
+import { toPosixPath } from '../src/util/paths.js';
+import { tmpRepo } from './helpers.js';
 
-function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-plan-')); }
+function fresh(): string { return tmpRepo('plan'); }
 
 /** A home with every CLI graft can detect installed. */
 function fullHome(): string {
@@ -47,8 +48,9 @@ test('the three ~/.codex writes are scoped global', () => {
   const agents = planInit(fresh(), { home, ids: ['agents'] })[0];
   const globals = agents.writes.filter((w) => w.scope === 'global');
   assert.equal(globals.length, 3);
+  // Real filesystem paths, so compared in posix form rather than the platform's.
   assert.deepEqual(
-    globals.map((w) => w.path.slice(home.length)).sort(),
+    globals.map((w) => toPosixPath(w.path.slice(home.length))).sort(),
     ['/.codex/config.toml', '/.codex/hooks.json', '/.codex/hooks/graft/graft-hooks.cjs'],
   );
 });
@@ -72,7 +74,7 @@ test('adal is an instruction-only host — no MCP target', () => {
   const adal = planInit(fresh(), { home: fullHome(), ids: ['adal'] })[0];
   assert.equal(adal.writes.length, 1);
   assert.equal(adal.writes[0].kind, 'instruction');
-  assert.match(adal.writes[0].path, /\.adal\/skills\/graft\/SKILL\.md$/);
+  assert.match(toPosixPath(adal.writes[0].path), /\.adal\/skills\/graft\/SKILL\.md$/);
 });
 
 // The assertion that keeps the plan honest: whatever a real run writes must be

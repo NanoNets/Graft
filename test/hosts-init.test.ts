@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 // The MCP launch command is resolved from PATH at init time; pin it to the npx
 // form so these expectations are the same on every machine.
 process.env.GRAFT_MCP_NPX = '1';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
+import { join, sep } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { runHostsInit } from '../src/hosts/init.js';
+import { toPosixPath } from '../src/util/paths.js';
+import { runCli, tmpRepo } from './helpers.js';
 
-function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-hostsinit-')); }
+function fresh(): string { return tmpRepo('hostsinit'); }
 
 test('writes only detected hosts by default', () => {
   const home = fresh(); const repo = fresh();
@@ -106,7 +107,9 @@ test('runHostsInit registers MCP configs for selected hosts', () => {
   const home = fresh(); const repo = fresh();
   const r = runHostsInit(repo, { home, agents: ['cursor'] });
   assert.equal(r.mcp.length, 1);
-  assert.match(r.mcp[0].path, /\.cursor\/mcp\.json$/);
+  // An absolute filesystem path, so it carries the platform separator — assert the
+  // shape, not the platform.
+  assert.match(toPosixPath(r.mcp[0].path), /\.cursor\/mcp\.json$/);
   const cfg = JSON.parse(readFileSync(join(repo, '.cursor', 'mcp.json'), 'utf8'));
   assert.equal(cfg.mcpServers.graft.command, 'npx');
 });
@@ -160,17 +163,17 @@ test('global: false keeps the instruction file but skips every ~ write', () => {
 // --- CLI: choosing what gets written ------------------------------------
 
 /**
- * Run `graft init` with a scratch HOME so tests never touch the real ~/.codex,
+ * Run `graft init` with a scratch home so tests never touch the real ~/.codex,
  * and return stderr. The child gets a pipe rather than a TTY, which is exactly
  * the non-interactive path we want to exercise.
+ *
+ * `runCli`'s `home` sets `USERPROFILE` as well as `HOME` — this used to set only
+ * `HOME`, so on Windows the child read the *runner's* profile and reported
+ * whichever agents it happened to have installed instead of the fixture's.
  */
 function cliStderr(repo: string, home: string, extra: string[] = []): string {
-  const res = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', 'src/cli.ts', 'init', repo, '--no-build', ...extra],
-    { encoding: 'utf8', env: { ...process.env, HOME: home } },
-  );
-  assert.equal(res.status, 0, `exited ${res.status}: ${res.stderr}`);
+  const res = runCli(['init', repo, '--no-build', ...extra], { home });
+  assert.equal(res.status, 0, res.describe());
   return res.stderr ?? '';
 }
 
@@ -190,10 +193,11 @@ test('CLI: --dry-run prints the plan, both sections, and writes nothing', () => 
   const out = cliStderr(repo, home, ['--dry-run']);
 
   assert.match(out, /would write — this repo:/);
-  assert.match(out, /\.claude\/settings\.json/);
+  // The plan prints display paths, which keep the platform separator.
+  assert.ok(out.includes(join('.claude', 'settings.json')), out);
   assert.match(out, /AGENTS\.md/);
   assert.match(out, /affects ALL repos:/);
-  assert.match(out, /~\/\.codex\/hooks\.json/);
+  assert.ok(out.includes(`~${sep}${join('.codex', 'hooks.json')}`), out);
   assert.match(out, /nothing was written/);
 
   assert.deepEqual(readdirSync(repo), []);
@@ -241,7 +245,7 @@ test('CLI: --dry-run respects an explicit --agents list', () => {
   const home = fresh(); const repo = fresh();
   mkdirSync(join(home, '.codex'), { recursive: true });
   const out = cliStderr(repo, home, ['--agents', 'adal', '--dry-run']);
-  assert.match(out, /\.adal\/skills\/graft\/SKILL\.md/);
+  assert.ok(out.includes(join('.adal', 'skills', 'graft', 'SKILL.md')), out);
   assert.doesNotMatch(out, /AGENTS\.md/);
   assert.doesNotMatch(out, /affects ALL repos/);
 });

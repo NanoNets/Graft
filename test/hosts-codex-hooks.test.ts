@@ -7,6 +7,21 @@ import { installCodexHooks } from '../src/hosts/codex-hooks.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-cxhooks-')); }
 
+/**
+ * Windows has no POSIX exec bit — `statSync().mode & 0o111` is always 0 there, and
+ * `chmod` cannot strip a bit the filesystem doesn't have. So assert the property
+ * that exists on both platforms (the shim is installed where the hook config points)
+ * and check the mode only where there is one. Skipping the whole test instead would
+ * drop Windows coverage of the install path, which is the part that can actually
+ * break.
+ */
+const HAS_EXEC_BIT = process.platform !== 'win32';
+
+function assertRunnableShim(shim: string, note: string): void {
+  assert.ok(existsSync(shim), `${note}: shim missing at ${shim}`);
+  if (HAS_EXEC_BIT) assert.ok(statSync(shim).mode & 0o111, note);
+}
+
 test('no-op when the CLI home dir is absent', () => {
   assert.deepEqual(installCodexHooks(fresh()), []);
 });
@@ -17,8 +32,7 @@ test('writes shim + hooks.json entry, idempotent on re-run', () => {
   const w = installCodexHooks(home);
   assert.equal(w.length, 2);
   const shim = join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs');
-  assert.ok(existsSync(shim));
-  assert.ok(statSync(shim).mode & 0o111, 'shim is executable');
+  assertRunnableShim(shim, 'shim is executable');
   const cfg = JSON.parse(readFileSync(join(home, '.codex', 'hooks.json'), 'utf8'));
   const entries = cfg.hooks.PostToolUse;
   assert.equal(entries.length, 1);
@@ -72,8 +86,12 @@ test('re-heals shim exec bit when a prior install had its mode stripped', () => 
   mkdirSync(join(home, '.codex'), { recursive: true });
   installCodexHooks(home);
   const shim = join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs');
-  chmodSync(shim, 0o644);
-  assert.ok(!(statSync(shim).mode & 0o111), 'exec bit stripped before re-run');
+  if (HAS_EXEC_BIT) {
+    chmodSync(shim, 0o644);
+    assert.ok(!(statSync(shim).mode & 0o111), 'exec bit stripped before re-run');
+  }
+  // On Windows this is the plain re-run case: the install must still converge on a
+  // shim in place, which is all "re-healing" can mean without an exec bit.
   installCodexHooks(home);
-  assert.ok(statSync(shim).mode & 0o111, 'exec bit restored after re-run');
+  assertRunnableShim(shim, 'exec bit restored after re-run');
 });

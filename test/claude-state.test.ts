@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, chmodSync, mkdirSync, readdirSync, utimesSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -49,18 +49,27 @@ test('acquireLock reclaims a stale lock', () => {
   assert.equal(acquireLock(d), true, 'stale lock reclaimed');
 });
 
-test('writeJsonAtomic leaves no scratch file behind when the write fails', (t) => {
-  if (process.getuid?.() === 0) return t.skip('root writes anywhere, so a read-only dir proves nothing');
+test('writeJsonAtomic leaves no scratch file behind when the write fails', () => {
   const d = fresh();
   const dir = join(d, 'locked');
   mkdirSync(dir, { recursive: true });
-  chmodSync(dir, 0o500);
+
+  // The failure is injected by putting a *directory* where the file belongs, so the
+  // rename fails. This replaces a read-only parent dir (`chmod 0o500`), which was
+  // both non-portable — Windows ignores it, and so does root, hence the skip this
+  // test used to carry — and weaker: the tmp file was never created there, so there
+  // was never anything that could have been left behind. Here it definitely is.
+  const target = join(dir, 'out.json');
+  mkdirSync(target);
 
   // Every CLI invocation is a new pid, so a repeatedly failing write would leave one
   // full-size `<path>.<pid>.tmp` per attempt, and nothing in graft ever lists these
   // directories to clean them up — on a nearly-full disk that accelerates the ENOSPC
   // that caused it.
-  assert.throws(() => writeJsonAtomic(join(dir, 'out.json'), { pad: 'x'.repeat(1024) }));
-  chmodSync(dir, 0o700);
-  assert.deepEqual(readdirSync(dir), [], 'no .tmp residue');
+  assert.throws(() => writeJsonAtomic(target, { pad: 'x'.repeat(1024) }));
+  assert.deepEqual(
+    readdirSync(dir).filter((f) => f.endsWith('.tmp')),
+    [],
+    'no .tmp residue',
+  );
 });
