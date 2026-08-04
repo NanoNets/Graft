@@ -10,12 +10,13 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import CSharp from "tree-sitter-c-sharp";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "csharp";
 
 /** Map a file path to a supported language, or null if unsupported. */
 export function languageOf(path: string): Language | null {
@@ -24,6 +25,7 @@ export function languageOf(path: string): Language | null {
   if (/\.(ts|mts|cts|js|mjs|cjs)$/.test(p)) return "typescript";
   if (p.endsWith(".py") || p.endsWith(".pyi")) return "python";
   if (p.endsWith(".go")) return "go";
+  if (p.endsWith(".cs")) return "csharp";
   return null;
 }
 
@@ -111,11 +113,23 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+const CS_KINDS: Record<string, Kind> = {
+  class_declaration: "class",
+  struct_declaration: "struct",
+  interface_declaration: "interface",
+  record_declaration: "class",
+  enum_declaration: "enum",
+  method_declaration: "method",
+  constructor_declaration: "method",
+  property_declaration: "method",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  csharp: CS_KINDS,
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -131,6 +145,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  csharp: CSharp,
 };
 
 export interface WalkCtx {
@@ -227,7 +242,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "csharp"
+              ? csExported(node)
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -255,7 +272,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   }
 
   // not a definition — capture calls/imports, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
+  const callType = ctx.lang === "python" ? "call" : ctx.lang === "csharp" ? "invocation_expression" : "call_expression";
   if (node.type === callType) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
@@ -281,6 +298,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "csharp") return describeCSharp(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -310,6 +328,40 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+/** C# definition shapes: classes, structs, interfaces, records, enums,
+ * methods, constructors, and properties. Records are treated as classes.
+ * Methods inside interfaces use "method" kind (not "function"). */
+function describeCSharp(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = CS_KINDS[node.type];
+  if (!mapped) return null;
+
+  const name = node.childForFieldName("name")?.text;
+  if (!name) return null;
+
+  let kind = mapped;
+
+  // Methods inside interfaces are still methods
+  if (kind === "method" && ctx.enclosingKind === "interface") {
+    kind = "method";
+  }
+
+  // Properties inside interfaces
+  if (kind === "method" && node.type === "property_declaration" && ctx.enclosingKind === "interface") {
+    kind = "method";
+  }
+
+  // Body: declaration_list for types, block for methods/constructors, accessor_list for properties
+  const body = node.childForFieldName("body")
+    ?? node.childForFieldName("declaration_list")
+    ?? node.childForFieldName("accessor_list");
+
+  // For records with parameter_list (positional records), the body is the parameter_list
+  const paramList = node.type === "record_declaration" ? node.childForFieldName("parameter_list") : null;
+  const headerEnd = body ? body.startIndex : paramList ? paramList.endIndex : node.endIndex;
+
+  return { name, kind, headerEnd, hashNode: node };
 }
 
 /** Go definition shapes: top-level funcs, receiver methods, and named types
@@ -384,6 +436,23 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     }
     return edges;
   }
+  if (ctx.lang === "csharp") {
+    // C# uses base_list for both inheritance and interface implementation
+    const baseList = node.namedChildren.find((c) => c.type === "base_list");
+    if (!baseList) return edges;
+    for (const clause of baseList.namedChildren) {
+      // First type is the base class (extends), rest are interfaces (implements)
+      const typeName = csTypeName(clause);
+      if (!typeName) continue;
+      const isFirst = baseList.namedChildren.indexOf(clause) === 0;
+      // In C#, the first base type after : is the base class if it's a class,
+      // otherwise all are interfaces. We can't distinguish at parse time, so
+      // we treat the first as extends and the rest as implements.
+      const relation: Relation = isFirst ? "extends" : "implements";
+      edges.push({ source: classId, relation, name: typeName, file: ctx.rel });
+    }
+    return edges;
+  }
   const heritage = node.namedChildren.find((c) => c.type === "class_heritage");
   for (const clause of heritage?.namedChildren ?? []) {
     const relation: Relation | null =
@@ -424,6 +493,12 @@ function calleeName(
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
+  if (lang === "csharp" && fn.type === "member_access_expression") {
+    const p = fn.childForFieldName("name") ?? fn.namedChildren.at(-1);
+    const expr = fn.childForFieldName("expression");
+    const receiver = expr?.type === "identifier" ? expr.text : expr?.type === "this" ? "this" : undefined;
+    return p ? { name: p.text, viaMember: true, receiver } : null;
+  }
   return null;
 }
 
@@ -457,6 +532,7 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "csharp") return node.type === "using_directive";
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -471,6 +547,11 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
+  }
+  if (lang === "csharp") {
+    // using_directive has no `name` field; the namespace is the first named child.
+    const first = node.namedChildren[0];
+    return first?.text ?? null;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
@@ -496,4 +577,27 @@ function tsExported(node: Parser.SyntaxNode): boolean {
     p = p.parent;
   }
   return false;
+}
+
+/** C# visibility: a symbol is exported iff it has a `public` modifier. */
+function csExported(node: Parser.SyntaxNode): boolean {
+  for (const child of node.namedChildren) {
+    if (child.type === "modifier" && child.text === "public") return true;
+  }
+  return false;
+}
+
+/** Extract a bare type name from a C# base_list entry (identifier or generic_name). */
+function csTypeName(node: Parser.SyntaxNode): string | null {
+  if (node.type === "identifier") return node.text;
+  if (node.type === "generic_name") {
+    const id = node.childForFieldName("name") ?? node.namedChildren[0];
+    return id?.text ?? null;
+  }
+  if (node.type === "qualified_name") {
+    // e.g. `System.IDisposable` — return the rightmost identifier
+    const right = node.namedChildren.at(-1);
+    return right?.text ?? null;
+  }
+  return null;
 }
