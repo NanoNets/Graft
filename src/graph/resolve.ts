@@ -119,7 +119,12 @@ export function resolveEdges(
         // method name is not evidence that this receiver has that method.
         continue;
       }
-      const hit = resolveName(e.name!, e.file, ["function"], perFileName, globalName);
+      // Java has no "function" kind — every definition (incl. static methods) is
+      // "method" — so a bare (non-member) call must search method kinds, not the
+      // TS/Python "function" kind. The edge carries no language tag, so we infer
+      // from the source file's extension.
+      const kinds: Kind[] = e.file.endsWith(".java") ? ["method"] : ["function"];
+      const hit = resolveName(e.name!, e.file, kinds, perFileName, globalName);
       if (hit) add(e.source, hit.id, "calls", hit.confidence); // drop unresolved calls (too noisy)
     }
   }

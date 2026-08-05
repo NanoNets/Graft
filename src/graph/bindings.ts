@@ -55,6 +55,20 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     }
     return null;
   }
+  if (lang === "java") {
+    const javaDefTypes = new Set([
+      "class_declaration",
+      "interface_declaration",
+      "record_declaration",
+      "enum_declaration",
+      "method_declaration",
+      "constructor_declaration",
+      "annotation_type_declaration",
+      "annotation_type_element_declaration",
+    ]);
+    if (javaDefTypes.has(node.type)) return node.childForFieldName("name")?.text ?? null;
+    return null;
+  }
   const defTypes =
     lang === "python"
       ? new Set(["class_definition", "function_definition"])
@@ -116,6 +130,10 @@ export function resolveRecvType(
   return (
     (ctx.lang === "go" && receiver === ctx.goReceiverVar ? ctx.enclosingClass : undefined) ??
     ctx.bindings.lookup(ctx.scope, receiver) ??
+    // Java implicit field access: a bare `ra` in a method body that isn't a
+    // local or parameter is an implicit `this.ra` — look it up under the
+    // enclosing class scope. (Python/TS require an explicit `self.` / `this.`.)
+    (ctx.lang === "java" && ctx.enclosingClass ? ctx.bindings.lookup([ctx.enclosingClass], `this.${receiver}`) : undefined) ??
     undefined
   );
 }
@@ -124,6 +142,18 @@ function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean {
   if (lang === "python") return node.type === "class_definition";
   if (lang === "typescript" || lang === "tsx") {
     return node.type === "class_declaration" || node.type === "abstract_class_declaration";
+  }
+  if (lang === "java") {
+    // Classes, records, interfaces (default methods use `this`), enums (enum
+    // methods use `this`), and annotation types all define a `this`-scope for
+    // field bindings.
+    return (
+      node.type === "class_declaration" ||
+      node.type === "record_declaration" ||
+      node.type === "interface_declaration" ||
+      node.type === "enum_declaration" ||
+      node.type === "annotation_type_declaration"
+    );
   }
   return false;
 }
@@ -169,6 +199,7 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  else if (lang === "java") handleJava(node, scope, classScope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -319,4 +350,148 @@ function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindin
     }
     if (typeName) bindings.set(scopePath, nameNode.text, typeName);
   }
+}
+
+/** Java bindings: field declarations, local variables, parameter type
+ * annotations (incl. varargs, try-with-resources, enhanced-for, and catch
+ * parameters), for receiver-type resolution on member calls. Field types come
+ * from the type annotation (or `new X()` initializer); locals likewise. Fields
+ * bind under the enclosing class scope as `this.<name>` so `this.foo` lookups
+ * resolve; locals and parameters bind under the lexical scope. */
+function handleJava(
+  node: Parser.SyntaxNode,
+  scope: string[],
+  classScope: string | null,
+  bindings: FileBindings,
+): void {
+  const scopePath = scope.join(".");
+
+  // field_declaration: `private final IFoo foo;` or `private int x, y;`
+  if (node.type === "field_declaration") {
+    const typeNode = node.childForFieldName("type");
+    let typeName = javaTypeName(typeNode);
+    for (const declarator of node.namedChildren.filter((c) => c.type === "variable_declarator")) {
+      const name = declarator.childForFieldName("name")?.text;
+      if (!name) continue;
+      // Fallback: `Foo x = new Bar()` → resolve to `Bar` from the initializer.
+      if (!typeName) {
+        const value = declarator.childForFieldName("value");
+        typeName = javaNewTypeName(value);
+      }
+      if (typeName) bindings.set(classScope ?? scopePath, `this.${name}`, typeName);
+    }
+    return;
+  }
+
+  // local_variable_declaration: `var x = new Foo();` or `Foo x = new Foo();`
+  if (node.type === "local_variable_declaration") {
+    const typeNode = node.childForFieldName("type");
+    let typeName = javaTypeName(typeNode);
+    for (const declarator of node.namedChildren.filter((c) => c.type === "variable_declarator")) {
+      const name = declarator.childForFieldName("name")?.text;
+      if (!name) continue;
+      // Fallback: `var x = new Foo()` → resolve to `Foo` from the initializer.
+      if (!typeName || typeName === "var") {
+        const value = declarator.childForFieldName("value");
+        typeName = javaNewTypeName(value);
+      }
+      if (typeName && typeName !== "var") bindings.set(scopePath, name, typeName);
+    }
+    return;
+  }
+
+  // formal_parameter: `Foo bar` in method/constructor signatures
+  if (node.type === "formal_parameter") {
+    const name = node.childForFieldName("name")?.text;
+    const typeName = javaTypeName(node.childForFieldName("type"));
+    if (name && typeName) bindings.set(scopePath, name, typeName);
+    return;
+  }
+
+  // spread_parameter (varargs): `Foo... args` — tree-sitter gives this a distinct
+  // node type with no field names; the type is the first named child and the name
+  // lives inside a `variable_declarator`.
+  if (node.type === "spread_parameter") {
+    const typeNode = node.namedChildren.find((c) => c.type !== "variable_declarator");
+    const name = node.namedChildren.find((c) => c.type === "variable_declarator")?.childForFieldName("name")?.text;
+    const typeName = javaTypeName(typeNode);
+    if (name && typeName) bindings.set(scopePath, name, typeName);
+    return;
+  }
+
+  // resource (try-with-resources): `try (Foo f = new Foo())` — the `resource` node
+  // has `type`, `name`, and `value` fields, binding like a local variable.
+  if (node.type === "resource") {
+    const name = node.childForFieldName("name")?.text;
+    let typeName = javaTypeName(node.childForFieldName("type"));
+    // Fallback: `try (var f = new Foo())` → resolve from the initializer.
+    if (!typeName || typeName === "var") {
+      typeName = javaNewTypeName(node.childForFieldName("value"));
+    }
+    if (name && typeName && typeName !== "var") bindings.set(scopePath, name, typeName);
+    return;
+  }
+
+  // enhanced_for_statement: `for (Foo f : items)` — the loop variable `f` is
+  // typed by the `type` field; bind it under the lexical scope so `f.method()`
+  // inside the loop body resolves.
+  if (node.type === "enhanced_for_statement") {
+    const name = node.childForFieldName("name")?.text;
+    const typeName = javaTypeName(node.childForFieldName("type"));
+    if (name && typeName) bindings.set(scopePath, name, typeName);
+    return;
+  }
+
+  // catch_formal_parameter: `catch (BizException e)` — tree-sitter gives this a
+  // distinct node type (not `formal_parameter`); the type lives in a `catch_type`
+  // child (which holds one `type_identifier`, or several for multi-catch
+  // `IOException | BizException` — bind the first).
+  if (node.type === "catch_formal_parameter") {
+    const name = node.childForFieldName("name")?.text;
+    const catchType = node.namedChildren.find((c) => c.type === "catch_type");
+    const typeNode = catchType?.namedChildren.find((c) => c.type === "type_identifier" || c.type === "scoped_type_identifier" || c.type === "identifier");
+    const typeName = javaTypeName(typeNode);
+    if (name && typeName) bindings.set(scopePath, name, typeName);
+  }
+}
+
+/** Extract a bare type name from a Java type node: `type_identifier` (`Foo`),
+ * `scoped_type_identifier` (`com.example.Base` → `Base`), `generic_type`
+ * (`List<String>` → `List`, `com.example.Base<Bar>` → `Base`), `array_type`
+ * (`Foo[]` → `Foo`), or a primitive type (`int`, `void`, ...). A superset of
+ * extract.ts's `javaTypeName` (which is used only for heritage edges and so
+ * omits the primitive branches), duplicated here rather than imported, per
+ * this file's no-value-import-of-extract rule. */
+function javaTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "type_identifier" || node.type === "identifier") return node.text;
+  if (node.type === "scoped_type_identifier") return node.namedChildren.at(-1)?.text ?? null;
+  if (node.type === "generic_type") {
+    // `List<String>` → inner `type_identifier`; `com.example.Base<Bar>` → inner
+    // `scoped_type_identifier`. tree-sitter-java gives `generic_type` no `type`
+    // field, so find the type-bearing child and recurse to strip any scope.
+    const inner = node.namedChildren.find(
+      (c) => c.type === "type_identifier" || c.type === "scoped_type_identifier" || c.type === "identifier",
+    );
+    return inner ? javaTypeName(inner) : null;
+  }
+  if (node.type === "array_type") {
+    // `Foo[]` → `Foo`; the element type is the `element` field (or first non-`dimensions` child).
+    const el = node.childForFieldName("element") ?? node.namedChildren.find((c) => c.type !== "dimensions");
+    return el ? javaTypeName(el) : null;
+  }
+  // Primitive types (`int`, `boolean`, `void`, ...) — keep the keyword; these
+  // never resolve to a repo symbol, so the value only goes to callers that
+  // ignore non-class types.
+  if (node.type === "integral_type" || node.type === "void_type" || node.type === "boolean_type" || node.type === "floating_point_type") {
+    return node.text;
+  }
+  return null;
+}
+
+/** Resolve `new Foo()` → `Foo` from a Java `object_creation_expression` value. */
+function javaNewTypeName(value: Parser.SyntaxNode | null | undefined): string | null {
+  if (value?.type !== "object_creation_expression") return null;
+  const typeNode = value.childForFieldName("type");
+  return javaTypeName(typeNode);
 }

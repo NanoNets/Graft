@@ -10,12 +10,13 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import Java from "tree-sitter-java";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "java";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,6 +45,7 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  { ext: ".java", grammar: "java", label: "java" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -149,11 +151,25 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+const JAVA_KINDS: Record<string, Kind> = {
+  class_declaration: "class",
+  interface_declaration: "interface",
+  record_declaration: "class",
+  enum_declaration: "enum",
+  method_declaration: "method",
+  constructor_declaration: "method",
+  // Annotation type (`@interface`) — treated as an interface; its elements are
+  // method-like declarations (`String value() default "";`).
+  annotation_type_declaration: "interface",
+  annotation_type_element_declaration: "method",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  java: JAVA_KINDS,
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +185,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  java: Java,
 };
 
 export interface WalkCtx {
@@ -268,7 +285,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "java"
+              ? javaExported(node)
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -278,11 +297,19 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     });
     // structural containment
     edges.push({ source: ctx.parentId, relation: "contains", targetId: id, file: ctx.rel });
-    // class heritage
-    if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
+    // class heritage: TS/Python/Go classes (kind === "class"), and Java
+    // interfaces/enum declarations also carry heritage (extends_interfaces /
+    // implements), so the gate is "class" OR a Java interface/enum.
+    if (desc.kind === "class" || (ctx.lang === "java" && (desc.kind === "interface" || desc.kind === "enum"))) {
+      edges.push(...heritageEdges(node, id, ctx));
+    }
 
     const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
-    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
+    // enclosingClass is the nearest class name for `this`-resolution. For Java,
+    // interfaces and enums also define `this` (interface default methods, enum
+    // methods), so they carry the class-like role alongside classes.
+    const isJavaClassLike = ctx.lang === "java" && (desc.kind === "class" || desc.kind === "interface" || desc.kind === "enum");
+    const enclosingClass = desc.kind === "class" || isJavaClassLike ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
@@ -300,7 +327,12 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   }
 
   // not a definition — capture calls/imports/references, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
+  const callType =
+    ctx.lang === "python"
+      ? "call"
+      : ctx.lang === "java"
+        ? "method_invocation"
+        : "call_expression";
   if (node.type === callType) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
@@ -440,6 +472,7 @@ function isDeclarationName(node: Parser.SyntaxNode): boolean {
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "java") return describeJava(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -469,6 +502,32 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+/** Java definition shapes: classes, interfaces, records, enums, methods, and
+ * constructors. Records are treated as classes. Methods/constructors may have no
+ * body (abstract methods, interface method signatures) — header end falls back
+ * to the parameter list or the whole node. */
+function describeJava(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = JAVA_KINDS[node.type];
+  if (!mapped) return null;
+
+  const name = node.childForFieldName("name")?.text;
+  if (!name) return null;
+
+  // Body: class_body / interface_body / enum_body for types, block /
+  // constructor_body for concrete methods/constructors. Abstract methods and
+  // interface method signatures carry no body — fall back to the parameter list
+  // (or the whole node for a bare signature).
+  const body = node.childForFieldName("body");
+  const paramList = node.childForFieldName("parameters");
+  const headerEnd = body ? body.startIndex : paramList ? paramList.endIndex : node.endIndex;
+
+  // Methods inside interfaces (interface method signatures, default/static
+  // methods) and abstract methods are all "method" — the single Kind covers
+  // them, so no kind adjustment is needed here (unlike Python, which promotes
+  // a "function" to "method" inside a class).
+  return { name, kind: mapped, headerEnd, hashNode: node };
 }
 
 /** Go definition shapes: top-level funcs, receiver methods, and named types
@@ -543,6 +602,37 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     }
     return edges;
   }
+  if (ctx.lang === "java") {
+    // A class: `extends Base` (superclass) + `implements IFoo, IBar` (super_interfaces).
+    // An enum: `implements IFoo, IBar` (super_interfaces only, no extends).
+    // An interface: `extends AutoCloseable, Comparable<X>` (extends_interfaces).
+    // `superclass` is a field on class_declaration only; `interfaces` is a field
+    // on class/record/enum declarations (all naming a super_interfaces node);
+    // `extends_interfaces` is a positional named child on interface_declaration.
+    const superclass = node.childForFieldName("superclass");
+    if (superclass) {
+      const typeName = javaTypeName(superclass.namedChildren[0]);
+      if (typeName) edges.push({ source: classId, relation: "extends", name: typeName, file: ctx.rel });
+    }
+    const implementsClause = node.childForFieldName("interfaces");
+    if (implementsClause) {
+      const typeList = implementsClause.namedChildren.find((c) => c.type === "type_list");
+      for (const t of typeList?.namedChildren ?? []) {
+        const typeName = javaTypeName(t);
+        if (typeName) edges.push({ source: classId, relation: "implements", name: typeName, file: ctx.rel });
+      }
+    }
+    // An interface: `extends AutoCloseable, Comparable<X>` (extends_interfaces).
+    const extendsInterfaces = node.namedChildren.find((c) => c.type === "extends_interfaces");
+    if (extendsInterfaces) {
+      const typeList = extendsInterfaces.namedChildren.find((c) => c.type === "type_list");
+      for (const t of typeList?.namedChildren ?? []) {
+        const typeName = javaTypeName(t);
+        if (typeName) edges.push({ source: classId, relation: "extends", name: typeName, file: ctx.rel });
+      }
+    }
+    return edges;
+  }
   const heritage = node.namedChildren.find((c) => c.type === "class_heritage");
   for (const clause of heritage?.namedChildren ?? []) {
     const relation: Relation | null =
@@ -565,6 +655,17 @@ function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
 ): { name: string; viaMember: boolean; receiver?: string } | null {
+  // Java `method_invocation` carries the called name in a `name` field and the
+  // receiver in an `object` field — there is no `function` field like the
+  // TS/Python/Go `call_expression` shape, so handle it before that lookup.
+  if (lang === "java" && node.type === "method_invocation") {
+    const p = node.childForFieldName("name");
+    const obj = node.childForFieldName("object");
+    if (!p) return null;
+    if (!obj) return { name: p.text, viaMember: false }; // `foo()` — bare call
+    const receiver = javaReceiver(obj);
+    return { name: p.text, viaMember: true, receiver };
+  }
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -612,10 +713,26 @@ function tsReceiver(fn: Parser.SyntaxNode): string | undefined {
   return undefined;
 }
 
+/** Java `method_invocation` object field's receiver text: `this`, `this.x`, or a
+ * bare identifier. A `field_access` like `this.foo` resolves to `this.foo`; a
+ * chained `foo.bar.baz()` only surfaces the outer `foo.bar` (good enough for
+ * binding lookup). Anything else (a nested call, a lambda) → undefined. */
+function javaReceiver(obj: Parser.SyntaxNode): string | undefined {
+  if (obj.type === "this") return "this";
+  if (obj.type === "identifier") return obj.text;
+  if (obj.type === "field_access") {
+    const field = obj.childForFieldName("field");
+    const fieldObj = obj.childForFieldName("object");
+    if (fieldObj?.type === "this" && field) return `this.${field.text}`;
+  }
+  return undefined;
+}
+
 function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "java") return node.type === "import_declaration";
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -630,6 +747,19 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
+  }
+  if (lang === "java") {
+    // import_declaration's first named child is a scoped_identifier
+    // (java.util.List) or identifier (single-name). Static imports name a
+    // member (`com.foo.Bar.method`); keep the full dotted path — resolution
+    // treats it as an external package unless it matches an in-repo symbol.
+    // Wildcard imports (`com.example.*` / `static com.foo.Bar.*`) carry an
+    // `asterisk` as a second named child; append `.*` so the specifier reflects
+    // the on-demand import and never matches a concrete same-named symbol.
+    const first = node.namedChildren[0];
+    if (!first) return null;
+    const hasWildcard = node.namedChildren.some((c) => c.type === "asterisk");
+    return hasWildcard ? `${first.text}.*` : first.text;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
@@ -655,4 +785,40 @@ function tsExported(node: Parser.SyntaxNode): boolean {
     p = p.parent;
   }
   return false;
+}
+
+/** Java visibility: a symbol is exported iff its `modifiers` child (a positional
+ * named child, not field-accessible) contains a `public` keyword. `protected`
+ * and package-private default to not exported, matching the C# rule. */
+function javaExported(node: Parser.SyntaxNode): boolean {
+  const mods = node.namedChildren.find((c) => c.type === "modifiers");
+  return !!mods && /\bpublic\b/.test(mods.text);
+}
+
+/** Extract a bare type name from a Java type node: `type_identifier` (`Foo`),
+ * `scoped_type_identifier` (`com.example.Base` → `Base`), `generic_type`
+ * (`List<String>` → `List`, `com.example.Base<Bar>` → `Base`), or `array_type`
+ * (`Foo[]` → `Foo`). Used for heritage edges. */
+function javaTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "type_identifier" || node.type === "identifier") return node.text;
+  if (node.type === "scoped_type_identifier") {
+    // `com.example.Base` — the rightmost identifier is the simple name.
+    return node.namedChildren.at(-1)?.text ?? null;
+  }
+  if (node.type === "generic_type") {
+    // `List<String>` → inner `type_identifier`; `com.example.Base<Bar>` → inner
+    // `scoped_type_identifier`. tree-sitter-java gives `generic_type` no `type`
+    // field, so find the type-bearing child and recurse to strip any scope.
+    const inner = node.namedChildren.find(
+      (c) => c.type === "type_identifier" || c.type === "scoped_type_identifier" || c.type === "identifier",
+    );
+    return inner ? javaTypeName(inner) : null;
+  }
+  if (node.type === "array_type") {
+    // `Foo[]` → `Foo`; the element type is the `element` field (or first named child).
+    const el = node.childForFieldName("element") ?? node.namedChildren.find((c) => c.type !== "dimensions");
+    return el ? javaTypeName(el) : null;
+  }
+  return null;
 }
