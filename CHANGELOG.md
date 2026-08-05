@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **The build banner and repo map now name the language, not its parser.** JavaScript
+  files (`.js`, `.mjs`, `.cjs`) use the TypeScript grammar internally, and `.jsx`
+  uses the TSX grammar, but reporting those parser names made indexed files look
+  absent. Coverage now reports `javascript` and `jsx` alongside the existing
+  `typescript`, `tsx`, `python`, and `go` labels ([#36]).
+
+- **README: `init` does not write a `CLAUDE.md` section.** Claude Code receives the
+  wholly-owned `.claude/skills/graft/SKILL.md`; existing `CLAUDE.md` content is
+  never touched ([#36]).
+
 - **Windows: `graft upgrade` no longer reinstalls over an npx run.** The npx-cache check
   matched `/_npx/` against a path that arrives with the platform separator, so it was
   always false on Windows and `graft upgrade` ran `npm install -g` instead of explaining
@@ -64,6 +74,7 @@
 
 [#33]: https://github.com/NanoNets/Graft/issues/33
 [#35]: https://github.com/NanoNets/Graft/issues/35
+[#36]: https://github.com/NanoNets/Graft/issues/36
 
 ## 0.8.2
 
