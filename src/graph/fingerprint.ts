@@ -7,9 +7,9 @@
  * with the last build's record get read and hashed, which is what keeps a `touch`
  * or a `git checkout` of identical bytes from triggering a pointless rebuild.
  *
- * Note graft has no notion of git here (it never shells out to git, never reads
- * `.git`): drift is measured against the bytes in the working tree, so an
- * uncommitted, staged, or committed edit all look the same — which is the point.
+ * Git supplies the visible file set (`tracked + untracked - ignored`) when
+ * available, but drift is still measured against bytes in the working tree:
+ * an uncommitted, staged, or committed edit to an indexed file looks the same.
  *
  * `<outDir>/.cache/fingerprint.json` is a projection of the extraction cache
  * (`extract-cache.ts`) minus the parse results, written by the same build. Keeping

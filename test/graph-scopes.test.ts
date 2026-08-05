@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,23 @@ test("workspace globs are intent: packages/* honored, deeper ignored", () => {
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["packages/cli", "packages/core"]);
   rmSync(d, { recursive: true, force: true });
+});
+
+test("gitignored generated workspace directories cannot become scopes (#39)", () => {
+  const d = fx({
+    ".gitignore": "generated/\n",
+    "package.json": JSON.stringify({ workspaces: ["packages/*", "generated/*"] }),
+    "packages/app/package.json": "{}",
+    "packages/app/src/index.ts": "export const app = 1;",
+    "generated/bundle/package.json": "{}",
+    "generated/bundle/index.ts": "export const generated = 1;",
+  });
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: d });
+    assert.deepEqual(discoverScopes(d).map((s) => s.prefix), ["packages/app"]);
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
 });
 
 test("root-only marker -> canonical single scope", () => {

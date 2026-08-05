@@ -114,9 +114,9 @@ export interface GraphBuildResult {
  * directory it lives in (posix, `.` for the root). Found anywhere in the tree, so a
  * monorepo whose module is in a subdir (e.g. `backend/go.mod`) resolves too. Lets edge
  * resolution map Go import paths to in-repo files. */
-function readGoModules(root: string): GoModule[] {
+function readGoModules(root: string, repoFiles: string[]): GoModule[] {
   const mods: GoModule[] = [];
-  for (const f of walkDir(root)) {
+  for (const f of repoFiles) {
     if (basename(f) !== "go.mod") continue;
     try {
       const m = readFileSync(f, "utf8").match(/^\s*module\s+(\S+)/m);
@@ -136,8 +136,11 @@ export async function buildGraph(
 ): Promise<GraphBuildResult> {
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
-  const files = listSourceStats(root, outDir);
-  const discoveredScopes = discoverScopes(root);
+  // Enumerate once: source extraction, scope discovery, and Go module
+  // resolution must agree on the same Git-ignore-aware working-tree view.
+  const repoFiles = walkDir(root);
+  const files = listSourceStats(root, outDir, repoFiles);
+  const discoveredScopes = discoverScopes(root, repoFiles);
 
   const nodes: NodeV1[] = [];
   const rawEdges: RawEdge[] = [];
@@ -232,7 +235,7 @@ export async function buildGraph(
     files: entries,
   });
 
-  const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root) });
+  const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root, repoFiles) });
 
   // graph.json is its own Tier-2 cache: fold in the prior meaning layer so an
   // unchanged body is never re-summarized (and a Tier-1-only run never wipes it).

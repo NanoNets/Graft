@@ -21,9 +21,10 @@
  *  7. `label` = `prefix` (both "" for root); ordering is prefix-length desc,
  *     then lexicographic.
  */
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
-import { SKIP_DIRS } from "../ingest/fs.js";
+import { SKIP_DIRS, walkDir } from "../ingest/fs.js";
+import { relPosix } from "../util/paths.js";
 import type { GraphV1, ScopeV1 } from "./types.js";
 
 /** Project-marker files, checked in this order (also the order `markers` is built in). */
@@ -31,28 +32,17 @@ const MARKERS = ["package.json", "go.mod", "pyproject.toml", "setup.py", "Cargo.
 
 const CANONICAL_ROOT: ScopeV1[] = [{ prefix: "", label: "", markers: [] }];
 
-/** Recursively collect every directory under `root` (posix rel path, "" = root itself),
- * reusing `walkDir`'s skip rules (dot-dirs, `SKIP_DIRS`) so build-output and dependency
- * trees are never scanned for markers. */
-function collectDirs(root: string): string[] {
-  const out: string[] = [""];
-  const walk = (absDir: string, relDir: string): void => {
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(absDir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
-      const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
-      out.push(rel);
-      walk(join(absDir, entry.name), rel);
-    }
-  };
-  walk(root, "");
-  return out;
+/** Collect directories represented by the canonical visible file set. Building
+ * this from `walkDir` keeps scope discovery aligned with extraction: an ignored
+ * generated tree cannot become a marker or workspace scope. */
+function collectDirs(root: string, repoFiles: string[]): string[] {
+  const out = new Set<string>([""]);
+  for (const abs of repoFiles) {
+    const parts = relPosix(root, abs).split("/");
+    parts.pop();
+    for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
+  }
+  return [...out];
 }
 
 /** Minimal `packages:` list parser for `pnpm-workspace.yaml` — no YAML dependency,
@@ -99,10 +89,9 @@ function readWorkspaceGlobs(root: string): string[] | null {
   return null;
 }
 
-/** Resolve one workspace glob to matched dir paths (posix, rel to `root`). Supports
- * only `dir/*` (immediate subdirs) and `dir/**` (any nested depth) forms, implemented
- * with plain `readdir` — no glob dependency, per spec. Unsupported forms resolve empty. */
-function resolveGlob(root: string, pattern: string): string[] {
+/** Resolve one workspace glob against visible directories only. Supports
+ * `dir/*` (immediate subdirs), `dir/**` (any nested depth), and literal dirs. */
+function resolveGlob(dirs: string[], pattern: string): string[] {
   const norm = pattern.replace(/\\/g, "/").replace(/\/$/, "");
   let base: string;
   let recursive: boolean;
@@ -119,50 +108,18 @@ function resolveGlob(root: string, pattern: string): string[] {
     base = norm.slice(0, -2);
     recursive = false;
   } else if (!norm.includes("*")) {
-    // Literal entry (no glob chars), e.g. `packages: ['apps/*', 'docs']` — a plain
-    // workspace-list entry that names a real directory counts as a workspace match
-    // in its own right, same as a resolved glob would. Without this, a literal
-    // entry silently resolves to nothing while Rule 2 still strips its
-    // `package.json` marker (it's a JS-family dir that never matched the glob
-    // set), de-scoping a real workspace package.
-    try {
-      return existsSync(join(root, norm)) && statSync(join(root, norm)).isDirectory()
-        ? [norm]
-        : [];
-    } catch {
-      return [];
-    }
+    return dirs.includes(norm) ? [norm] : [];
   } else {
     return []; // unsupported glob form
   }
 
-  const results: string[] = [];
-  const listDirs = (absDir: string, relDir: string): string[] => {
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(absDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    return entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS.has(e.name))
-      .map((e) => (relDir === "" ? e.name : `${relDir}/${e.name}`));
-  };
-
-  const baseAbs = base === "" ? root : join(root, base);
-  if (!recursive) {
-    results.push(...listDirs(baseAbs, base));
-  } else {
-    const stack = [base];
-    while (stack.length) {
-      const relDir = stack.pop()!;
-      const absDir = relDir === "" ? root : join(root, relDir);
-      const children = listDirs(absDir, relDir);
-      results.push(...children);
-      stack.push(...children);
-    }
-  }
-  return results;
+  return dirs.filter((dir) => {
+    if (dir === "") return false;
+    if (recursive) return base === "" || dir.startsWith(`${base}/`);
+    const slash = dir.lastIndexOf("/");
+    const parent = slash === -1 ? "" : dir.slice(0, slash);
+    return parent === base;
+  });
 }
 
 interface Candidate {
@@ -171,9 +128,9 @@ interface Candidate {
 }
 
 /** Walk the tree (reusing `walkDir`'s skip rules) and find project-marker dirs. */
-export function discoverScopes(root: string): ScopeV1[] {
+export function discoverScopes(root: string, repoFiles: string[] = walkDir(root)): ScopeV1[] {
   const absRoot = resolve(root);
-  const dirs = collectDirs(absRoot);
+  const dirs = collectDirs(absRoot, repoFiles);
 
   const markerMap = new Map<string, string[]>();
   for (const dir of dirs) {
@@ -185,7 +142,7 @@ export function discoverScopes(root: string): ScopeV1[] {
   const workspaceMatches = new Set<string>();
   if (workspaceGlobs) {
     for (const glob of workspaceGlobs) {
-      for (const dir of resolveGlob(absRoot, glob)) workspaceMatches.add(dir);
+      for (const dir of resolveGlob(dirs, glob)) workspaceMatches.add(dir);
     }
   }
 

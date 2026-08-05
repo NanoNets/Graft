@@ -12,8 +12,8 @@ import { relPosix } from "../util/paths.js";
 import { languageOf } from "./extract.js";
 
 /** The source files a graph build parses: supported languages, minus the output dir. */
-export function listSourceFiles(root: string, outDir: string): string[] {
-  return walkDir(root).filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
+export function listSourceFiles(root: string, outDir: string, repoFiles: string[] = walkDir(root)): string[] {
+  return repoFiles.filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
 }
 
 export interface SourceStat {
@@ -32,9 +32,9 @@ export interface SourceStat {
  * both the freshness probe and the extraction cache. Files that vanish between
  * the walk and the stat are dropped (same fail-soft posture as `walkDir`).
  */
-export function listSourceStats(root: string, outDir: string): SourceStat[] {
+export function listSourceStats(root: string, outDir: string, repoFiles?: string[]): SourceStat[] {
   const out: SourceStat[] = [];
-  for (const abs of listSourceFiles(root, outDir)) {
+  for (const abs of listSourceFiles(root, outDir, repoFiles)) {
     let s: { size: number; mtimeMs: number };
     try {
       s = statSync(abs);

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Indexing now respects `.gitignore`.** In Git repositories, graft indexes
+  tracked files plus untracked files that Git does not ignore, so generated
+  output such as `Scripts/bundles/` and `Scripts/transpiled/` is no longer
+  parsed merely because its extension is supported. Nested ignore files,
+  negations, and global Git excludes follow Git's own rules; non-Git directories
+  retain the existing filesystem walk and built-in skip list ([#39]).
+
 - **`graft ask` no longer lets normalization undo test-file de-ranking.** Test
   files were penalized before lexical scores were normalized, but the strongest
   test match was still normalized back to the maximum score. The test prior now
@@ -86,6 +93,7 @@
 [#35]: https://github.com/NanoNets/Graft/issues/35
 [#36]: https://github.com/NanoNets/Graft/issues/36
 [#37]: https://github.com/NanoNets/Graft/issues/37
+[#39]: https://github.com/NanoNets/Graft/issues/39
 
 ## 0.8.2
 

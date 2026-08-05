@@ -6,6 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -157,6 +158,27 @@ test("every file on disk lands in the fingerprint", async () => {
   const fp = readFingerprint(outOf(d));
   assert.ok(fp);
   assert.deepEqual(Object.keys(fp!.files).sort(), ["src/app.ts", "src/math.ts"]);
+});
+
+test("gitignored generated files stay out of the graph, fingerprint, and drift probe (#39)", async () => {
+  const d = repo();
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: d });
+    writeFileSync(join(d, ".gitignore"), "Scripts/bundles/\n");
+    mkdirSync(join(d, "Scripts", "bundles"), { recursive: true });
+    const bundle = join(d, "Scripts", "bundles", "app.js");
+    writeFileSync(bundle, "export function generatedBundle(): number { return 1; }\n");
+
+    await buildGraph(d);
+    const graph = readGraph(wiringPath(outOf(d))) as GraphV1;
+    assert.ok(!graph.nodes.some((n) => n.path === "Scripts/bundles/app.js"));
+    assert.deepEqual(Object.keys(readFingerprint(outOf(d))!.files).sort(), ["src/app.ts", "src/math.ts"]);
+
+    writeFileSync(bundle, "export function generatedBundle(): number { return 2; }\n");
+    assert.ok(isClean(probeDrift(d, outOf(d))!), "ignored output changes must not trigger a refresh");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
 });
 
 test("an unreadable file is still recorded, so it can't look new on every probe", async (t) => {
