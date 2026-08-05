@@ -74,7 +74,7 @@ export interface RawEdge {
   relation: Relation;
   file: string; // the file this edge originates in (scopes name resolution)
   targetId?: string; // already-resolved target (contains)
-  specifier?: string; // module path to resolve (imports)
+  specifier?: string; // module path to resolve (imports / imported-symbol references)
   name?: string; // symbol name to resolve (extends/implements/calls)
   viaMember?: boolean; // calls: was it `obj.foo()` (→ prefer method targets)?
   /** calls with viaMember: the receiver's resolved type name (from bindings /
@@ -182,6 +182,7 @@ export interface WalkCtx {
   bindings: FileBindings; // variable/field -> type, for receiver-type lookups
   enclosingClass: string | null; // nearest enclosing class (py/ts `self`/`this`)
   goReceiverVar: string | null; // Go receiver var, e.g. `w` in `func (w *Worker)`
+  importedSymbols: ReadonlyMap<string, { name: string; specifier: string }>;
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -207,6 +208,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
   parser.setLanguage(GRAMMARS[lang] as never);
   const root = parseSource(source);
   const bindings = collectBindings(root, lang);
+  const importedSymbols = collectImportedSymbols(root, lang);
 
   const nodes: NodeV1[] = [
     {
@@ -238,6 +240,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     bindings,
     enclosingClass: null,
     goReceiverVar: null,
+    importedSymbols,
   };
   for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges);
   // nodes[0] is the file node; the rest are its symbols. Index the module-level
@@ -287,12 +290,16 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       parentId: id,
       enclosingClass,
       goReceiverVar: isGoMethod ? goReceiverVarOf(node) : ctx.goReceiverVar,
+      importedSymbols:
+        desc.kind === "function" || desc.kind === "method"
+          ? withoutShadowedImports(ctx.importedSymbols, node)
+          : ctx.importedSymbols,
     };
     for (const child of node.namedChildren) walk(child, childCtx, out, edges);
     return;
   }
 
-  // not a definition — capture calls/imports, then descend with the same context
+  // not a definition — capture calls/imports/references, then descend with the same context
   const callType = ctx.lang === "python" ? "call" : "call_expression";
   if (node.type === callType) {
     const callee = calleeName(node, ctx.lang);
@@ -310,9 +317,123 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   } else if (isImport(node, ctx.lang)) {
     const spec = importSpecifier(node, ctx.lang);
     if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
+    // Imported identifiers are declarations, not uses. The import-binding pass
+    // above already recorded them, so do not descend and emit false references.
+    return;
+  } else if (
+    node.type === "identifier" &&
+    !isDirectCallee(node, callType) &&
+    !isDeclarationName(node)
+  ) {
+    const imported = ctx.importedSymbols.get(node.text);
+    if (imported) {
+      edges.push({
+        source: ctx.parentId,
+        relation: "references",
+        name: imported.name,
+        specifier: imported.specifier,
+        file: ctx.rel,
+      });
+    }
   }
 
   for (const child of node.namedChildren) walk(child, ctx, out, edges);
+}
+
+/**
+ * Named imports whose local binding can be recognized later as a symbol use.
+ * Namespace/default imports are intentionally excluded: they do not tell us
+ * the exported symbol name, so wiring them would require guessing.
+ */
+function collectImportedSymbols(
+  root: Parser.SyntaxNode,
+  lang: Language,
+): Map<string, { name: string; specifier: string }> {
+  const out = new Map<string, { name: string; specifier: string }>();
+  if (lang !== "typescript" && lang !== "tsx") return out;
+
+  const visit = (node: Parser.SyntaxNode): void => {
+    if (node.type === "import_statement") {
+      const specifier = importSpecifier(node, lang);
+      if (!specifier) return;
+      collectTsImportBindings(node, specifier, out);
+      return;
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+  return out;
+}
+
+function collectTsImportBindings(
+  node: Parser.SyntaxNode,
+  specifier: string,
+  out: Map<string, { name: string; specifier: string }>,
+): void {
+  if (node.type === "import_specifier") {
+    const name = node.childForFieldName("name")?.text;
+    const local = node.childForFieldName("alias")?.text ?? name;
+    if (name && local) out.set(local, { name, specifier });
+    return;
+  }
+  for (const child of node.namedChildren) collectTsImportBindings(child, specifier, out);
+}
+
+/**
+ * A parameter or local declaration wins over an import inside that function.
+ * Drop that imported binding for the whole function rather than create a false
+ * dependency. Nested functions are separate scopes and filter themselves.
+ */
+function withoutShadowedImports(
+  imports: ReadonlyMap<string, { name: string; specifier: string }>,
+  definition: Parser.SyntaxNode,
+): ReadonlyMap<string, { name: string; specifier: string }> {
+  if (imports.size === 0) return imports;
+  const shadowed = new Set<string>();
+  const definitionValue = definition.childForFieldName("value");
+  const visit = (node: Parser.SyntaxNode): void => {
+    if (node !== definition && node !== definitionValue && isFunctionBoundary(node)) {
+      const name = node.childForFieldName("name");
+      if (name?.type === "identifier") shadowed.add(name.text);
+      return;
+    }
+    if (node.type === "variable_declarator") {
+      const name = node.childForFieldName("name");
+      if (name?.type === "identifier") shadowed.add(name.text);
+    } else if (node.type === "required_parameter" || node.type === "optional_parameter") {
+      const pattern = node.childForFieldName("pattern");
+      if (pattern?.type === "identifier") shadowed.add(pattern.text);
+    } else if (node.type === "identifier" && node.parent?.type === "formal_parameters") {
+      shadowed.add(node.text);
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(definition);
+  if (![...shadowed].some((name) => imports.has(name))) return imports;
+  return new Map([...imports].filter(([local]) => !shadowed.has(local)));
+}
+
+function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
+  return (
+    node.type === "function_declaration" ||
+    node.type === "generator_function_declaration" ||
+    node.type === "method_definition" ||
+    node.type === "arrow_function" ||
+    node.type === "function_expression" ||
+    node.type === "function"
+  );
+}
+
+/** A direct invocation already emits a stronger `calls` edge. */
+function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
+  const parent = node.parent;
+  return parent?.type === callType && parent.childForFieldName("function") === node;
+}
+
+/** Definition/declaration identifiers name a new binding; they do not use one. */
+function isDeclarationName(node: Parser.SyntaxNode): boolean {
+  const parent = node.parent;
+  return parent?.childForFieldName("name") === node;
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and

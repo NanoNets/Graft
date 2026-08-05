@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **`callers` now includes imported functions used as values.** Named imports that
+  are passed, returned, or stored are reported as weaker `references` edges,
+  while direct invocations remain `calls` ([#34]).
+
 - **The build banner and repo map now name the language, not its parser.** JavaScript
   files (`.js`, `.mjs`, `.cjs`) use the TypeScript grammar internally, and `.jsx`
   uses the TSX grammar, but reporting those parser names made indexed files look
