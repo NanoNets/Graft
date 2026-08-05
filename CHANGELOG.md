@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **`graft ask` no longer lets normalization undo test-file de-ranking.** Test
+  files were penalized before lexical scores were normalized, but the strongest
+  test match was still normalized back to the maximum score. The test prior now
+  also applies to the final lexical/graph blend, while test-seeking queries keep
+  the existing unpenalized behavior ([#37]).
+
 - **`callers` now includes imported functions used as values.** Named imports that
   are passed, returned, or stored are reported as weaker `references` edges,
   while direct invocations remain `calls` ([#34]).
@@ -79,6 +85,7 @@
 [#33]: https://github.com/NanoNets/Graft/issues/33
 [#35]: https://github.com/NanoNets/Graft/issues/35
 [#36]: https://github.com/NanoNets/Graft/issues/36
+[#37]: https://github.com/NanoNets/Graft/issues/37
 
 ## 0.8.2
 

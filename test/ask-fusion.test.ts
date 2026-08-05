@@ -145,6 +145,23 @@ function makeOps(bStrength: { coverage: number; coverageStrong: number }): Scope
   };
 }
 
+test("rankScopesAndFuse: post-normalization rank factors cannot be erased by a top test match", () => {
+  const ops: ScopeRankOps = {
+    // The test remains the strongest raw match even after lexical de-ranking.
+    // Normalization therefore restores it to 1.0 while source lands at 0.4.
+    lex: () => new Map([["source", 4], ["test", 10]]),
+    strength: () => ({ coverage: 1, coverageStrong: 1 }),
+    walk: () => new Map(),
+    rankFactor: (_scope, id) => (id === "test" ? 0.35 : 1),
+  };
+  const r = rankScopesAndFuse(["app"], ops, 0.5, 0.05);
+  assert.deepEqual(
+    r.ranked.map((d) => d.id),
+    ["source", "test"],
+    "the final test prior must survive per-scope normalization",
+  );
+});
+
 test("rankScopesAndFuse: a scope with ONLY a body-token match (coverageStrong 0, coverage below HIGH_FLOOR) is excluded from ranked and reported in alsoMatched", () => {
   // b's top hit never matched a name/path field (coverageStrong = 0) and its
   // overall coverage (0.3) is well under HIGH_FLOOR (0.5) — an incidental

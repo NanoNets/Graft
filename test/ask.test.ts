@@ -69,6 +69,35 @@ test("test files rank below the source they exercise for a non-test query, but n
   }
 });
 
+test("test de-ranking survives normalization when a test is the strongest lexical match (#37)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-test-normalization-"));
+  try {
+    writeFileSync(
+      join(dir, "selector.ts"),
+      `export function choose(request: string): string {\n` +
+        `  // Select the engine for a request and follow the fallback chain.\n` +
+        `  return request;\n` +
+        `}\n`,
+    );
+    writeFileSync(
+      join(dir, "selector.test.ts"),
+      `import { choose } from "./selector";\n` +
+        `export function testWhereEngineSelectedForRequestFallbackChain(): void {\n` +
+        `  choose("request");\n` +
+        `}\n`,
+    );
+    await buildGraph(dir);
+
+    const r = ask(dir, "where engine selected for request fallback chain");
+    const source = r.hits.findIndex((h) => /(^|\/)selector\.ts(:|$)/.test(h.pointer));
+    const testHit = r.hits.findIndex((h) => /selector\.test\.ts/.test(h.pointer));
+    assert.ok(source >= 0, "implementation hit present");
+    assert.ok(testHit === -1 || source < testHit, "implementation ranks above the stronger lexical test match");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function makeFixture(): string {
   const dir = mkdtempSync(join(tmpdir(), "graft-ask-"));
   writeFileSync(

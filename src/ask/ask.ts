@@ -594,6 +594,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
                 },
               })
             : new Map<string, number>(),
+        rankFactor: (_s, id) => testFactor(byId.get(id)?.path ?? ""),
       },
       GRAPH_WEIGHT,
       RESCUE_FLOOR,
@@ -664,7 +665,10 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     const n = byId.get(id);
     if (!n) continue;
     const lexN = maxLex > 0 ? (lex.get(id) ?? 0) / maxLex : 0;
-    const blended = lexN + GRAPH_WEIGHT * (pr.get(id) ?? 0);
+    // Apply the test penalty after normalization too. Applying it only to the
+    // raw lexical score is not enough: if a test is still the strongest raw
+    // match, dividing by maxLex restores it to 1.0 and erases the de-rank.
+    const blended = (lexN + GRAPH_WEIGHT * (pr.get(id) ?? 0)) * testFactor(n.path);
     if (blended <= 0) continue;
     const hit: AskHit = {
       kind: "symbol",

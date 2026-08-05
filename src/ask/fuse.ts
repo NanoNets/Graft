@@ -179,6 +179,10 @@ export interface ScopeRankOps {
   /** Graph walk restricted to the scope's subgraph, seeded by that scope's
    * lexical scores; returns top-normalized centrality (or an empty map). */
   walk(scope: string, seeds: Map<string, number>): Map<string, number>;
+  /** Optional query-aware multiplier applied after lexical normalization and
+   * graph blending. Use this for priors (such as test-file de-ranking) that
+   * normalization must not erase. */
+  rankFactor?(scope: string, id: string): number;
 }
 
 /**
@@ -243,7 +247,9 @@ export function rankScopesAndFuse(
     for (const [id, p] of pr) if (p >= rescueFloor) candidates.add(id);
     for (const id of candidates) {
       const lexN = maxLex > 0 ? (lex.get(id) ?? 0) / maxLex : 0;
-      const blended = lexN + graphWeight * (pr.get(id) ?? 0);
+      const blended =
+        (lexN + graphWeight * (pr.get(id) ?? 0)) *
+        (ops.rankFactor?.(scope, id) ?? 1);
       if (blended > 0) scoped.push({ id, scope, score: blended });
     }
   }
