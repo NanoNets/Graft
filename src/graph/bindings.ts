@@ -55,6 +55,20 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     }
     return null;
   }
+  if (lang === "csharp") {
+    const csDefTypes = new Set([
+      "class_declaration",
+      "struct_declaration",
+      "interface_declaration",
+      "record_declaration",
+      "enum_declaration",
+      "method_declaration",
+      "constructor_declaration",
+      "property_declaration",
+    ]);
+    if (csDefTypes.has(node.type)) return node.childForFieldName("name")?.text ?? null;
+    return null;
+  }
   const defTypes =
     lang === "python"
       ? new Set(["class_definition", "function_definition"])
@@ -125,6 +139,10 @@ function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean {
   if (lang === "typescript" || lang === "tsx") {
     return node.type === "class_declaration" || node.type === "abstract_class_declaration";
   }
+  if (lang === "csharp") {
+    return node.type === "class_declaration" || node.type === "struct_declaration"
+      || node.type === "record_declaration";
+  }
   return false;
 }
 
@@ -169,6 +187,7 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  else if (lang === "csharp") handleCSharp(node, scope, classScope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -319,4 +338,66 @@ function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindin
     }
     if (typeName) bindings.set(scopePath, nameNode.text, typeName);
   }
+}
+
+/** C# bindings: field declarations, variable declarations, and constructor
+ * parameter assignments. Field types come from the type annotation; local
+ * variables from `new X()` expressions. */
+function handleCSharp(
+  node: Parser.SyntaxNode,
+  scope: string[],
+  classScope: string | null,
+  bindings: FileBindings,
+): void {
+  const scopePath = scope.join(".");
+
+  // field_declaration: `private readonly IFoo _foo;`
+  if (node.type === "field_declaration") {
+    const varDecl = node.namedChildren.find((c) => c.type === "variable_declaration");
+    if (!varDecl) return;
+    const typeNode = varDecl.childForFieldName("type") ?? varDecl.namedChildren[0];
+    const typeName = csTypeName(typeNode);
+    if (!typeName) return;
+    for (const declarator of varDecl.namedChildren.filter((c) => c.type === "variable_declarator")) {
+      const name = declarator.childForFieldName("name")?.text;
+      if (name) bindings.set(classScope ?? scopePath, `this.${name}`, typeName);
+    }
+    return;
+  }
+
+  // variable_declaration: `var x = new Foo();` or `Foo x = new Foo();`
+  if (node.type === "variable_declaration") {
+    const typeNode = node.childForFieldName("type") ?? node.namedChildren[0];
+    const typeName = csTypeName(typeNode);
+    if (!typeName) return;
+    for (const declarator of node.namedChildren.filter((c) => c.type === "variable_declarator")) {
+      const name = declarator.childForFieldName("name")?.text;
+      if (name) bindings.set(scopePath, name, typeName);
+    }
+    return;
+  }
+
+  // parameter: `Foo bar` in method signatures
+  if (node.type === "parameter") {
+    const name = node.childForFieldName("name")?.text;
+    const typeNode = node.childForFieldName("type") ?? node.namedChildren.find((c) => c.type === "identifier" || c.type === "generic_name");
+    const typeName = csTypeName(typeNode);
+    if (name && typeName) bindings.set(scopePath, name, typeName);
+  }
+}
+
+/** Extract a bare type name from a C# type node (identifier, generic_name, predefined_type). */
+function csTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "identifier") return node.text;
+  if (node.type === "generic_name") {
+    const id = node.childForFieldName("name") ?? node.namedChildren[0];
+    return id?.text ?? null;
+  }
+  if (node.type === "qualified_name") {
+    const right = node.namedChildren.at(-1);
+    return right?.text ?? null;
+  }
+  if (node.type === "predefined_type") return node.text; // int, string, bool, etc.
+  return null;
 }
