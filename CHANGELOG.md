@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **`graft map` no longer promotes unrelated methods into hubs and hotspots.**
+  A member call with an unknown receiver could be wired to the repository's
+  only method with the same bare name, so built-ins such as `Map.set()` inflated
+  an unrelated user-defined `set` method. Member calls now require an
+  owner-qualified receiver-type match; unresolved calls are dropped rather
+  than guessed ([#35]).
+
 - **Indexing now respects `.gitignore`.** In Git repositories, graft indexes
   tracked files plus untracked files that Git does not ignore, so generated
   output such as `Scripts/bundles/` and `Scripts/transpiled/` is no longer

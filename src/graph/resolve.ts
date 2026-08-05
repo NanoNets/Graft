@@ -5,10 +5,12 @@
  * Confidence mirrors the SCIP/Graphify model:
  *   - `extracted`: the target is certain — a match within the same file, an
  *     import specifier, or a structural containment.
- *   - `inferred`: the target was resolved by a unique name match across files,
- *     which name-shadowing could in principle fool.
+ *   - `inferred`: a bare function target was resolved by a unique name match
+ *     across files, which name-shadowing could in principle fool.
  * Ambiguous cross-file matches (a name defined in several files) are dropped
- * rather than guessed, so we never wire an edge to the wrong symbol.
+ * rather than guessed. Member calls are stricter: they require a receiver type
+ * and owner-qualified method match because a unique bare method name says
+ * nothing about the receiver.
  */
 import { posix } from "node:path";
 import { toPosixPath } from "../util/paths.js";
@@ -16,22 +18,6 @@ import type { EdgeV1, Kind, NodeV1, Relation } from "./types.js";
 import type { RawEdge } from "./extract.js";
 
 const IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"];
-
-// Builtin container/value types whose methods are never user-defined symbols in the
-// repo. A typed member call on one of these receivers (`deg.set(...)` where
-// `recvType` is `Map`) must never fall back to the untyped unique-bare-name path —
-// doing so wires it to whatever repo symbol happens to share the method's name
-// (e.g. a class's own `.set` method), which is always wrong. RawEdge carries no
-// language tag, so this is the union of the TS/TSX and Python builtin lists rather
-// than a per-language check; a repo class legitimately named e.g. `dict` colliding
-// with the Python builtin is vanishingly rare, and the failure mode in that case is
-// just a dropped edge (safe), not a wrong one.
-const BUILTIN_CONTAINER_TYPES = new Set([
-  // TS/TSX
-  "Map", "Set", "WeakMap", "WeakSet", "Array", "Promise", "Object", "Date", "RegExp", "Error",
-  // Python
-  "dict", "list", "set", "tuple", "str", "frozenset", "bytes",
-]);
 
 /** A Go module discovered in the repo: its `module` path from `go.mod` and the repo
  * directory that `go.mod` lives in (posix, `.` for the repo root). A monorepo may hold
@@ -124,23 +110,16 @@ export function resolveEdges(
       const candidates = perFileName.get(targetFile)?.get(e.name) ?? [];
       if (candidates.length === 1) add(e.source, candidates[0].id, "references", "extracted");
     } else if (e.relation === "calls") {
-      if (e.viaMember && e.recvType) {
+      if (e.viaMember) {
+        if (!e.recvType) continue;
         const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents);
         if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
         if (hit) add(e.source, hit.id, "calls", hit.confidence);
-        else if (!BUILTIN_CONTAINER_TYPES.has(e.recvType)) {
-          // chain exhausted with zero candidates at every level → fall back to the
-          // existing untyped path (unique bare-name match), unchanged.
-          const fallback = resolveName(e.name!, e.file, ["method"], perFileName, globalName);
-          if (fallback) add(e.source, fallback.id, "calls", fallback.confidence);
-        }
-        // else: recvType is a known builtin container (Map/dict/etc) — its methods
-        // are never user-defined repo symbols, so drop rather than wire a bare-name
-        // fallback to an unrelated same-named method.
+        // No owner-qualified match means the call is unresolved. A unique bare
+        // method name is not evidence that this receiver has that method.
         continue;
       }
-      const kinds: Kind[] = e.viaMember ? ["method"] : ["function"];
-      const hit = resolveName(e.name!, e.file, kinds, perFileName, globalName);
+      const hit = resolveName(e.name!, e.file, ["function"], perFileName, globalName);
       if (hit) add(e.source, hit.id, "calls", hit.confidence); // drop unresolved calls (too noisy)
     }
   }
@@ -182,8 +161,7 @@ function resolveName(
  *     per the inviolable philosophy we drop and stop rather than guess, and we do
  *     NOT continue up the chain past this level.
  *   - `null` — the whole chain (recvType + ancestors, breadth-first, depth ≤ 3,
- *     cycle-guarded) had zero candidates at every level; caller may fall back to
- *     the untyped bare-name path.
+ *     cycle-guarded) had zero candidates at every level.
  */
 function resolveTypedMember(
   recvType: string,

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { buildRepoMap } from "../src/graph/map.js";
 import { resolveEdges } from "../src/graph/resolve.js";
 import type { NodeV1 } from "../src/graph/types.js";
 
@@ -59,12 +60,20 @@ test("same-file owner wins among duplicates, confidence extracted", () => {
   assert.equal(call?.confidence, "extracted");
 });
 
-test("unknown recvType falls back to unique bare-name path", () => {
+test("unknown receiver type does not guess from a unique bare method name", () => {
   const nodes = [n("a.py", "file"), n("a.py#Only", "class"), n("a.py#Only.solo", "method"), n("b.py", "file"), n("b.py#f", "function")];
   const edges = resolveEdges(nodes, [
     { source: "b.py#f", relation: "calls", name: "solo", viaMember: true, recvType: "Ghost", file: "b.py" },
   ]);
-  assert.equal(edges.find((e) => e.relation === "calls")?.target, "a.py#Only.solo");
+  assert.equal(edges.filter((e) => e.relation === "calls").length, 0);
+});
+
+test("untyped member call does not guess from a unique bare method name", () => {
+  const nodes = [n("a.py", "file"), n("a.py#Only", "class"), n("a.py#Only.solo", "method"), n("b.py", "file"), n("b.py#f", "function")];
+  const edges = resolveEdges(nodes, [
+    { source: "b.py#f", relation: "calls", name: "solo", viaMember: true, file: "b.py" },
+  ]);
+  assert.equal(edges.filter((e) => e.relation === "calls").length, 0);
 });
 
 test("builtin-container receiver drops instead of bare-name fallback", () => {
@@ -89,4 +98,29 @@ test("Go NewServer()→Server recall still resolves (regression guard, non-built
     { source: "m.go#f", relation: "calls", name: "Start", viaMember: true, recvType: "Server", file: "m.go" },
   ]);
   assert.equal(edges.find((e) => e.relation === "calls")?.target, "srv.go#Server.Start");
+});
+
+test("unresolved member calls cannot inflate map hubs and hotspots (#35)", () => {
+  const nodes = [
+    n("bindings.ts", "file"),
+    n("bindings.ts#FileBindings", "class"),
+    n("bindings.ts#FileBindings.set", "method"),
+    n("consumer.ts", "file"),
+    n("consumer.ts#write", "function"),
+    n("real.ts", "file"),
+    n("real.ts#writeBinding", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    { source: "consumer.ts#write", relation: "calls", name: "set", viaMember: true, file: "consumer.ts" },
+    { source: "consumer.ts#write", relation: "calls", name: "set", viaMember: true, recvType: "Map", file: "consumer.ts" },
+    { source: "real.ts#writeBinding", relation: "calls", name: "set", viaMember: true, recvType: "FileBindings", file: "real.ts" },
+  ]);
+
+  const map = buildRepoMap({
+    meta: { version: 1, nodeCount: nodes.length, edgeCount: edges.length, languages: ["typescript"] },
+    nodes,
+    edges,
+  });
+  const set = map.hotspots.find((h) => h.name === "set");
+  assert.equal(set?.inDegree, 1, "only the owner-qualified FileBindings.set call contributes");
 });
