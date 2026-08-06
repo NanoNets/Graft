@@ -188,6 +188,41 @@ fn uses() {
   assert.ok(!references.some((edge) => edge.name === "helper"));
 });
 
+test("Rust extraction: inline modules consume same-file self and super prefixes", () => {
+  const src = `
+struct Item;
+mod tests {
+    use super::*;
+    use super::Item;
+    use self::Local;
+    use super::super::external::Thing;
+    use crate::absolute::CrateItem;
+
+    fn uses() {
+        let _item = Item;
+        let _local = Local;
+        let _thing = Thing;
+        let _crate_item = CrateItem;
+    }
+}
+`;
+  const { rawEdges } = extractFile("inline.rs", src, "rust");
+  const imports = rawEdges.filter((edge) => edge.relation === "imports");
+  assert.deepEqual(
+    imports.map((edge) => edge.specifier),
+    ["super::external::Thing", "crate::absolute::CrateItem"],
+  );
+
+  const references = rawEdges.filter((edge) => edge.relation === "references");
+  assert.deepEqual(
+    references.map((edge) => ({ name: edge.name, specifier: edge.specifier })),
+    [
+      { name: "Thing", specifier: "super::external::Thing" },
+      { name: "CrateItem", specifier: "crate::absolute::CrateItem" },
+    ],
+  );
+});
+
 test("Rust bindings: typed lets, constructor lets, and typed parameters strip wrappers and generics", () => {
   const parser = new Parser();
   parser.setLanguage(Rust as never);

@@ -126,6 +126,34 @@ test("Rust module paths resolve file modules, items, scoped leaves, and scoped c
   }
 });
 
+test("Rust direct integration tests are crate roots while deeper support modules keep current anchoring", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-integration-root-"));
+  try {
+    write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
+    write(dir, "src/lib.rs", "mod shared;\n");
+    write(dir, "src/shared.rs", "pub fn helper() {}\n");
+    write(
+      dir,
+      "tests/foo.rs",
+      "mod common;\nuse crate::common::helper;\nfn exercise() { helper(); }\n",
+    );
+    write(dir, "tests/common/mod.rs", "use crate::shared::helper;\n");
+
+    const graph = await buildFixture(dir);
+
+    assert.ok(
+      hasEdge(graph, "tests/foo.rs", "tests/common/mod.rs", "imports"),
+      "a direct integration-test crate root resolves mod and crate paths from its own directory",
+    );
+    assert.ok(
+      hasEdge(graph, "tests/common/mod.rs", "src/shared.rs", "imports"),
+      "deeper tests support modules retain the owning package crate root",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Rust workspace crate names resolve across crates and ignore non-package Cargo names", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-rust-workspace-"));
   try {
