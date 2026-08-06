@@ -101,12 +101,15 @@ interface NameIndex {
 }
 
 /** Bundled owner/heritage indexes for {@link resolveTypedMember}: the
- * owner-qualified method index (`"Owner.method"` → candidates) and the
- * extends-chain index (class name → declared base names), each exact and PS
- * case-folded. Same swap-risk rationale as {@link NameIndex}. */
+ * owner-qualified method indexes (`"Owner.method"` → candidates) and the
+ * extends-chain indexes (class name → declared base names), domain-isolated
+ * between non-PS exact and PS exact/case-folded lookups. Same swap-risk
+ * rationale as {@link NameIndex}. */
 interface OwnerIndex {
   ownerMethod: Map<string, NodeV1[]>;
   classParents: Map<string, string[]>;
+  /** PowerShell-only exact-case owner-qualified method candidates. */
+  psOwnerMethodExact: Map<string, NodeV1[]>;
   psOwnerMethod: Map<string, NodeV1[]>;
   psClassParents: Map<string, string[]>;
 }
@@ -126,6 +129,7 @@ export function resolveEdges(
   // Owner-qualified method index: "Owner.method" → candidate method nodes, for
   // typed member-call resolution (recvType + name → a specific class's method).
   const ownerMethod = new Map<string, NodeV1[]>();
+  const psOwnerMethodExact = new Map<string, NodeV1[]>();
   const psOwnerMethod = new Map<string, NodeV1[]>();
   // Go package resolution: dir (posix) → its `.go` file node ids, for import mapping.
   const goFilesByDir = new Map<string, string[]>();
@@ -151,8 +155,12 @@ export function resolveEdges(
     }
     if (n.kind === "method" && n.owner) {
       const key = `${n.owner}.${n.name}`;
-      push(ownerMethod, key, n);
-      if (isPsPath(n.path)) push(psOwnerMethod, key.toLowerCase(), n);
+      if (isPsPath(n.path)) {
+        push(psOwnerMethodExact, key, n);
+        push(psOwnerMethod, key.toLowerCase(), n);
+      } else {
+        push(ownerMethod, key, n);
+      }
     }
   }
 
@@ -168,12 +176,15 @@ export function resolveEdges(
     // ids can carry a dedup ordinal (W2's `Cache~2`).
     const ownName = byId.get(e.source)?.name;
     if (!ownName) continue;
-    push(classParents, ownName, e.name);
-    if (e.lang === "powershell") push(psClassParents, ownName.toLowerCase(), e.name.toLowerCase());
+    if (e.lang === "powershell") {
+      push(psClassParents, ownName.toLowerCase(), e.name.toLowerCase());
+    } else {
+      push(classParents, ownName, e.name);
+    }
   }
 
   const nameIndex: NameIndex = { perFileName, globalName, psPerFileName, psGlobalName, psTestPaths };
-  const ownerIndex: OwnerIndex = { ownerMethod, classParents, psOwnerMethod, psClassParents };
+  const ownerIndex: OwnerIndex = { ownerMethod, classParents, psOwnerMethodExact, psOwnerMethod, psClassParents };
   // memoizes isTestPath(callerFile) across the whole rawEdges pass — many
   // edges share the same originating file.
   const callerIsTestCache = new Map<string, boolean>();
@@ -333,7 +344,7 @@ function resolveTypedMember(
   name: string,
   file: string,
   lang: Language | undefined,
-  { ownerMethod, classParents, psOwnerMethod, psClassParents }: OwnerIndex,
+  { ownerMethod, classParents, psOwnerMethodExact, psOwnerMethod, psClassParents }: OwnerIndex,
 ): { id: string; confidence: EdgeV1["confidence"] } | "ambiguous" | null {
   const MAX_DEPTH = 3;
   const isPs = lang === "powershell";
@@ -342,27 +353,26 @@ function resolveTypedMember(
   for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
     for (const type of frontier) {
       const key = `${type}.${name}`;
-      const exact = ownerMethod.get(key) ?? [];
-      const exactScoped = isPs ? exact.filter((c) => isPsPath(c.path)) : exact;
+      const exact = (isPs ? psOwnerMethodExact : ownerMethod).get(key) ?? [];
 
       if (!isPs) {
-        if (!exactScoped.length) continue; // try next ancestor
-        if (exactScoped.length === 1) {
-          const c = exactScoped[0];
+        if (!exact.length) continue; // try next ancestor
+        if (exact.length === 1) {
+          const c = exact[0];
           return { id: c.id, confidence: c.path === file ? "extracted" : "inferred" };
         }
-        const sameFile = exactScoped.find((c) => c.path === file);
+        const sameFile = exact.find((c) => c.path === file);
         if (sameFile) return { id: sameFile.id, confidence: "extracted" };
         return "ambiguous"; // several, none same-file — drop and stop
       }
 
       const folded = psOwnerMethod.get(key.toLowerCase()) ?? [];
-      const exactLocal = exactScoped.filter((c) => c.path === file);
+      const exactLocal = exact.filter((c) => c.path === file);
       if (exactLocal.length) return { id: exactLocal[0].id, confidence: "extracted" };
       const foldedLocal = folded.filter((c) => c.path === file);
       if (foldedLocal.length) return { id: foldedLocal[0].id, confidence: "extracted" };
 
-      const candidates = exactScoped.length ? exactScoped : folded;
+      const candidates = exact.length ? exact : folded;
       if (!candidates.length) continue; // try next ancestor
       if (candidates.length === 1) return { id: candidates[0].id, confidence: "inferred" };
       return "ambiguous"; // several, none same-file at this level — drop and stop
