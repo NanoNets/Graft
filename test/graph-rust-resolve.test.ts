@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
@@ -126,12 +126,14 @@ test("Rust module paths resolve file modules, items, scoped leaves, and scoped c
   }
 });
 
-test("Rust direct integration tests are crate roots while deeper support modules keep current anchoring", async () => {
+test("Rust crate paths distinguish source tests, direct auxiliary roots, and deeper support modules", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-rust-integration-root-"));
   try {
     write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
     write(dir, "src/lib.rs", "mod shared;\n");
     write(dir, "src/shared.rs", "pub fn helper() {}\n");
+    write(dir, "src/tests/foo.rs", "use crate::shared::helper;\n");
+    write(dir, "src/tests/shared.rs", "pub fn wrong() {}\n");
     write(
       dir,
       "tests/foo.rs",
@@ -146,9 +148,141 @@ test("Rust direct integration tests are crate roots while deeper support modules
       "a direct integration-test crate root resolves mod and crate paths from its own directory",
     );
     assert.ok(
-      hasEdge(graph, "tests/common/mod.rs", "src/shared.rs", "imports"),
-      "deeper tests support modules retain the owning package crate root",
+      hasEdge(graph, "src/tests/foo.rs", "src/shared.rs", "imports"),
+      "a src/tests child is an ordinary source module anchored to the package crate",
     );
+    assert.ok(!hasEdge(graph, "src/tests/foo.rs", "src/tests/shared.rs", "imports"));
+    assert.ok(
+      hasEdge(graph, "tests/common/mod.rs", "crate::shared::helper", "imports"),
+      "crate paths in deeper auxiliary support modules stay raw because their declaring root is ambiguous",
+    );
+    assert.ok(!hasEdge(graph, "tests/common/mod.rs", "src/shared.rs", "imports"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust inline-module super calls resolve from the declaring file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-inline-call-"));
+  try {
+    write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
+    write(dir, "src/lib.rs", "mod foo;\n");
+    write(dir, "src/foo.rs", "mod helper;\nmod tests { fn t() { super::helper::go(); } }\n");
+    write(dir, "src/foo/helper.rs", "pub fn go() {}\n");
+
+    const graph = await buildFixture(dir);
+    assert.ok(hasEdge(graph, "src/foo.rs#tests.t", "src/foo/helper.rs#go", "calls"));
+    assert.ok(!hasEdge(graph, "src/foo.rs#tests.t", "src/helper.rs#go", "calls"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust mod declarations stay crate-local and resolve nested inline-module paths", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-mod-marker-"));
+  try {
+    write(dir, "crates/main/Cargo.toml", "[package]\nname = 'main'\n");
+    write(dir, "crates/main/src/lib.rs", "mod parser;\nmod inline { mod leaf; }\n");
+    write(dir, "crates/main/src/parser.rs", "pub fn local() {}\n");
+    write(dir, "crates/main/src/inline/leaf.rs", "pub fn nested() {}\n");
+    write(dir, "crates/parser/Cargo.toml", "[package]\nname = 'parser'\n");
+    write(dir, "crates/parser/src/lib.rs", "pub fn external() {}\n");
+
+    const graph = await buildFixture(dir);
+    assert.ok(hasEdge(graph, "crates/main/src/lib.rs", "crates/main/src/parser.rs", "imports"));
+    assert.ok(!hasEdge(graph, "crates/main/src/lib.rs", "crates/parser/src/lib.rs", "imports"));
+    assert.ok(hasEdge(graph, "crates/main/src/lib.rs", "crates/main/src/inline/leaf.rs", "imports"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust workspace aliases resolve declared packages and duplicate package names stay raw", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-crate-map-"));
+  try {
+    write(
+      dir,
+      "crates/app/Cargo.toml",
+      "[package]\nname = 'app'\n\n[dependencies]\nrenamed = { package = 'real-package', path = '../real' }\n",
+    );
+    write(dir, "crates/app/src/lib.rs", "use renamed::thing;\nuse duplicate::module;\n");
+    write(dir, "crates/real/Cargo.toml", "[package]\nname = 'real-package'\n");
+    write(dir, "crates/real/src/lib.rs", "pub mod thing;\n");
+    write(dir, "crates/real/src/thing.rs", "pub fn work() {}\n");
+    write(dir, "crates/dup-a/Cargo.toml", "[package]\nname = 'duplicate'\n");
+    write(dir, "crates/dup-a/src/lib.rs", "pub mod module;\n");
+    write(dir, "crates/dup-a/src/module.rs", "pub fn first() {}\n");
+    write(dir, "crates/dup-b/Cargo.toml", "[package]\nname = 'duplicate'\n");
+    write(dir, "crates/dup-b/src/lib.rs", "pub mod module;\n");
+    write(dir, "crates/dup-b/src/module.rs", "pub fn second() {}\n");
+
+    const graph = await buildFixture(dir);
+    assert.ok(hasEdge(graph, "crates/app/src/lib.rs", "crates/real/src/thing.rs", "imports"));
+    assert.ok(hasEdge(graph, "crates/app/src/lib.rs", "duplicate::module", "imports"));
+    assert.ok(!hasEdge(graph, "crates/app/src/lib.rs", "crates/dup-a/src/module.rs", "imports"));
+    assert.ok(!hasEdge(graph, "crates/app/src/lib.rs", "crates/dup-b/src/module.rs", "imports"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust owner indexes cannot satisfy a Python typed-member call", () => {
+  const nodes = [
+    node("worker.rs", "file"),
+    node("worker.rs#Worker.run", "method", "run", "Worker"),
+    node("caller.py", "file"),
+    node("caller.py#invoke", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    {
+      source: "caller.py#invoke",
+      relation: "calls",
+      name: "run",
+      file: "caller.py",
+      viaMember: true,
+      recvType: "Worker",
+    },
+  ]);
+  assert.equal(edges.filter((edge) => edge.relation === "calls").length, 0);
+});
+
+test("Rust inline mods resolve bodyless mods and consumed super calls end to end", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-inline-e2e-"));
+  try {
+    write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
+    write(dir, "src/lib.rs", "mod outer;\n");
+    write(dir, "src/outer.rs", "mod x;\nmod y;\nmod tests { mod x; fn t() { super::y::z(); } }\n");
+    write(dir, "src/outer/x.rs", "pub fn root_x() {}\n");
+    write(dir, "src/outer/y.rs", "pub fn z() {}\n");
+    write(dir, "src/outer/tests/x.rs", "pub fn nested_x() {}\n");
+
+    const graph = await buildFixture(dir);
+    assert.ok(hasEdge(graph, "src/outer.rs", "src/outer/tests/x.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/outer.rs#tests.t", "src/outer/y.rs#z", "calls"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust graph builds are byte-deterministic", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-deterministic-"));
+  try {
+    write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
+    write(dir, "src/lib.rs", "mod worker;\nfn invoke() { crate::worker::run(); }\n");
+    write(dir, "src/worker.rs", "pub fn run() {}\n");
+
+    const first = await buildGraph(dir, {
+      contextDir: join(dir, ".graft-test"),
+      graphOnly: true,
+      reuse: false,
+    });
+    const before = readFileSync(first.graphPath);
+    const second = await buildGraph(dir, {
+      contextDir: join(dir, ".graft-test"),
+      graphOnly: true,
+      reuse: false,
+    });
+    assert.deepEqual(readFileSync(second.graphPath), before);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

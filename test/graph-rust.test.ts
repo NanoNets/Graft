@@ -2,8 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import Parser from "tree-sitter";
 import Rust from "tree-sitter-rust/bindings/node/index.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { collectBindings } from "../src/graph/bindings.js";
+import { buildGraph } from "../src/graph/build.js";
 import { extractFile } from "../src/graph/extract.js";
+import { readGraph } from "../src/graph/write.js";
 
 test("Rust extraction: definitions, owners, module scopes, exports, and trait heritage", () => {
   const src = `
@@ -36,6 +41,8 @@ macro_rules! local_macro { () => {} }
 mod imp { pub fn open() {} }
 #[cfg(test)]
 mod tests { pub fn hidden() {} }
+#[cfg(not(test))]
+mod production { pub fn visible() {} }
 `;
   const { nodes, rawEdges } = extractFile("defs.rs", src, "rust");
   const byId = (id: string) => nodes.find((node) => node.id === id);
@@ -59,6 +66,7 @@ mod tests { pub fn hidden() {} }
   assert.equal(byId("defs.rs#Backend.defaulted")?.owner, "Backend");
   assert.equal(byId("defs.rs#imp.open")?.kind, "function");
   assert.equal(byId("defs.rs#tests.hidden")?.exported, false);
+  assert.equal(byId("defs.rs#production.visible")?.exported, true);
 
   assert.equal(byId("defs.rs#Cache")?.exported, true);
   assert.equal(byId("defs.rs#Private")?.exported, false);
@@ -115,6 +123,8 @@ fn exercise(param: &mut Worker<u8>, tuple: (fn(),)) {
     println!("ignored");
     assert_eq!(compute(), 1);
     log_it!(compute());
+    std::println!("ignored");
+    crate::macros::local_log!();
 }
 `;
   const calls = extractFile("calls.rs", src, "rust").rawEdges.filter((edge) => edge.relation === "calls");
@@ -129,6 +139,7 @@ fn exercise(param: &mut Worker<u8>, tuple: (fn(),)) {
   assert.equal(named("build")[0]?.recvType, "Worker");
   assert.equal(named("helper")[0]?.recvType, "Worker");
   assert.equal(named("log_it!").length, 1);
+  assert.equal(named("local_log!").length, 1);
   assert.equal(named("println!").length, 0);
   assert.equal(named("assert_eq!").length, 0);
   assert.equal(named("compute").length, 0, "macro token trees stay opaque");
@@ -144,6 +155,8 @@ use crate::models::{Widget, helper, Thing as Renamed, self};
 use crate::models::*;
 use crate::Original as Alias;
 mod x;
+#[path = "alternate.rs"]
+mod redirected;
 mod inline {
     mod leaf;
     pub fn nested() {}
@@ -169,8 +182,8 @@ fn uses() {
       "crate::models::self",
       "crate::models::*",
       "crate::Original",
-      "x",
-      "inline::leaf",
+      "self::x",
+      "self::inline::leaf",
     ],
   );
   assert.ok(imports.every((edge) => edge.lang === "rust"));
@@ -186,6 +199,76 @@ fn uses() {
     ],
   );
   assert.ok(!references.some((edge) => edge.name === "helper"));
+});
+
+test("Rust extraction: inline-module prefixes are consumed for scoped calls", () => {
+  const calls = extractFile(
+    "src/foo.rs",
+    "mod helper;\nmod tests { fn t() { super::helper::go(); } }\n",
+    "rust",
+  ).rawEdges.filter((edge) => edge.relation === "calls");
+
+  assert.deepEqual(
+    calls.map((edge) => ({ source: edge.source, name: edge.name, specifier: edge.specifier })),
+    [{ source: "src/foo.rs#tests.t", name: "go", specifier: undefined }],
+  );
+});
+
+test("Rust extraction: macro signatures stop before bodies and qualified calls use the leaf name", () => {
+  const { nodes, rawEdges } = extractFile(
+    "macros.rs",
+    "macro_rules! local_log { () => { 42 } }\nfn invoke() { std::println!(\"x\"); crate::macros::local_log!(); }\n",
+    "rust",
+  );
+
+  assert.equal(nodes.find((node) => node.id === "macros.rs#local_log!")?.signature, "macro_rules! local_log { ()");
+  assert.deepEqual(
+    rawEdges.filter((edge) => edge.relation === "calls").map((edge) => edge.name),
+    ["local_log!"],
+  );
+});
+
+test("Rust extraction handles CRLF input", () => {
+  const result = extractFile("crlf.rs", "pub fn from_crlf() {\r\n  helper();\r\n}\r\n", "rust");
+  assert.equal(result.nodes.find((node) => node.name === "from_crlf")?.kind, "function");
+});
+
+test("Rust extraction parses definitions beyond the 32 KB chunk boundary", () => {
+  const padding = Array.from({ length: 3_000 }, (_, i) => `// padding ${i}`).join("\n");
+  const source = `${padding}\npub fn after_boundary() {}\n`;
+  assert.ok(source.length > 32_768);
+  assert.equal(
+    extractFile("large.rs", source, "rust").nodes.find((node) => node.name === "after_boundary")?.kind,
+    "function",
+  );
+});
+
+test("Rust builds tolerate malformed files and keep recoverable definitions", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-malformed-"));
+  try {
+    writeFileSync(join(dir, "broken.rs"), "pub fn before() {}\nfn broken( {\npub fn after() {}\n");
+    const result = await buildGraph(dir, {
+      contextDir: join(dir, ".graft-test"),
+      graphOnly: true,
+      reuse: false,
+    });
+    assert.deepEqual(result.errors, []);
+    const graph = readGraph(result.graphPath);
+    assert.equal(graph?.nodes.find((node) => node.name === "before")?.kind, "function");
+    assert.equal(graph?.nodes.find((node) => node.name === "after")?.kind, "function");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust extraction degrades gracefully on &raw syntax", () => {
+  const { nodes } = extractFile(
+    "raw.rs",
+    "static VALUE: u8 = 1;\nfn pointer() { let _ptr = &raw const VALUE; }\npub fn after_raw() {}\n",
+    "rust",
+  );
+  assert.equal(nodes.find((node) => node.name === "pointer")?.kind, "function");
+  assert.equal(nodes.find((node) => node.name === "after_raw")?.kind, "function");
 });
 
 test("Rust extraction: inline modules consume same-file self and super prefixes", () => {
