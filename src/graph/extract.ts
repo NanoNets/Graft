@@ -12,12 +12,13 @@ import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
 // Deep import avoids the package's extensionless-main DEP0151 warning under ESM.
 import PowerShell from "tree-sitter-powershell/bindings/node/index.js";
+import Rust from "tree-sitter-rust/bindings/node/index.js";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, psTypeName, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go" | "powershell";
+export type Language = "typescript" | "tsx" | "python" | "go" | "powershell" | "rust";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -48,6 +49,7 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".go", grammar: "go", label: "go" },
   { ext: ".psm1", grammar: "powershell", label: "powershell" },
   { ext: ".ps1", grammar: "powershell", label: "powershell" },
+  { ext: ".rs", grammar: "rust", label: "rust" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -84,7 +86,7 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
-  lang?: Language; // PowerShell edges carry this for case-insensitive resolution.
+  lang?: Language; // Language-specific name-resolution domain, when required.
 }
 
 export interface ExtractResult {
@@ -161,12 +163,24 @@ const PS_KINDS: Record<string, Kind> = {
   class_method_definition: "method",
 };
 
+const RUST_KINDS: Record<string, Kind> = {
+  function_item: "function",
+  function_signature_item: "function",
+  struct_item: "struct",
+  enum_item: "enum",
+  trait_item: "interface",
+  type_item: "type",
+  union_item: "struct",
+  macro_definition: "function",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
   powershell: PS_KINDS,
+  rust: RUST_KINDS,
 };
 
 const CALL_NODE_TYPES: Record<Language, ReadonlySet<string>> = {
@@ -175,6 +189,7 @@ const CALL_NODE_TYPES: Record<Language, ReadonlySet<string>> = {
   python: new Set(["call"]),
   go: new Set(["call_expression"]),
   powershell: new Set(["command", "invokation_expression"]),
+  rust: new Set(["call_expression", "macro_invocation"]),
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -191,6 +206,7 @@ const GRAMMARS: Record<Language, unknown> = {
   python: Python,
   go: Go,
   powershell: PowerShell,
+  rust: Rust,
 };
 
 export interface WalkCtx {
@@ -205,6 +221,9 @@ export interface WalkCtx {
   enclosingClass: string | null; // nearest enclosing class (py/ts `self`/`this`)
   goReceiverVar: string | null; // Go receiver var, e.g. `w` in `func (w *Worker)`
   importedSymbols: ReadonlyMap<string, { name: string; specifier: string }>;
+  rustInImpl: boolean;
+  rustTraitImpl: boolean;
+  rustCfgTest: boolean;
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -264,6 +283,9 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     enclosingClass: null,
     goReceiverVar: null,
     importedSymbols,
+    rustInImpl: false,
+    rustTraitImpl: false,
+    rustCfgTest: false,
   };
   // Every id minted this file, seeded with the file node's own id (`rel`) so a
   // top-level definition can never collide with it. Threaded as its own
@@ -272,6 +294,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
   // when it's actually accidental shared mutable state across the whole walk.
   const minted = new Set<string>([rel]);
   for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges, minted);
+  if (lang === "rust") rawEdges.push(...rustHeritageEdges(root, nodes, rel));
   // nodes[0] is the file node; the rest are its symbols. Index the module-level
   // residual on the file node so a term outside every symbol still surfaces it.
   nodes[0].body_text = fileResidual(source, nodes.slice(1));
@@ -317,7 +340,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
             ? goExported(desc.name)
             : ctx.lang === "powershell"
               ? psExported(node, ctx)
-              : tsExported(node),
+              : ctx.lang === "rust"
+                ? rustExported(node, ctx)
+                : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -331,7 +356,12 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class heritage
     if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
 
-    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
+    const enclosingClass =
+      desc.kind === "class" || (ctx.lang === "rust" && desc.kind === "interface")
+        ? desc.name
+        : isGoMethod
+          ? goReceiverType(node)
+          : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
@@ -348,8 +378,36 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     return;
   }
 
+  if (ctx.lang === "rust" && node.type === "impl_item") {
+    const owner = rustTypeName(node.childForFieldName("type"));
+    if (owner) {
+      const childCtx: WalkCtx = {
+        ...ctx,
+        scope: [...ctx.scope, owner],
+        enclosingClass: owner,
+        rustInImpl: true,
+        rustTraitImpl: node.childForFieldName("trait") !== null,
+      };
+      for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
+      return;
+    }
+  }
+
+  if (ctx.lang === "rust" && node.type === "mod_item" && node.childForFieldName("body")) {
+    const name = node.childForFieldName("name")?.text;
+    if (name) {
+      const childCtx: WalkCtx = {
+        ...ctx,
+        scope: [...ctx.scope, name],
+        rustCfgTest: ctx.rustCfgTest || hasRustAttribute(node, "cfg", "test"),
+      };
+      for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
+      return;
+    }
+  }
+
   // not a definition — capture calls/imports/references, then descend with the same context
-  if (CALL_NODE_TYPES[ctx.lang].has(node.type) && !psSkipsCall(node, ctx.lang)) {
+  if (CALL_NODE_TYPES[ctx.lang].has(node.type) && !psSkipsCall(node, ctx.lang) && !rustSkipsCall(node, ctx.lang)) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
@@ -358,20 +416,22 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: callee.name,
         viaMember: callee.viaMember,
         file: ctx.rel,
-        ...(ctx.lang === "powershell" ? { lang: ctx.lang } : {}),
+        ...(callee.specifier ? { specifier: callee.specifier } : {}),
+        ...(ctx.lang === "powershell" || ctx.lang === "rust" ? { lang: ctx.lang } : {}),
       };
       const recvType = callee.recvType ?? resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
   } else if (isImport(node, ctx.lang)) {
-    const spec = importSpecifier(node, ctx.lang);
-    if (spec) {
+    const specs = ctx.lang === "rust" ? rustImportSpecifiers(node, ctx.scope) : [importSpecifier(node, ctx.lang)];
+    for (const spec of specs) {
+      if (!spec) continue;
       edges.push({
         source: ctx.rel,
         relation: "imports",
         specifier: spec,
         file: ctx.rel,
-        ...(ctx.lang === "powershell" ? { lang: ctx.lang } : {}),
+        ...(ctx.lang === "powershell" || ctx.lang === "rust" ? { lang: ctx.lang } : {}),
       });
     }
     // Imported identifiers are declarations, not uses. The import-binding pass
@@ -380,7 +440,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // (`. { ... }`), whose body must still be walked for its own calls.
     if (ctx.lang !== "powershell") return;
   } else if (
-    node.type === "identifier" &&
+    (node.type === "identifier" || (ctx.lang === "rust" && node.type === "type_identifier")) &&
     !isDirectCallee(node, CALL_NODE_TYPES[ctx.lang]) &&
     !isDeclarationName(node)
   ) {
@@ -392,6 +452,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: imported.name,
         specifier: imported.specifier,
         file: ctx.rel,
+        ...(ctx.lang === "rust" ? { lang: ctx.lang } : {}),
       });
     }
   }
@@ -409,9 +470,19 @@ function collectImportedSymbols(
   lang: Language,
 ): Map<string, { name: string; specifier: string }> {
   const out = new Map<string, { name: string; specifier: string }>();
-  if (lang !== "typescript" && lang !== "tsx") return out;
+  if (lang !== "typescript" && lang !== "tsx" && lang !== "rust") return out;
 
   const visit = (node: Parser.SyntaxNode): void => {
+    if (lang === "rust" && node.type === "use_declaration") {
+      const argument = node.childForFieldName("argument");
+      if (!argument) return;
+      for (const leaf of rustUseLeaves(argument)) {
+        if (leaf.name && leaf.local && /^[A-Z]/.test(leaf.name) && /^[A-Z]/.test(leaf.local)) {
+          out.set(leaf.local, { name: leaf.name, specifier: leaf.specifier });
+        }
+      }
+      return;
+    }
     if (node.type === "import_statement") {
       const specifier = importSpecifier(node, lang);
       if (!specifier) return;
@@ -436,6 +507,47 @@ function collectTsImportBindings(
     return;
   }
   for (const child of node.namedChildren) collectTsImportBindings(child, specifier, out);
+}
+
+interface RustUseLeaf {
+  specifier: string;
+  name?: string;
+  local?: string;
+}
+
+function rustUseLeaves(node: Parser.SyntaxNode, prefix = ""): RustUseLeaf[] {
+  if (node.type === "use_list") return node.namedChildren.flatMap((child) => rustUseLeaves(child, prefix));
+  if (node.type === "scoped_use_list") {
+    const path = node.childForFieldName("path")?.text;
+    const list = node.namedChildren.find((child) => child.type === "use_list");
+    return path && list ? rustUseLeaves(list, rustJoinPath(prefix, path)) : [];
+  }
+  if (node.type === "use_as_clause") {
+    const path = node.childForFieldName("path");
+    const local = node.childForFieldName("alias")?.text;
+    const name = path ? rustPathLastName(path) : null;
+    return path && local && name
+      ? [{ specifier: rustJoinPath(prefix, path.text), name, local }]
+      : [];
+  }
+  if (node.type === "use_wildcard" || node.type === "self") {
+    return [{ specifier: rustJoinPath(prefix, node.text) }];
+  }
+  if (node.type === "identifier" || node.type === "scoped_identifier") {
+    const name = rustPathLastName(node);
+    return name
+      ? [{ specifier: rustJoinPath(prefix, node.text), name, local: name }]
+      : [];
+  }
+  return [];
+}
+
+function rustJoinPath(prefix: string, path: string): string {
+  return prefix ? `${prefix}::${path}` : path;
+}
+
+function rustPathLastName(node: Parser.SyntaxNode): string | null {
+  return node.childForFieldName("name")?.text ?? (node.type === "identifier" ? node.text : null);
 }
 
 /**
@@ -500,6 +612,7 @@ function isDeclarationName(node: Parser.SyntaxNode): boolean {
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
   if (ctx.lang === "powershell") return describePowerShell(node, ctx);
+  if (ctx.lang === "rust") return describeRust(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -529,6 +642,56 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+function describeRust(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = ctx.kinds[node.type];
+  if (!mapped) return null;
+  const rawName = node.childForFieldName("name")?.text;
+  if (!rawName) return null;
+  const name = node.type === "macro_definition" ? `${rawName}!` : rawName;
+  const directImplMember =
+    ctx.rustInImpl && ctx.enclosingKind !== "function" && ctx.enclosingKind !== "method";
+  const kind =
+    mapped === "function" &&
+    node.type !== "macro_definition" &&
+    (directImplMember || ctx.enclosingKind === "interface")
+      ? "method"
+      : mapped;
+  const body = node.childForFieldName("body");
+  return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+}
+
+function rustTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "generic_type" || node.type === "reference_type") {
+    return rustTypeName(node.childForFieldName("type"));
+  }
+  if (node.type === "scoped_type_identifier") {
+    return node.childForFieldName("name")?.text ?? null;
+  }
+  if (node.type === "type_identifier" || node.type === "identifier") return node.text;
+  return null;
+}
+
+function rustHeritageEdges(root: Parser.SyntaxNode, nodes: NodeV1[], rel: string): RawEdge[] {
+  const impls: Array<{ owner: string; trait: string }> = [];
+  const visit = (node: Parser.SyntaxNode): void => {
+    if (node.type === "impl_item") {
+      const owner = rustTypeName(node.childForFieldName("type"));
+      const trait = rustTypeName(node.childForFieldName("trait"));
+      if (owner && trait) impls.push({ owner, trait });
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+  const typeKinds = new Set<Kind>(["class", "struct", "interface", "type", "enum"]);
+  return impls.flatMap(({ owner, trait }) => {
+    const target = nodes.find((node) => node.name === owner && typeKinds.has(node.kind));
+    return target
+      ? [{ source: target.id, relation: "extends", name: trait, file: rel, lang: "rust" as const }]
+      : [];
+  });
 }
 
 /** Function-definition scope qualifiers PowerShell allows (`function global:Foo`,
@@ -660,8 +823,9 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
-): { name: string; viaMember: boolean; receiver?: string; recvType?: string } | null {
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
   if (lang === "powershell") return psCalleeName(node);
+  if (lang === "rust") return rustCalleeName(node);
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -681,6 +845,36 @@ function calleeName(
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
   return null;
+}
+
+function rustCalleeName(
+  node: Parser.SyntaxNode,
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
+  if (node.type === "macro_invocation") {
+    const name = node.childForFieldName("macro")?.text;
+    return name ? { name: `${name}!`, viaMember: false } : null;
+  }
+  let fn = node.childForFieldName("function");
+  while (fn?.type === "generic_function") fn = fn.childForFieldName("function");
+  if (fn?.type === "identifier") return { name: fn.text, viaMember: false };
+  if (fn?.type === "field_expression") {
+    const field = fn.childForFieldName("field");
+    if (field?.type !== "field_identifier") return null;
+    const value = fn.childForFieldName("value");
+    const receiver = value?.type === "identifier" || value?.type === "self" ? value.text : undefined;
+    return { name: field.text, viaMember: true, receiver };
+  }
+  if (fn?.type !== "scoped_identifier") return null;
+  const name = fn.childForFieldName("name")?.text;
+  const path = fn.childForFieldName("path");
+  if (!name || !path) return null;
+  if (path.type === "identifier" && path.text === "Self") {
+    return { name, viaMember: true, receiver: "self" };
+  }
+  if (path.type === "identifier" && /^[A-Z]/.test(path.text)) {
+    return { name, viaMember: true, recvType: path.text };
+  }
+  return { name, viaMember: false, specifier: path.text };
 }
 
 function psCalleeName(
@@ -762,7 +956,19 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
   if (lang === "powershell") return psImportKind(node) !== null;
+  if (lang === "rust") {
+    return node.type === "use_declaration" || (node.type === "mod_item" && !node.childForFieldName("body"));
+  }
   return node.type === "import_statement" || node.type === "import_from_statement";
+}
+
+function rustImportSpecifiers(node: Parser.SyntaxNode, scope: string[]): string[] {
+  if (node.type === "mod_item") {
+    const name = node.childForFieldName("name")?.text;
+    return name ? [[...scope, name].join("::")] : [];
+  }
+  const argument = node.childForFieldName("argument");
+  return argument ? rustUseLeaves(argument).map((leaf) => leaf.specifier) : [];
 }
 
 function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null {
@@ -890,6 +1096,50 @@ function psSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
   // whether a call-operator target is static (a real call) or dynamic (none).
   if (psImportKind(node)) return true;
   return node.childForFieldName("command_name")?.text.toLowerCase() === "using";
+}
+
+const RUST_BUILTIN_MACROS = new Set([
+  "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "vec", "panic",
+  "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "todo",
+  "unimplemented", "unreachable", "matches", "dbg", "include", "include_str", "include_bytes", "concat",
+  "stringify", "env", "option_env", "cfg", "line", "file", "column", "compile_error", "module_path",
+  "thread_local", "macro_rules",
+]);
+
+function rustSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
+  return lang === "rust" && node.type === "macro_invocation" &&
+    RUST_BUILTIN_MACROS.has(node.childForFieldName("macro")?.text ?? "");
+}
+
+function hasRustAttribute(node: Parser.SyntaxNode, name: string, argument?: string): boolean {
+  let sibling = node.previousNamedSibling;
+  while (sibling?.type === "attribute_item") {
+    const attribute = sibling.namedChildren.find((child) => child.type === "attribute");
+    const identifiers = attribute?.descendantsOfType("identifier") ?? [];
+    if (identifiers[0]?.text === name && (!argument || identifiers.some((child) => child.text === argument))) {
+      return true;
+    }
+    sibling = sibling.previousNamedSibling;
+  }
+  return false;
+}
+
+function rustExported(node: Parser.SyntaxNode, ctx: WalkCtx): boolean {
+  if (ctx.rustCfgTest) return false;
+  if (node.type === "macro_definition") return hasRustAttribute(node, "macro_export");
+  if (ctx.enclosingKind === "function" || ctx.enclosingKind === "method") return false;
+  if (ctx.rustInImpl && ctx.rustTraitImpl) return true;
+  if (ctx.enclosingKind === "interface") {
+    let parent = node.parent;
+    while (parent && parent.type !== "trait_item") parent = parent.parent;
+    return parent ? rustHasPublicVisibility(parent) : false;
+  }
+  return rustHasPublicVisibility(node);
+}
+
+function rustHasPublicVisibility(node: Parser.SyntaxNode): boolean {
+  const visibility = node.namedChildren.find((child) => child.type === "visibility_modifier");
+  return visibility !== undefined && !visibility.namedChildren.some((child) => child.type === "self");
 }
 
 /** PowerShell has no file-local syntactic export marker. Export-ModuleMember and
