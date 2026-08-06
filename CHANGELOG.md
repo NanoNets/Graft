@@ -19,6 +19,8 @@
   resolve in a Rust-only domain — a Rust symbol never links to a same-named
   symbol from another language — and member calls on types with several trait
   impls of the same method name are dropped as ambiguous rather than guessed.
+  Deliberate limitations: UFCS calls such as `<T as Trait>::method()` are not
+  linked, and methods in function-local `impl` blocks remain unowned functions.
 
 ### Changed
 

@@ -224,6 +224,7 @@ export interface WalkCtx {
   rustInImpl: boolean;
   rustTraitImpl: boolean;
   rustCfgTest: boolean;
+  rustInlineModDepth: number;
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -286,6 +287,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     rustInImpl: false,
     rustTraitImpl: false,
     rustCfgTest: false,
+    rustInlineModDepth: 0,
   };
   // Every id minted this file, seeded with the file node's own id (`rel`) so a
   // top-level definition can never collide with it. Threaded as its own
@@ -400,6 +402,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         ...ctx,
         scope: [...ctx.scope, name],
         rustCfgTest: ctx.rustCfgTest || hasRustAttribute(node, "cfg", "test"),
+        rustInlineModDepth: ctx.rustInlineModDepth + 1,
       };
       for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
       return;
@@ -408,7 +411,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
 
   // not a definition — capture calls/imports/references, then descend with the same context
   if (CALL_NODE_TYPES[ctx.lang].has(node.type) && !psSkipsCall(node, ctx.lang) && !rustSkipsCall(node, ctx.lang)) {
-    const callee = calleeName(node, ctx.lang);
+    const callee = calleeName(node, ctx.lang, ctx.rustInlineModDepth);
     if (callee) {
       const callEdge: RawEdge = {
         source: ctx.parentId,
@@ -678,7 +681,9 @@ function describeRust(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | nu
     (directImplMember || ctx.enclosingKind === "interface")
       ? "method"
       : mapped;
-  const body = node.childForFieldName("body");
+  const body = node.type === "macro_definition"
+    ? node.descendantsOfType("token_tree")[0]
+    : node.childForFieldName("body");
   return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
 }
 
@@ -843,9 +848,10 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
+  rustInlineDepth = 0,
 ): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
   if (lang === "powershell") return psCalleeName(node);
-  if (lang === "rust") return rustCalleeName(node);
+  if (lang === "rust") return rustCalleeName(node, rustInlineDepth);
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -869,9 +875,11 @@ function calleeName(
 
 function rustCalleeName(
   node: Parser.SyntaxNode,
+  inlineModDepth: number,
 ): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
   if (node.type === "macro_invocation") {
-    const name = node.childForFieldName("macro")?.text;
+    const macro = node.childForFieldName("macro");
+    const name = macro ? rustPathLastName(macro) : null;
     return name ? { name: `${name}!`, viaMember: false } : null;
   }
   let fn = node.childForFieldName("function");
@@ -894,7 +902,10 @@ function rustCalleeName(
   if (path.type === "identifier" && /^[A-Z]/.test(path.text)) {
     return { name, viaMember: true, recvType: path.text };
   }
-  return { name, viaMember: false, specifier: path.text };
+  const specifier = rustConsumeInlineModPrefix(path.text, inlineModDepth);
+  return specifier
+    ? { name, viaMember: false, specifier }
+    : { name, viaMember: false };
 }
 
 function psCalleeName(
@@ -984,8 +995,9 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
 
 function rustImportSpecifiers(node: Parser.SyntaxNode, scope: string[]): string[] {
   if (node.type === "mod_item") {
+    if (hasRustAttribute(node, "path")) return [];
     const name = node.childForFieldName("name")?.text;
-    return name ? [[...scope, name].join("::")] : [];
+    return name ? [`self::${[...scope, name].join("::")}`] : [];
   }
   const argument = node.childForFieldName("argument");
   if (!argument) return [];
@@ -1131,8 +1143,10 @@ const RUST_BUILTIN_MACROS = new Set([
 ]);
 
 function rustSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
-  return lang === "rust" && node.type === "macro_invocation" &&
-    RUST_BUILTIN_MACROS.has(node.childForFieldName("macro")?.text ?? "");
+  if (lang !== "rust" || node.type !== "macro_invocation") return false;
+  const macro = node.childForFieldName("macro");
+  const name = macro ? rustPathLastName(macro) : null;
+  return name !== null && RUST_BUILTIN_MACROS.has(name);
 }
 
 function hasRustAttribute(node: Parser.SyntaxNode, name: string, argument?: string): boolean {
@@ -1140,7 +1154,9 @@ function hasRustAttribute(node: Parser.SyntaxNode, name: string, argument?: stri
   while (sibling?.type === "attribute_item") {
     const attribute = sibling.namedChildren.find((child) => child.type === "attribute");
     const identifiers = attribute?.descendantsOfType("identifier") ?? [];
-    if (identifiers[0]?.text === name && (!argument || identifiers.some((child) => child.text === argument))) {
+    const tokenTree = attribute?.namedChildren.find((child) => child.type === "token_tree");
+    const argumentMatches = !argument || tokenTree?.text.replace(/\s+/g, "") === `(${argument})`;
+    if (identifiers[0]?.text === name && argumentMatches) {
       return true;
     }
     sibling = sibling.previousNamedSibling;

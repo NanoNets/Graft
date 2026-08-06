@@ -82,6 +82,7 @@ export interface GoModule {
 export interface RustCrate {
   name: string;
   dir: string;
+  aliases?: Record<string, string>;
 }
 
 export interface ResolveOptions {
@@ -121,6 +122,8 @@ interface OwnerIndex {
   classParents: Map<string, string[]>;
   /** PowerShell-only exact-case owner-qualified method candidates. */
   psOwnerMethodExact: Map<string, NodeV1[]>;
+  rustOwnerMethod: Map<string, NodeV1[]>;
+  rustClassParents: Map<string, string[]>;
   psOwnerMethod: Map<string, NodeV1[]>;
   psClassParents: Map<string, string[]>;
 }
@@ -142,6 +145,7 @@ export function resolveEdges(
   // typed member-call resolution (recvType + name → a specific class's method).
   const ownerMethod = new Map<string, NodeV1[]>();
   const psOwnerMethodExact = new Map<string, NodeV1[]>();
+  const rustOwnerMethod = new Map<string, NodeV1[]>();
   const psOwnerMethod = new Map<string, NodeV1[]>();
   // Go package resolution: dir (posix) → its `.go` file node ids, for import mapping.
   const goFilesByDir = new Map<string, string[]>();
@@ -168,7 +172,9 @@ export function resolveEdges(
     }
     if (n.kind === "method" && n.owner) {
       const key = `${n.owner}.${n.name}`;
-      if (isPsPath(n.path)) {
+      if (isRustPath(n.path)) {
+        push(rustOwnerMethod, key, n);
+      } else if (isPsPath(n.path)) {
         push(psOwnerMethodExact, key, n);
         push(psOwnerMethod, key.toLowerCase(), n);
       } else {
@@ -181,6 +187,7 @@ export function resolveEdges(
   // `extends` edges (source id's own name → the base name). Used to walk up an
   // inheritance chain when a receiver's own type has no matching method.
   const classParents = new Map<string, string[]>();
+  const rustClassParents = new Map<string, string[]>();
   const psClassParents = new Map<string, string[]>();
   for (const e of rawEdges) {
     if (e.relation !== "extends" || !e.name) continue;
@@ -189,7 +196,9 @@ export function resolveEdges(
     // ids can carry a dedup ordinal (W2's `Cache~2`).
     const ownName = byId.get(e.source)?.name;
     if (!ownName) continue;
-    if (e.lang === "powershell") {
+    if (e.lang === "rust") {
+      push(rustClassParents, ownName, e.name);
+    } else if (e.lang === "powershell") {
       push(psClassParents, ownName.toLowerCase(), e.name.toLowerCase());
     } else {
       push(classParents, ownName, e.name);
@@ -204,7 +213,15 @@ export function resolveEdges(
     psGlobalName,
     psTestPaths,
   };
-  const ownerIndex: OwnerIndex = { ownerMethod, classParents, psOwnerMethodExact, psOwnerMethod, psClassParents };
+  const ownerIndex: OwnerIndex = {
+    ownerMethod,
+    classParents,
+    psOwnerMethodExact,
+    rustOwnerMethod,
+    rustClassParents,
+    psOwnerMethod,
+    psClassParents,
+  };
   // memoizes isTestPath(callerFile) across the whole rawEdges pass — many
   // edges share the same originating file.
   const callerIsTestCache = new Map<string, boolean>();
@@ -381,7 +398,15 @@ function resolveTypedMember(
   name: string,
   file: string,
   lang: Language | undefined,
-  { ownerMethod, classParents, psOwnerMethodExact, psOwnerMethod, psClassParents }: OwnerIndex,
+  {
+    ownerMethod,
+    classParents,
+    psOwnerMethodExact,
+    rustOwnerMethod,
+    rustClassParents,
+    psOwnerMethod,
+    psClassParents,
+  }: OwnerIndex,
 ): { id: string; confidence: EdgeV1["confidence"] } | "ambiguous" | null {
   const MAX_DEPTH = 3;
   const isPs = lang === "powershell";
@@ -390,7 +415,7 @@ function resolveTypedMember(
   for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
     if (lang === "rust") {
       const level = frontier.flatMap((type) =>
-        (ownerMethod.get(`${type}.${name}`) ?? []).filter((candidate) => isRustPath(candidate.path)),
+        rustOwnerMethod.get(`${type}.${name}`) ?? [],
       );
       if (level.length > 1) return "ambiguous";
       if (level.length === 1) {
@@ -427,7 +452,11 @@ function resolveTypedMember(
     }
     const next: string[] = [];
     for (const type of frontier) {
-      const parents = isPs ? (psClassParents.get(type.toLowerCase()) ?? []) : (classParents.get(type) ?? []);
+      const parents = lang === "rust"
+        ? (rustClassParents.get(type) ?? [])
+        : isPs
+          ? (psClassParents.get(type.toLowerCase()) ?? [])
+          : (classParents.get(type) ?? []);
       for (const parent of parents) {
         const key = isPs ? parent.toLowerCase() : parent;
         if (visited.has(key)) continue;
@@ -488,7 +517,7 @@ function resolveImport(
 
 /** A Rust module's child directory. Crate-root files and mod.rs own their
  * containing directory; every other module file owns a same-named directory. */
-function rustModuleDir(file: string): string {
+function rustModuleDir(file: string, crates: RustCrate[]): string {
   const normalized = toPosixPath(file);
   const dir = posix.dirname(normalized);
   const base = posix.basename(normalized);
@@ -496,15 +525,28 @@ function rustModuleDir(file: string): string {
     base === "lib.rs" ||
     base === "main.rs" ||
     base === "mod.rs" ||
-    isRustAuxiliaryCrateRoot(normalized)
+    isRustAuxiliaryCrateRoot(normalized, crates)
   ) {
     return dir;
   }
   return posix.join(dir, base.slice(0, -3));
 }
 
-function isRustAuxiliaryCrateRoot(file: string): boolean {
-  return /(?:^|\/)(?:tests|benches|examples)\/[^/]+\.rs$/.test(toPosixPath(file));
+function rustAuxiliaryDir(file: string, crate: RustCrate): string | null {
+  const normalized = toPosixPath(file);
+  for (const name of ["tests", "benches", "examples"]) {
+    const dir = crate.dir === "." ? name : posix.join(crate.dir, name);
+    if (pathIsWithin(normalized, dir)) return dir;
+  }
+  return null;
+}
+
+function isRustAuxiliaryCrateRoot(file: string, crates: RustCrate[]): boolean {
+  const normalized = toPosixPath(file);
+  const crate = owningRustCrate(normalized, crates);
+  if (!crate || !normalized.endsWith(".rs")) return false;
+  const auxiliaryDir = rustAuxiliaryDir(normalized, crate);
+  return auxiliaryDir !== null && posix.dirname(normalized) === auxiliaryDir;
 }
 
 function rustCrateSrcDir(crate: RustCrate): string {
@@ -539,9 +581,19 @@ function owningRustCrate(file: string, crates: RustCrate[]): RustCrate | null {
   return best?.crate ?? null;
 }
 
-function matchingRustCrate(segment: string, crates: RustCrate[]): RustCrate | null {
+function matchingRustCrate(segment: string, file: string, crates: RustCrate[]): RustCrate | null {
   const normalized = segment.replace(/-/g, "_");
-  return crates.find((crate) => crate.name.replace(/-/g, "_") === normalized) ?? null;
+  const owner = owningRustCrate(file, crates);
+  const alias = owner
+    ? Object.entries(owner.aliases ?? {}).find(([name]) => name.replace(/-/g, "_") === normalized)?.[1]
+    : undefined;
+  if (alias) {
+    const aliased = crates.filter((crate) => crate.name.replace(/-/g, "_") === alias.replace(/-/g, "_"));
+    if (aliased.length === 1) return aliased[0];
+    if (aliased.length > 1) return null;
+  }
+  const direct = crates.filter((crate) => crate.name.replace(/-/g, "_") === normalized);
+  return direct.length === 1 ? direct[0] : null;
 }
 
 function resolveRustModule(
@@ -572,22 +624,24 @@ function resolveRustImport(
   let remaining: string[];
   let rootFile: string | null = null;
   if (segments[0] === "crate") {
-    if (isRustAuxiliaryCrateRoot(file)) {
+    const crate = owningRustCrate(file, crates);
+    if (!crate) return spec;
+    if (isRustAuxiliaryCrateRoot(file, crates)) {
       rootFile = toPosixPath(file);
       baseDir = posix.dirname(rootFile);
+    } else if (rustAuxiliaryDir(file, crate)) {
+      return spec;
     } else {
-      const crate = owningRustCrate(file, crates);
-      if (!crate) return spec;
       rootFile = rustCrateRoot(crate, byId);
       if (!rootFile) return spec;
       baseDir = rustCrateSrcDir(crate);
     }
     remaining = segments.slice(1);
   } else if (segments[0] === "self") {
-    baseDir = rustModuleDir(file);
+    baseDir = rustModuleDir(file, crates);
     remaining = segments.slice(1);
   } else if (segments[0] === "super") {
-    baseDir = rustModuleDir(file);
+    baseDir = rustModuleDir(file, crates);
     let index = 0;
     while (segments[index] === "super") {
       baseDir = posix.dirname(baseDir);
@@ -595,7 +649,7 @@ function resolveRustImport(
     }
     remaining = segments.slice(index);
   } else {
-    const crate = matchingRustCrate(segments[0], crates);
+    const crate = matchingRustCrate(segments[0], file, crates);
     if (crate) {
       rootFile = rustCrateRoot(crate, byId);
       if (!rootFile) return spec;
@@ -604,7 +658,7 @@ function resolveRustImport(
     } else if (segments.length === 1) {
       // Bodyless `mod x;` has no syntactic marker by resolution time, but its
       // single-segment shape is enough to try the declaring module's child dir.
-      baseDir = rustModuleDir(file);
+      baseDir = rustModuleDir(file, crates);
       remaining = segments;
     } else {
       return spec;
