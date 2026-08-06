@@ -18,10 +18,10 @@
  * degrade safely: no fingerprint → "unknown, rebuild"; no parse cache → the
  * rebuild is just cold.
  */
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
 import { contentHash } from "../util/id.js";
+import { readSourceFile } from "../util/source.js";
 import { readJson, writeJsonAtomic } from "../util/state.js";
 import { extractorStamp, pruneSidecars, type ExtractEntry } from "./extract-cache.js";
 import { listSourceStats } from "./source-files.js";
@@ -158,7 +158,15 @@ export function probeDrift(root: string, outDir: string): Drift | null {
     // the only way to learn it's readable again is to try.
     let now: string;
     try {
-      now = contentHash(readFileSync(f.abs, "utf8"));
+      const source = readSourceFile(f.abs);
+      if (source === null) {
+        // A previously indexed file becoming undecodable is real drift: rebuild
+        // once to remove its stale nodes. Empty-hash entries were already skipped
+        // by the last build, so they remain clean and avoid rebuild churn.
+        if (hash) drift.changed.push(f.rel);
+        continue;
+      }
+      now = contentHash(source);
     } catch {
       continue; // unreadable right now — leave it to the next probe
     }

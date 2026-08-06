@@ -17,13 +17,13 @@
  * code. `stale` is a meaning-layer signal the last build already recorded.
  * `pending` (never summarized) is not drift — it's a deliberate Tier-1-only build.
  */
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { relPosix } from "../util/paths.js";
 import { contextDirFor } from "../context/node-file.js";
 import { extractFile, languageOf } from "./extract.js";
 import { listSourceFiles } from "./build.js";
 import { readGraph, wiringPath } from "./write.js";
+import { readSourceFile } from "../util/source.js";
 
 export interface GraphCheckResult {
   ok: boolean;
@@ -65,12 +65,13 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
   const current = new Map<string, string>(); // id → body_hash
   for (const file of listSourceFiles(root, outDir)) {
     const lang = languageOf(file)!;
-    let source: string;
+    let source: string | null;
     try {
-      source = readFileSync(file, "utf8");
+      source = readSourceFile(file);
     } catch {
       continue; // unreadable now → its nodes show up as `removed` below
     }
+    if (source === null) continue; // unsupported encoding (e.g. UTF-16BE)
     try {
       const { nodes } = extractFile(relPosix(root, file), source, lang);
       for (const n of nodes) current.set(n.id, n.body_hash);

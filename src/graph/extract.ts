@@ -243,20 +243,49 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     goReceiverVar: null,
     importedSymbols,
   };
-  for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges);
+  // Every id minted this file, seeded with the file node's own id (`rel`) so a
+  // top-level definition can never collide with it. Threaded as its own
+  // parameter rather than living on WalkCtx — WalkCtx is spread into every
+  // childCtx, so a by-ref Set there would read as ordinary inherited context
+  // when it's actually accidental shared mutable state across the whole walk.
+  const minted = new Set<string>([rel]);
+  for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges, minted);
   // nodes[0] is the file node; the rest are its symbols. Index the module-level
   // residual on the file node so a term outside every symbol still surfaces it.
   nodes[0].body_text = fileResidual(source, nodes.slice(1));
   return { nodes, rawEdges };
 }
 
-function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEdge[]): void {
+/** Mint-time uniqueness: a document-order duplicate (same name reopened, or two
+ * sibling defs that happen to collide) gets `~2`, `~3`, ... instead of silently
+ * shadowing the first. The while-loop (not a single `~2` guess) is what makes
+ * this collision-proof: a source name that itself ends in ~N would collide
+ * with a single-guess suffix, so this keeps incrementing until it finds a
+ * truly free id rather than trusting one candidate suffix is unused. */
+export function mintId(base: string, minted: Set<string>): string {
+  let id = base;
+  let k = 2;
+  while (minted.has(id)) id = `${base}~${k++}`;
+  minted.add(id);
+  return id;
+}
+
+function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEdge[], minted: Set<string>): void {
   const desc = describe(node, ctx);
   if (desc) {
     // `idName` scopes the id (e.g. a Go method under its receiver: `#DB.Count`) while
     // `name` stays the bare symbol name so member-call resolution matches it.
     const idPart = desc.idName ?? desc.name;
-    const id = `${ctx.rel}#${[...ctx.scope, idPart].join(".")}`;
+    const base = `${ctx.rel}#${[...ctx.scope, idPart].join(".")}`;
+    const id = mintId(base, minted);
+    const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
+    // The bare name of this node's OWN immediate enclosing class/receiver — for a
+    // Go method that's its receiver type (methods aren't nested, so ctx.enclosingClass
+    // wouldn't see it); for every other method it's simply what the nearest ancestor
+    // class already set as ctx.enclosingClass. Only method nodes carry it — resolve.ts's
+    // ownerMethod index is the sole consumer (see NodeV1.owner's doc comment).
+    const owner: string | undefined =
+      desc.kind === "method" ? (isGoMethod ? (goReceiverType(node) ?? undefined) : (ctx.enclosingClass ?? undefined)) : undefined;
     out.push({
       id,
       name: desc.name,
@@ -276,13 +305,13 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       summary_state: "pending",
       summary: null,
       crux: null,
+      ...(owner !== undefined ? { owner } : {}),
     });
     // structural containment
     edges.push({ source: ctx.parentId, relation: "contains", targetId: id, file: ctx.rel });
     // class heritage
     if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
 
-    const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
     const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
@@ -296,7 +325,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? withoutShadowedImports(ctx.importedSymbols, node)
           : ctx.importedSymbols,
     };
-    for (const child of node.namedChildren) walk(child, childCtx, out, edges);
+    for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
     return;
   }
 
@@ -338,7 +367,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     }
   }
 
-  for (const child of node.namedChildren) walk(child, ctx, out, edges);
+  for (const child of node.namedChildren) walk(child, ctx, out, edges, minted);
 }
 
 /**

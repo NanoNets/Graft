@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Changed
+
+- **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
+  Groundwork for adding new language grammars that require the 0.25 runtime.
+  `tree-sitter-typescript@0.23.2` is still the latest release and declares a
+  `peerOptional tree-sitter@^0.21.0`, so an npm `overrides` entry pins its
+  nested `tree-sitter` dependency to the root one and lets the install resolve
+  cleanly. Syntax-node comparisons now use Tree-sitter's stable node IDs rather
+  than JavaScript object identity, whose behavior differs between runtime
+  versions. The minimum Node.js version is now 22.12, matching Commander 15 and
+  ensuring Windows installs can use Tree-sitter 0.25's prebuilt native module.
+
+## 0.9.0
+
+### Added
+
+- **`graft build --include-dir <name>`** — an explicit, persisted override for
+  `SKIP_DIRS` (repeatable: `--include-dir build --include-dir tools`). Some
+  ecosystems keep genuine hand-written source under a directory name graft
+  otherwise treats as build output (e.g. a `build/` that isn't generated).
+  The override is persisted per repo in Git-ignored `.graft/config.json`: set
+  it once and every later no-flag `graft build`, plus the hooks/refresh path
+  (which never sees CLI flags at all), include it identically. It lifts only
+  graft's own skip list — in a
+  Git repository, Git's ignore rules stay authoritative, so a directory that
+  is both skip-listed and gitignored needs un-ignoring (or `git add -f`) too,
+  the same contract indexing already applies to tracked-but-ignored files.
+  Dot-directories are never overridable. Reaches the wiring graph, the Tier-2
+  markdown/concept pipeline, Go module discovery, and workspace child builds
+  alike, and is validated up front (a bare directory name only — no paths, no
+  dot-prefixes).
+
 ### Fixed
 
 - **`graft map` no longer promotes unrelated methods into hubs and hotspots.**
@@ -96,17 +128,34 @@
   matches. Pass a real prefix (`--in server/src/gpu`), a full file path
   (`--in src/a.ts`), or use `grep`'s pattern to match on content.
 
-- **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
-  Groundwork for adding new language grammars that require the 0.25 runtime.
-  `tree-sitter-typescript@0.23.2` is still the latest release and declares a
-  `peerOptional tree-sitter@^0.21.0`, so an npm `overrides` entry pins its
-  nested `tree-sitter` dependency to the root one and lets the install resolve
-  cleanly. Syntax-node comparisons now use Tree-sitter's stable node IDs rather
-  than JavaScript object identity, whose behavior differs between runtime
-  versions. The minimum Node.js version is now 22.12, matching Commander 15 and
-  ensuring Windows installs can use Tree-sitter 0.25's prebuilt native module.
+- **Duplicate-named definitions no longer silently collide onto one graph node
+  id.** A branch-guarded redeclaration, a reopened class, or any other same-name
+  definition within a file used to mint the exact same node id as an earlier
+  definition, so the second one silently overwrote the first in every id-keyed
+  lookup (`callers`, `ask`, MCP tools). Every definition now mints a unique id
+  (`~2`, `~3`, ... on a document-order duplicate), and a qualified query
+  (`Class.method`) now matches every duplicate, not just the first.
+
+- **UTF-16LE source is now decoded consistently everywhere graft reads repo
+  source.** `graft build`'s parse, `check`'s and `fingerprint`'s drift hashes,
+  the context summarizer's input, `ask --source`'s span slicer, and `grep` each
+  read files with their own `readFileSync(file, "utf8")` — hashing what the
+  parser actually sees wasn't guaranteed, and a UTF-16LE file (the common
+  encoding Windows tooling writes) got silently mojibake'd by some readers and
+  not others. All of them now share one `readSourceFile`, so a file decodes
+  identically no matter which command reads it. UTF-16BE, unsupported by
+  Node's built-in decoders, is a clean skip (an empty entry) rather than a
+  mojibake read.
+
+- **`graft callers`'s zero-hit note now says when the query name itself is
+  ambiguous.** When a symbol name is defined more than once, name resolution
+  drops a cross-file call to it rather than guessing which definition it means
+  — so a zero-hit result could really mean "something calls this, but the edge
+  was dropped for being ambiguous." The note now states how many definitions
+  share the name.
 
 [#33]: https://github.com/NanoNets/Graft/issues/33
+[#34]: https://github.com/NanoNets/Graft/issues/34
 [#35]: https://github.com/NanoNets/Graft/issues/35
 [#36]: https://github.com/NanoNets/Graft/issues/36
 [#37]: https://github.com/NanoNets/Graft/issues/37

@@ -62,6 +62,58 @@ export function writeJsonAtomic(p: string, value: unknown, compact = false): voi
 
 export function readStats(d: string): Stats | null { return readJson<Stats>(statsPath(d)); }
 export function writeStats(d: string, s: Stats): void { writeJsonAtomic(statsPath(d), s); }
+
+/**
+ * Persisted per-repo build configuration — currently just `graft build
+ * --include-dir`'s override. An explicit input like the graph itself: absent
+ * or empty `includeDirs` means today's default (every `SKIP_DIRS` name stays
+ * skipped), so a repo that never used the flag is entirely unaffected.
+ */
+export interface BuildConfig {
+  /** SKIP_DIRS names to include in this repo's walks, persisted so a LATER
+   * no-flag build — and the fingerprint/refresh path, which never sees CLI
+   * flags at all — behave identically to the invocation that set it. */
+  includeDirs?: string[];
+}
+
+/** Local, Git-ignored repository configuration. Kept outside generated
+ * `graft/` output so deleting/replacing that cache, workspace federation, and
+ * custom `--dir` builds cannot erase or redirect the persisted choice. */
+export const BUILD_CONFIG_DIR = '.graft';
+
+export function buildConfigPath(d: string): string { return join(d, BUILD_CONFIG_DIR, 'config.json'); }
+
+/** Keep local build configuration out of Git without coupling it to the
+ * generated graph directory. Best-effort, matching graph-cache ignore setup. */
+function ensureBuildConfigIgnored(d: string): void {
+  const path = join(d, '.gitignore');
+  let current = '';
+  try { current = readFileSync(path, 'utf8'); } catch { /* no .gitignore yet */ }
+  const present = current.split('\n').some((line) => {
+    const value = line.trim();
+    return value === BUILD_CONFIG_DIR || value === `${BUILD_CONFIG_DIR}/` || value === `/${BUILD_CONFIG_DIR}/`;
+  });
+  if (present) return;
+  const gap = current === '' ? '' : current.endsWith('\n') ? '\n' : '\n\n';
+  const block = `${gap}# graft's local repository settings — not committed.\n/${BUILD_CONFIG_DIR}/\n`;
+  try { writeFileSync(path, current + block); } catch { /* best-effort */ }
+}
+
+export function readBuildConfig(d: string): BuildConfig | null { return readJson<BuildConfig>(buildConfigPath(d)); }
+export function writeBuildConfig(d: string, c: BuildConfig): void {
+  ensureBuildConfigIgnored(d);
+  writeJsonAtomic(buildConfigPath(d), c);
+}
+
+/** The persisted `--include-dir` override for repo `d`, as a Set — `undefined`
+ * when nothing was ever persisted (or the persisted list is empty), which every
+ * `shouldSkipDir`/`walkDir` caller treats as "today's default behavior". Shared
+ * by every walkDir-driven entry point (source-files.ts, scopes.ts) so a build,
+ * a later no-flag rebuild, and the hooks/refresh path all agree. */
+export function readIncludeDirs(d: string): Set<string> | undefined {
+  const dirs = readBuildConfig(d)?.includeDirs;
+  return dirs && dirs.length ? new Set(dirs) : undefined;
+}
 // Best-effort read-modify-write; not atomic across concurrent processes, but acceptable
 // for episodic hook writes (worst case is a lost update, not corruption).
 export function patchStats(d: string, patch: Partial<Stats>): Stats {

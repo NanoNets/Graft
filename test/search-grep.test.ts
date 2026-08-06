@@ -161,6 +161,30 @@ test('grepGraph: a hit outside every symbol span groups as file-level (symbol: n
   assert.match(moduleLevel!.hits[0].text, /NEEDLE at module level/);
 });
 
+test('A3: a duplicate-named definition displays its minted ordinal in the grouped symbol name', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-grep-dup-'));
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(
+    join(d, 'src', 'dup.ts'),
+    [
+      'export function helper(): void {',
+      '  console.log("NEEDLE first");',
+      '}',
+      '',
+      'export function helper(): void {',
+      '  console.log("NEEDLE second");',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d], { stdio: 'pipe' });
+  const graph = loadBuiltGraph(d);
+  const r = grepGraph(graph, d, 'NEEDLE');
+
+  const names = r.groups.map((g) => g.symbol?.name).sort();
+  assert.deepEqual(names, ['helper', 'helper~2'], 'the second definition displays its minted ordinal, not a bare duplicate name');
+});
+
 test('grepGraph: `in` filter narrows to matching file paths only', () => {
   const repo = needleRepo();
   const graph = loadBuiltGraph(repo);

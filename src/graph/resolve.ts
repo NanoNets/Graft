@@ -60,10 +60,8 @@ export function resolveEdges(
     let fileMap = perFileName.get(n.path);
     if (!fileMap) perFileName.set(n.path, (fileMap = new Map()));
     push(fileMap, n.name, n);
-    if (n.kind === "method") {
-      const post = n.id.slice(n.id.indexOf("#") + 1);
-      const segs = post.split(".");
-      if (segs.length >= 2) push(ownerMethod, `${segs[segs.length - 2]}.${segs[segs.length - 1]}`, n);
+    if (n.kind === "method" && n.owner) {
+      push(ownerMethod, `${n.owner}.${n.name}`, n);
     }
   }
 
@@ -73,8 +71,11 @@ export function resolveEdges(
   const classParents = new Map<string, string[]>();
   for (const e of rawEdges) {
     if (e.relation !== "extends" || !e.name) continue;
-    const post = e.source.slice(e.source.indexOf("#") + 1);
-    const ownName = post.split(".").pop()!;
+    // The declaring class's own bare name — read from its node (keyed by n.name, set
+    // once at mint time) rather than re-derived by slicing e.source, which breaks once
+    // ids can carry a dedup ordinal (A3's `Cache~2`).
+    const ownName = byId.get(e.source)?.name;
+    if (!ownName) continue;
     push(classParents, ownName, e.name);
   }
 

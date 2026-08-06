@@ -64,11 +64,21 @@ export function callersSavings(
   return savingsFor(graph, paths);
 }
 
-/** Loud, actionable empty-result note — never a bare empty list. */
-export function looseNoteFor(direction: Direction, name: string): string {
+/** Loud, actionable empty-result note — never a bare empty list. `candidateCount`
+ * is how many nodes {@link resolveSymbol} matched for this query (both call
+ * sites already hold it as `matches.length`) — when it's >1, the query name is
+ * itself ambiguous (several definitions share it), which is exactly the case
+ * `resolve.ts` drops a cross-file call/reference for rather than guessing which
+ * one it means. Without saying so, a zero-hit result here reads as "nothing
+ * calls this" when it may really be "something does, but the edge was dropped". */
+export function looseNoteFor(direction: Direction, name: string, candidateCount: number): string {
   const label = direction === "out" ? "callees" : "callers";
   const dir = direction === "out" ? "outgoing" : "incoming";
-  return `  no indexed ${label} — the graph has no ${dir} call/reference edges for this symbol as written. Check the name (try the bare symbol, or "Type.method"), or find its uses with graft grep "${name}". Fall back to raw grep -rn only for unindexed files`;
+  const ambiguity =
+    candidateCount > 1
+      ? ` ${candidateCount} definitions share the name "${name}"; a cross-file caller of an ambiguous name is dropped rather than guessed, so this may undercount.`
+      : "";
+  return `  no indexed ${label} — the graph has no ${dir} call/reference edges for this symbol as written.${ambiguity} Check the name (try the bare symbol, or "Type.method"), or find its uses with graft grep "${name}". Fall back to raw grep -rn only for unindexed files`;
 }
 
 interface SymbolJson {
@@ -179,7 +189,7 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
       matches: results.map((r): MatchJson => {
         const m: MatchJson = { symbol: symbolJson(r.symbol), hits: r.hits.map(hitJson) };
         if (r.hits.length === 0) {
-          m.note = looseNoteFor(direction, r.symbol.name);
+          m.note = looseNoteFor(direction, r.symbol.name, matches.length);
         }
         return m;
       }),
@@ -192,7 +202,7 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
   const lines: string[] = [];
   for (const { symbol, hits } of results) {
     lines.push(headerOf(symbol));
-    if (hits.length === 0) lines.push(looseNoteFor(direction, symbol.name));
+    if (hits.length === 0) lines.push(looseNoteFor(direction, symbol.name, matches.length));
     else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     lines.push("");
   }

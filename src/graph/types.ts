@@ -40,6 +40,11 @@ export interface NodeV1 {
   id: string; // path-scoped: "src/cache.ts#Cache.get"
   name: string; // the symbol's own name: "get"
   kind: Kind;
+  // method nodes only: the bare name of the immediate enclosing class/receiver
+  // ("Cache" for "get"). Lets owner-qualified lookups (resolve.ts's ownerMethod
+  // index) key off a stored field instead of re-deriving it by slicing `id`,
+  // which breaks once ids can carry a dedup ordinal (`Cache.get~2`).
+  owner?: string;
 
   // location (Tier-1, deterministic)
   path: string; // repo-relative: "src/cache.ts"

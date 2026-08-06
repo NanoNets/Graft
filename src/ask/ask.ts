@@ -32,6 +32,7 @@ import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { rankScopesAndFuse } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
+import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
 
 export interface AskHit {
@@ -744,7 +745,9 @@ function parseSpan(pointer: string): { path: string; from: number; to: number } 
  * capped at {@link MAX_SPAN_LINES}. Returns null if the file can't be read. */
 function sliceSpan(root: string, path: string, from: number, to: number): string | null {
   try {
-    const lines = readFileSync(join(root, path), "utf8").split("\n");
+    const source = readSourceFile(join(root, path));
+    if (source === null) return null; // unsupported encoding (e.g. UTF-16BE)
+    const lines = source.split("\n");
     const start = Math.max(1, from);
     const end = Math.min(lines.length, to);
     const slice = lines.slice(start - 1, end);

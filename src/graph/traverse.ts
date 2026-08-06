@@ -85,6 +85,19 @@ export function resolveSymbol(graph: GraphV1, query: string, opts: ResolveSymbol
   return matches;
 }
 
+/** Strips extract.ts's mint-time disambiguation ordinals (`~2`, `~3`, ...)
+ * from segment ends in a dotted id-tail — the same shape extract.ts mints
+ * when a document-order duplicate definition would otherwise collide with an
+ * already-minted id (see extract.ts's mint-time uniqueness comment). Without
+ * this, a qualified query like `C.m` only ever matches the bare id (`#C.m`),
+ * silently hiding the `~2` duplicate from callers/ask/MCP lookups. The
+ * ordinal can land on any segment, not just the tail (a reopened class shows
+ * up as `C~2.m`), so this strips at every segment boundary (`.` or end of
+ * string), not just the very end of the string. */
+function stripOrdinals(idTail: string): string {
+  return idTail.replace(/~\d+(?=\.|$)/g, "");
+}
+
 function symbolMatches(nodes: NodeV1[], lowerQuery: string): NodeV1[] {
   const suffixHash = "#" + lowerQuery;
   const suffixDot = "." + lowerQuery;
@@ -92,7 +105,9 @@ function symbolMatches(nodes: NodeV1[], lowerQuery: string): NodeV1[] {
     if (n.kind === "file") return false;
     if (n.name.toLowerCase() === lowerQuery) return true;
     const lowerId = n.id.toLowerCase();
-    return lowerId.endsWith(suffixHash) || lowerId.endsWith(suffixDot);
+    const hashIdx = lowerId.indexOf("#");
+    const candidateId = hashIdx === -1 ? lowerId : lowerId.slice(0, hashIdx + 1) + stripOrdinals(lowerId.slice(hashIdx + 1));
+    return candidateId.endsWith(suffixHash) || candidateId.endsWith(suffixDot);
   });
 }
 

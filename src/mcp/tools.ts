@@ -137,7 +137,7 @@ function renderMatches(
     .map((m) => {
       const hits = hitsFor(m);
       const lines = [headerOf(m)];
-      if (hits.length === 0) lines.push(looseNoteFor(direction, m.name));
+      if (hits.length === 0) lines.push(looseNoteFor(direction, m.name, matches.length));
       else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
       return lines.join('\n');
     })

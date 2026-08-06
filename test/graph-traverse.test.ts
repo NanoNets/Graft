@@ -156,6 +156,35 @@ test("resolveSymbol: unknown symbol returns empty array", () => {
   assert.deepEqual(resolveSymbol(g, "NoSuchSymbol"), []);
 });
 
+test("resolveSymbol: qualified query matches both the bare and ordinal-suffixed ids of a duplicated definition (A3)", () => {
+  // extract.ts mints `~2`, `~3`, ... on a document-order duplicate definition
+  // (same name reopened) rather than shadowing the first — see extract.ts's
+  // mint-time uniqueness comment. Before this fix, a qualified query like
+  // "C.m" only ever matched the bare id (`#C.m`), silently hiding the `~2`
+  // duplicate from callers/ask/MCP lookups.
+  const dupFirst = nodeStub({ id: "src/dup.ts#C.m", name: "m", kind: "method", path: "src/dup.ts" });
+  const dupSecond = nodeStub({ id: "src/dup.ts#C.m~2", name: "m", kind: "method", path: "src/dup.ts" });
+  const g = graphOf([dupFirst, dupSecond], []);
+  const matches = resolveSymbol(g, "C.m");
+  assert.deepEqual(
+    matches.map((n) => n.id).sort(),
+    ["src/dup.ts#C.m", "src/dup.ts#C.m~2"].sort(),
+  );
+});
+
+test("resolveSymbol: ordinal suffix stripped mid-path too, so a qualified query stays precise rather than falling back to an over-broad bare-name match", () => {
+  // The ordinal can land on any segment, not only the tail — a class itself
+  // reopened would put `~2` on the scope segment (`C~2.m`), not the method
+  // name. Without stripping it there, the direct id-suffix check finds
+  // nothing and resolveSymbol falls through to its last-segment bare-name
+  // fallback, which would incorrectly sweep in every unrelated `m` method
+  // (here, D.m) instead of precisely matching only the C-scoped one.
+  const cScoped = nodeStub({ id: "src/dup.ts#C~2.m", name: "m", kind: "method", path: "src/dup.ts" });
+  const dScoped = nodeStub({ id: "src/dup.ts#D.m", name: "m", kind: "method", path: "src/dup.ts" });
+  const g = graphOf([cScoped, dScoped], []);
+  assert.deepEqual(resolveSymbol(g, "C.m").map((n) => n.id), ["src/dup.ts#C~2.m"]);
+});
+
 // ── callersOf / calleesOf ────────────────────────────────────────────────
 
 test("calleesOf: walks outgoing walk-relation edges, keeping unresolved targets", () => {

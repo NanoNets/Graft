@@ -20,6 +20,8 @@ import { contextDirFor, ensureGitignored, ensureSearchable } from "../context/no
 import { extractFile, languageLabelOf, languageOf, type RawEdge } from "./extract.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
+import { readSourceFile } from "../util/source.js";
+import { readIncludeDirs } from "../util/state.js";
 import {
   emptyExtractCache,
   readExtractCache,
@@ -113,7 +115,12 @@ export interface GraphBuildResult {
 /** Every Go module in the repo: each `go.mod`'s declared `module` path and the repo
  * directory it lives in (posix, `.` for the root). Found anywhere in the tree, so a
  * monorepo whose module is in a subdir (e.g. `backend/go.mod`) resolves too. Lets edge
- * resolution map Go import paths to in-repo files. */
+ * resolution map Go import paths to in-repo files.
+ *
+ * `repoFiles` is buildGraph's single enumeration, which already carries root's
+ * persisted `--include-dir` override — so a `go.mod` living under an included
+ * dir (e.g. `build/go.mod`) is found here exactly when its `.go` files are
+ * indexed, and its intra-module imports resolve. */
 function readGoModules(root: string, repoFiles: string[]): GoModule[] {
   const mods: GoModule[] = [];
   for (const f of repoFiles) {
@@ -137,8 +144,9 @@ export async function buildGraph(
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
   // Enumerate once: source extraction, scope discovery, and Go module
-  // resolution must agree on the same Git-ignore-aware working-tree view.
-  const repoFiles = walkDir(root);
+  // resolution must agree on the same Git-ignore-aware working-tree view —
+  // including the repo's persisted `--include-dir` override.
+  const repoFiles = walkDir(root, readIncludeDirs(root));
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
@@ -182,15 +190,21 @@ export async function buildGraph(
     // may decide whether a *query* bothers rebuilding; it may not decide what the
     // rebuild itself looks at. Reading is ~0.05ms/file against the ~4.6ms parse
     // this still skips.
-    let source: string;
+    let source: string | null;
     try {
-      source = readFileSync(f.abs, "utf8");
+      source = readSourceFile(f.abs);
     } catch (err) {
       const message = `${rel}: ${err instanceof Error ? err.message : String(err)}`;
       errors.push(message);
       // Record it anyway (with the stat we do have) so the freshness probe's
       // fast path doesn't report this file as new on every single query.
       entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [], error: message };
+      return;
+    }
+    if (source === null) {
+      // Unsupported encoding (UTF-16BE) — a skip, never an error: recorded with
+      // an empty entry so the freshness probe doesn't treat it as new every run.
+      entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [] };
       return;
     }
 

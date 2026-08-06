@@ -109,6 +109,42 @@ test('graft callers --direction out --json: zero-edge symbol includes a note fie
   assert.match(m.note, /graft grep "add"/);
 });
 
+function ambiguousRepo(): string {
+  const d = mkdtempSync(join(tmpdir(), 'graft-traversecli-ambiguous-'));
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(join(d, 'src', 'a.ts'), 'export function shared(): number {\n  return 1;\n}\n');
+  writeFileSync(join(d, 'src', 'b.ts'), 'export function shared(): number {\n  return 2;\n}\n');
+  // A cross-file call to the ambiguous name — resolve.ts drops it rather than
+  // guessing which `shared` it means, so NEITHER definition gets a caller edge.
+  writeFileSync(join(d, 'src', 'user.ts'), 'import { shared } from "./a.js";\nexport function use(): number {\n  return shared();\n}\n');
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d], { stdio: 'pipe' });
+  return d;
+}
+
+test('A6: an ambiguous name (2 definitions) states the candidate count in the zero-hit note', () => {
+  const d = ambiguousRepo();
+  const r = runCli(['callers', 'shared', d]);
+  assert.equal(r.status, 0);
+  // Both candidates are reported (resolveSymbol returns every match).
+  assert.equal((r.stdout.match(/shared · function · src\//g) ?? []).length, 2);
+  // Each zero-hit block states 2 definitions share the name.
+  assert.equal((r.stdout.match(/2 definitions share the name/g) ?? []).length, 2);
+  assert.match(r.stdout, /dropped rather than guessed/);
+});
+
+test('A6 --json: the ambiguous-name note includes the candidate count', () => {
+  const d = ambiguousRepo();
+  const r = runCli(['callers', 'shared', d, '--json']);
+  assert.equal(r.status, 0);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.matches.length, 2);
+  for (const m of parsed.matches) {
+    assert.equal(m.hits.length, 0, 'the ambiguity drop leaves no caller edges for either candidate');
+    assert.match(m.note, /2 definitions share the name/);
+    assert.match(m.note, /dropped rather than guessed/);
+  }
+});
+
 test('graft callers --depth: depth flag walks the BFS transitively (blast radius)', () => {
   const d = builtRepo();
   // compute -> sub -> add: callers of `add` at depth 1 is just `sub`;

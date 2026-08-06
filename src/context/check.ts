@@ -12,11 +12,13 @@
  *   coverage    a code file exists that no node was built from (new/uningested)
  *   index       a node's frontmatter disagrees with the manifest (hand-edited)
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
+import { readSourceFile } from "../util/source.js";
+import { readIncludeDirs } from "../util/state.js";
 import { CODE_EXTENSIONS } from "./build.js";
 import { contextDirFor, readManifest, readNodes } from "./node-file.js";
 
@@ -55,13 +57,18 @@ export function checkContext(dir: string, opts: CheckOptions = {}): CheckResult 
     return result;
   }
 
-  // Current code files on disk (same rules `init` used).
+  // Current code files on disk (same rules `init` used) — including root's
+  // persisted `--include-dir` override, so this freshness check never
+  // disagrees with buildContext about what "current" means (an included
+  // build/ must not silently vanish from one side and not the other).
   const current = new Map<string, string>(); // rel → hash
-  for (const file of walkDir(root)) {
+  for (const file of walkDir(root, readIncludeDirs(root))) {
     if (file.startsWith(outDir)) continue;
     if (!exts.some((e) => file.toLowerCase().endsWith(e))) continue;
     try {
-      current.set(relPosix(root, file), contentHash(readFileSync(file, "utf8")));
+      const source = readSourceFile(file);
+      if (source === null) continue; // unsupported encoding (e.g. UTF-16BE) → treat as removed below
+      current.set(relPosix(root, file), contentHash(source));
     } catch {
       // Unreadable now → treat as removed below (it won't be in `current`).
     }

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
+import { writeBuildConfig } from "../src/util/state.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
 
 const MAIN_GO = `package main
@@ -161,6 +162,43 @@ test("Go extraction: go.mod in a subdirectory resolves intra-module imports", as
       ),
       "fmt should remain an external package string",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("A5: a go.mod under a persisted --include-dir override is found, so imports inside it resolve internally", async () => {
+  // build/ is in SKIP_DIRS by default — readGoModules must honor the same
+  // persisted include-dir override source-files.ts already reads, or a
+  // go.mod living under an included dir is missed while its .go files (which
+  // DO go through source-files.ts) are indexed just fine.
+  const dir = mkdtempSync(join(tmpdir(), "graft-go-include-dir-"));
+  try {
+    mkdirSync(join(dir, "build", "store"), { recursive: true });
+    writeFileSync(join(dir, "build", "go.mod"), "module example.com/app\n\ngo 1.21\n");
+    writeFileSync(
+      join(dir, "build", "main.go"),
+      `package main\n\nimport (\n\t"fmt"\n\t"example.com/app/store"\n)\n\nfunc main() {\n\tfmt.Println(store.New())\n}\n`,
+    );
+    writeFileSync(join(dir, "build", "store", "store.go"), "package store\n\nfunc New() int { return 0 }\n");
+    writeBuildConfig(dir, { includeDirs: ["build"] });
+
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    // Sanity: the .go files under build/ are indexed at all (source-files.ts
+    // already reads the persisted include list correctly).
+    assert.ok(graph.nodes.some((n) => n.id === "build/main.go#main"), "build/main.go should be indexed");
+
+    const internal = graph.edges.find(
+      (e) => e.relation === "imports" && e.source === "build/main.go" && e.target === "build/store/store.go",
+    );
+    assert.ok(internal, "example.com/app/store should resolve internally once build/go.mod is found");
+
+    const external = graph.edges.find(
+      (e) => e.relation === "imports" && e.source === "build/main.go" && e.target === "example.com/app/store",
+    );
+    assert.ok(!external, "must not be left as an unresolved external package string once the module is found");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

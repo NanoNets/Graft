@@ -425,7 +425,7 @@ export function federateCallers(
     const lines = [`## ${child}/`];
     for (const { symbol: sym, hits } of results) {
       lines.push(headerOf(sym));
-      if (hits.length === 0) lines.push(looseNoteFor(direction, sym.name));
+      if (hits.length === 0) lines.push(looseNoteFor(direction, sym.name, matches.length));
       else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     }
     const body = lines.join("\n");

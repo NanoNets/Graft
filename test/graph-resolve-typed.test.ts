@@ -2,11 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildRepoMap } from "../src/graph/map.js";
 import { resolveEdges } from "../src/graph/resolve.js";
+import { extractFile } from "../src/graph/extract.js";
+import type { RawEdge } from "../src/graph/extract.js";
 import type { NodeV1 } from "../src/graph/types.js";
 
+// `owner` mirrors what extractFile now stamps on a method node: the bare name of
+// its immediate enclosing class (the segment just before its own name in the
+// dotted id) — set here so these hand-built fixtures match real extraction output.
 function n(id: string, kind: NodeV1["kind"]): NodeV1 {
-  const name = id.includes("#") ? id.split("#")[1].split(".").pop()! : id;
-  return { id, name, kind, path: id.split("#")[0], span: "L1-L1", signature: null,
+  const post = id.includes("#") ? id.split("#")[1] : id;
+  const segs = post.split(".");
+  const name = segs[segs.length - 1];
+  const owner = kind === "method" && segs.length >= 2 ? segs[segs.length - 2] : undefined;
+  return { id, name, kind, owner, path: id.split("#")[0], span: "L1-L1", signature: null,
     exported: true, origin: "ast", body_hash: "h", summary_state: "pending", summary: null, crux: null } as NodeV1;
 }
 
@@ -123,4 +131,63 @@ test("unresolved member calls cannot inflate map hubs and hotspots (#35)", () =>
   });
   const set = map.hotspots.find((h) => h.name === "set");
   assert.equal(set?.inDegree, 1, "only the owner-qualified FileBindings.set call contributes");
+});
+
+// A2: resolve.ts used to derive ownerMethod/classParents keys by slicing `n.id`,
+// which breaks once ids can carry a dedup ordinal (A3). extract.ts now stamps a
+// `owner` field at mint time instead; these tests pin the field's contract and
+// prove the owner-keyed lookups it feeds still resolve exactly as the old
+// slicing did.
+
+test("A2: extractFile sets NodeV1.owner to the immediate enclosing class/receiver on method nodes only", () => {
+  const tsNodes = extractFile("a.ts", "class Cache {\n  get(): void {}\n}\n", "typescript").nodes;
+  assert.equal(tsNodes.find((x) => x.id === "a.ts#Cache.get")?.owner, "Cache");
+  assert.equal(tsNodes.find((x) => x.id === "a.ts#Cache")?.owner, undefined, "a class node itself carries no owner");
+
+  const pyNodes = extractFile(
+    "b.py",
+    "class Outer:\n    def render(self):\n        pass\n\n\nclass Container:\n    class Inner:\n        def render(self):\n            pass\n",
+    "python",
+  ).nodes;
+  assert.equal(pyNodes.find((x) => x.id === "b.py#Outer.render")?.owner, "Outer");
+  assert.equal(
+    pyNodes.find((x) => x.id === "b.py#Container.Inner.render")?.owner,
+    "Inner",
+    "nested class: owner is the immediate parent, not the outer container",
+  );
+
+  const goNodes = extractFile("c.go", "package c\n\ntype Server struct{}\n\nfunc (s *Server) Start() {}\n", "go").nodes;
+  assert.equal(goNodes.find((x) => x.id === "c.go#Server.Start")?.owner, "Server");
+});
+
+test("A2: owner-keyed ownerMethod/classParents resolve identically to the old id-slicing scheme (mixed fixture: sibling classes + inheritance)", () => {
+  const src = [
+    "class Base {",
+    "  render(): void {}",
+    "}",
+    "class Widget extends Base {",
+    "  render(): void {}",
+    "}",
+    "class Other {",
+    "  render(): void {}",
+    "}",
+    "class Sub extends Other {}",
+    "function use(): void {}",
+    "",
+  ].join("\n");
+  const { nodes, rawEdges } = extractFile("mixed.ts", src, "typescript");
+
+  const callWidget: RawEdge = { source: "mixed.ts#use", relation: "calls", name: "render", viaMember: true, recvType: "Widget", file: "mixed.ts" };
+  const callSub: RawEdge = { source: "mixed.ts#use", relation: "calls", name: "render", viaMember: true, recvType: "Sub", file: "mixed.ts" };
+  const edges = resolveEdges(nodes, [...rawEdges, callWidget, callSub]);
+
+  const targets = edges
+    .filter((e) => e.relation === "calls" && e.source === "mixed.ts#use")
+    .map((e) => e.target)
+    .sort();
+  assert.deepEqual(
+    targets,
+    ["mixed.ts#Other.render", "mixed.ts#Widget.render"],
+    "Widget's own render must win over Base's/Other's (owner-scoped), and Sub inherits Other's via classParents",
+  );
 });

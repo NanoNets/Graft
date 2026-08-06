@@ -49,6 +49,25 @@ test("an incremental rebuild writes byte-identical wiring.json to a cold one", a
   assert.equal(wiringOf(d), cold, "replaying cached parses must not change a single byte of the graph");
 });
 
+test("A3: an incremental rebuild is still byte-identical to a cold one on a duplicate-name-bearing fixture", async () => {
+  const d = mkdtempSync(join(tmpdir(), "graft-incr-dup-"));
+  mkdirSync(join(d, "src"), { recursive: true });
+  writeFileSync(join(d, "src", "dup.ts"), "export function helper(): void {}\nexport function helper(): void {}\n");
+
+  await buildGraph(d, { reuse: false });
+  const cold = wiringOf(d);
+  await buildGraph(d);
+  assert.equal(wiringOf(d), cold, "replaying cached parses must not change a single byte, even with minted ordinal ids");
+
+  const g = readGraph(wiringPath(outOf(d))) as GraphV1;
+  const ids = g.nodes.map((n) => n.id);
+  assert.equal(new Set(ids).size, ids.length, "ids stay unique across cold/incremental");
+  assert.ok(
+    ids.includes("src/dup.ts#helper") && ids.includes("src/dup.ts#helper~2"),
+    "sanity: the dup actually minted an ordinal id",
+  );
+});
+
 test("unchanged files are replayed, not re-parsed", async () => {
   const d = repo();
   const first = await buildGraph(d);

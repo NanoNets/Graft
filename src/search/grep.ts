@@ -9,13 +9,13 @@
  * human text and wires the CLI command; `mcp/tools.ts` renders the same
  * shape for the `graft_find_all` tool.
  */
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GraphV1, NodeV1 } from "../graph/types.js";
 import { WALK_RELATIONS } from "../graph/relations.js";
 import { assertPrefixIndexed, pathUnderPrefix } from "../graph/scopes.js";
 import { normalizePathPrefix } from "../util/paths.js";
 import { savingsFor, type Savings } from "../context/savings.js";
+import { readSourceFile } from "../util/source.js";
 
 export interface GrepHit {
   line: number;
@@ -160,7 +160,12 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
   for (const file of fileNodes) {
     let text: string;
     try {
-      text = readFileSync(join(repoRoot, file.path), "utf8");
+      const decoded = readSourceFile(join(repoRoot, file.path));
+      if (decoded === null) {
+        truncatedFiles++; // unsupported encoding (e.g. UTF-16BE) — same posture as unreadable
+        continue;
+      }
+      text = decoded;
     } catch {
       truncatedFiles++;
       continue;

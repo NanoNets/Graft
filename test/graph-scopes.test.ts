@@ -13,6 +13,7 @@ import {
 import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath, writeGraph } from "../src/graph/write.js";
 import { loadGraphCached } from "../src/graph/load.js";
+import { writeBuildConfig } from "../src/util/state.js";
 import type { GraphV1 } from "../src/graph/types.js";
 
 function fx(layout: Record<string, string>): string {
@@ -167,6 +168,16 @@ test("discoverWorkspaceChildren finds immediate git children only", () => {
   mkdirSync(join(d, "repoB/.git"), { recursive: true });
   mkdirSync(join(d, "repoB/vendored/.git"), { recursive: true }); // nested: not a child of d
   assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["repoA", "repoB"]);
+  rmSync(d, { recursive: true, force: true });
+});
+
+test("A5: discoverScopes finds a marker under a SKIP_DIRS name once persisted via --include-dir state, absent otherwise", () => {
+  const d = fx({ "build/package.json": "{}" });
+  assert.deepEqual(discoverScopes(d), [{ prefix: "", label: "", markers: [] }], "build/ is skipped by default — no scope found");
+
+  writeBuildConfig(d, { includeDirs: ["build"] });
+  const prefixes = discoverScopes(d).map((s) => s.prefix);
+  assert.deepEqual(prefixes, ["build"], "once persisted, build/'s own marker is discovered as a scope");
   rmSync(d, { recursive: true, force: true });
 });
 

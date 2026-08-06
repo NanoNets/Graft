@@ -221,6 +221,36 @@ test("an unparseable sidecar file falls back to live tokenization", async () => 
   }
 });
 
+test("A3: a duplicate-named definition still gets its own ask-index doc (unique ids -> docs.length === nodes.length)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-index-dup-"));
+  try {
+    writeFileSync(
+      join(dir, "dup.ts"),
+      `export function helper(): void {\n  console.log("first");\n}\n\n` +
+        `export function helper(): void {\n  console.log("second");\n}\n`,
+    );
+    await buildGraph(dir);
+    const outDir = contextDirFor(dir);
+    const graph = readGraph(wiringPath(outDir));
+    assert.ok(graph, "wiring graph should exist after build");
+    const ids = graph!.nodes.map((n) => n.id);
+    assert.equal(new Set(ids).size, ids.length, "sanity: node ids are unique");
+    assert.ok(
+      ids.includes("dup.ts#helper") && ids.includes("dup.ts#helper~2"),
+      "sanity: the dup actually minted an ordinal id",
+    );
+
+    const index = readAskIndex(outDir);
+    assert.ok(index, "sidecar should exist after build");
+    assert.equal(index!.docCount, graph!.nodes.length);
+    assert.equal(index!.docs.length, graph!.nodes.length);
+    const docIds = new Set(index!.docs.map((d) => d.id));
+    for (const id of ids) assert.ok(docIds.has(id), `sidecar missing doc for ${id}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("readAskIndex returns null when the sidecar is simply missing", () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-ask-index-missing-"));
   try {
