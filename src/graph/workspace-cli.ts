@@ -33,9 +33,8 @@ export interface WorkspaceBuildOptions {
   override?: string;
   /** The CLI's `--include-dir` override, if any. Persisted into EACH CHILD's
    * own state (not the parent's) before that child builds: children are
-   * independent repos with their own graft state, and the parent's `graft/`
-   * (including any state it briefly held) is deleted by `splitWorkspace`
-   * right after the children build — see `clearParentGraft`'s doc comment. */
+   * independent repos with their own local settings and can later be rebuilt
+   * directly without seeing the parent invocation's flags. */
   includeDirs?: string[];
 }
 

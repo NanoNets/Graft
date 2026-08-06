@@ -10,10 +10,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readBuildConfig, writeBuildConfig, readIncludeDirs } from "../src/util/state.js";
+import { buildConfigPath, readBuildConfig, writeBuildConfig, readIncludeDirs } from "../src/util/state.js";
 
 function fresh(): string {
   return mkdtempSync(join(tmpdir(), "graft-buildconfig-"));
@@ -29,6 +29,9 @@ test("writeBuildConfig + readBuildConfig round-trip includeDirs", () => {
   const d = fresh();
   writeBuildConfig(d, { includeDirs: ["build", "vendor"] });
   assert.deepEqual(readBuildConfig(d), { includeDirs: ["build", "vendor"] });
+  assert.equal(buildConfigPath(d), join(d, ".graft", "config.json"));
+  assert.equal(existsSync(join(d, "graft", ".cache", "config.json")), false);
+  assert.match(readFileSync(join(d, ".gitignore"), "utf8"), /^\/\.graft\/$/m);
 });
 
 test("readIncludeDirs turns a persisted list into a Set; an empty persisted list reads as undefined (default behavior)", () => {
