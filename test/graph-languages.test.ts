@@ -27,13 +27,14 @@ const INDEXED = [
   "a.tsx", "a.jsx",
   "a.py", "a.pyi",
   "a.go",
+  "a.rs",
 ];
 
 test("a file is labelled exactly when it is indexed", () => {
   // The guard that keeps #36 from coming back: both readings come off one table, so
   // adding an extension cannot teach the extractor about it and leave the banner
   // silent (or vice versa — claiming coverage of a file nothing can parse).
-  for (const f of [...INDEXED, "a.txt", "a.rs", "README.md", "noextension", ""]) {
+  for (const f of [...INDEXED, "a.txt", "README.md", "noextension", ""]) {
     assert.equal(
       languageOf(f) === null,
       languageLabelOf(f) === null,
@@ -53,11 +54,13 @@ test("labels name the language, not the grammar that parses it", () => {
   assert.equal(languageLabelOf("api/main.py"), "python");
   assert.equal(languageLabelOf("api/main.pyi"), "python");
   assert.equal(languageLabelOf("cmd/main.go"), "go");
+  assert.equal(languageLabelOf("src/lib.rs"), "rust");
 
   // The grammar is unchanged — extraction, the extract cache and every `Language`
   // switch still see exactly what they saw before.
   assert.equal(languageOf("scripts/tool.mjs"), "typescript");
   assert.equal(languageOf("web/app.jsx"), "tsx");
+  assert.equal(languageOf("src/lib.rs"), "rust");
 });
 
 test("labels are case-insensitive, like the grammar lookup", () => {
