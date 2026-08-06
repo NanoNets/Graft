@@ -32,7 +32,7 @@ import { formatInitEpilogue } from "./cli-epilogue.js";
 import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
 import { homedir } from "node:os";
-import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
+import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, resolveBuildLayers, runUpgrade } from "./cli-meta.js";
 import { writeBuildConfig } from "./util/state.js";
 
 const program = new Command();
@@ -117,6 +117,13 @@ program
   )
   .argument("[dir]", "repository root", ".")
   .option("--deep", "run the LLM pass: concept nodes (graft/*.md) + per-symbol summary/crux")
+  .option(
+    "--crux",
+    "the LLM pass WITHOUT the prose concept map: per-symbol summary/crux only. " +
+      "Roughly half the calls of --deep (no per-file concept summaries, no synthesis) " +
+      "and it buys the thing that shrinks `ask` output most — an 8-line excerpt per hit " +
+      "instead of the whole span. Implied by --deep.",
+  )
   .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py")')
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
@@ -127,7 +134,7 @@ program
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean; includeDir?: string[] }) => {
+  .action(async (dir: string, opts: { deep?: boolean; crux?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean; includeDir?: string[] }) => {
     const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
     if (opts.concurrency && !Number.isFinite(concurrency)) {
       console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
@@ -161,18 +168,27 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
-    // --deep needs a key; without one, degrade to the $0 structural build.
-    let deep = opts.deep;
+    // Two independent LLM layers. `--deep` is both; `--crux` is only the second.
+    //   concepts — the prose map in graft/*.md (one summarize call per file, plus
+    //               a synthesis pass). Expensive, and its output is prose.
+    //   meaning   — per-symbol summary + crux on the wiring nodes. One call per
+    //               file, and the crux is what caps `ask` at ~8 lines per hit.
+    // Splitting them exists because the second is what pays off per token: a
+    // keyless build falls back to a rule-built crux, which is close in size but
+    // not in judgement.
     const resolved = resolveConfig(cliConfig());
-    if (deep && !resolved.apiKey) {
-      deep = false;
+    const layers = resolveBuildLayers({ deep: opts.deep, crux: opts.crux, hasApiKey: !!resolved.apiKey });
+    const deep = layers.concepts;
+    const llm = layers.llm;
+    if (layers.degraded) {
       console.error(
         "⚠ no API key set — falling back to the structural build (no LLM summaries).\n" +
+          "  `ask` still truncates each hit to a rule-built crux, so the pack stays small.\n" +
           "  Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL for your\n" +
-          "  provider) and re-run `graft build --deep` to add concept nodes and summaries.",
+          "  provider) and re-run to add LLM-chosen cruxes.",
       );
     }
-    if (deep && resolved.usedLegacyEnv) {
+    if (llm && resolved.usedLegacyEnv) {
       console.error(
         "⚠ using OPENROUTER_API_KEY (deprecated) — prefer GRAFT_API_KEY + GRAFT_BASE_URL.",
       );
@@ -184,6 +200,7 @@ program
     if (isWorkspaceBuildRoot(buildRoot, buildGlobalDir)) {
       await runWorkspaceBuild(buildRoot, {
         deep: !!deep,
+        llm,
         extensions: opts.extensions,
         concurrency,
         childConfig: cliConfig(),
@@ -211,7 +228,7 @@ program
 
     // Wiring graph — always; LLM meaning only with --deep.
     const g = await engine.graph(dir, {
-      llm: deep,
+      llm,
       concurrency,
       reuse: opts.reuse,
       onProgress: ({ phase, index, total, file }) =>
@@ -224,7 +241,7 @@ program
     console.log(`  parsed: ${g.parsed} of ${g.files} files (${g.reused} replayed from cache)`);
     // Worth one line: this build started from a graph the user never built *here*.
     if (g.seededFrom) console.log(`  seeded: copied a starting graph from ${g.seededFrom} (git worktree)`);
-    if (deep) {
+    if (llm) {
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
     }

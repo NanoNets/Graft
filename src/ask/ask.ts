@@ -762,16 +762,116 @@ function sliceSpan(root: string, path: string, from: number, to: number): string
   }
 }
 
+/** Lines a rule-built crux shows for a function-like node before it truncates. */
+const RULE_CRUX_LINES = 8;
+/** Member signatures a rule-built crux shows for a class-like node. */
+const RULE_CRUX_MEMBERS = 8;
+
+/** Node kinds whose useful summary is their MEMBER LIST, not their first lines.
+ * A long class opens with `__init__` boilerplate; what it does is the set of
+ * methods it exposes. */
+const CONTAINER_KINDS = new Set(["class", "interface", "struct", "trait", "enum"]);
+
+/** Rule-built crux for a container: the declaration line plus its members'
+ * signatures, found by span containment (same file, span nested inside). This
+ * is the same view `graft skeleton` gives for a whole file, narrowed to one
+ * type — and for a container it is arguably better than an LLM excerpt, because
+ * it is the complete API rather than a chosen fragment. */
+function containerCrux(node: NodeV1, graph: GraphV1, declLine: string): string | null {
+  const outer = spanRange(node.span);
+  if (!outer) return null;
+  const members = graph.nodes
+    .filter((n) => {
+      if (n === node || n.path !== node.path || n.kind === "file") return false;
+      const r = spanRange(n.span);
+      return !!r && r.from >= outer.from && r.to <= outer.to;
+    })
+    .sort((a, b) => (spanRange(a.span)?.from ?? 0) - (spanRange(b.span)?.from ?? 0));
+  if (!members.length) return null;
+  const shown = members.slice(0, RULE_CRUX_MEMBERS);
+  const lines = [declLine.trimEnd()];
+  for (const m of shown) lines.push(`    ${m.signature?.trim() || `${m.kind} ${m.name}`}`);
+  const rest = members.length - shown.length;
+  lines.push(
+    `… (${rest > 0 ? `${rest} more member${rest === 1 ? "" : "s"}; ` : ""}` +
+      `full definition at ${node.path}:${node.span}; rerun with --full)`,
+  );
+  return lines.join("\n");
+}
+
+/** `Lx-Ly` → numeric range. */
+function spanRange(span: string): { from: number; to: number } | null {
+  const m = span?.match(/^L(\d+)-L(\d+)$/);
+  return m ? { from: Number(m[1]), to: Number(m[2]) } : null;
+}
+
+/**
+ * Rule-built crux — the $0 stand-in for the LLM-chosen one.
+ *
+ * Without a key there is no `crux`, and the fallback was the whole definition
+ * capped at {@link MAX_SPAN_LINES} = 80. So the free build inlined up to 10× more
+ * per hit than the paid one, and at 5-8 hits a single `ask` could return several
+ * hundred lines. That is the bulk of what the SWE-bench graft arm was paying for.
+ *
+ * The rule is kind-aware, because "first N lines" is the wrong answer for a
+ * container: functions get their opening (signature, docstring, first
+ * statements — where the contract lives), containers get their member
+ * signatures. Both truncate to a marker naming the pointer and `--full`.
+ *
+ * It is deterministic and structural, so it can be honestly worse than the LLM
+ * crux on one shape: a long function whose interesting branch is far down. The
+ * 80-line cap did not reach that either.
+ */
+function ruleCrux(
+  root: string,
+  node: NodeV1 | undefined,
+  graph: GraphV1,
+  s: { path: string; from: number; to: number },
+): string | null {
+  const full = sliceSpanRaw(root, s.path, s.from, s.to);
+  if (!full) return null;
+  const lines = full.split("\n");
+  if (node && CONTAINER_KINDS.has(node.kind)) {
+    const c = containerCrux(node, graph, lines[0] ?? "");
+    if (c) return c;
+  }
+  if (lines.length <= RULE_CRUX_LINES) return full;
+  const head = lines.slice(0, RULE_CRUX_LINES);
+  head.push(
+    `… (+${lines.length - RULE_CRUX_LINES} more lines; full definition at ` +
+      `${s.path}:L${s.from}-L${s.to}; rerun with --full)`,
+  );
+  return head.join("\n");
+}
+
+/** Read span lines with no cap — the rule crux does its own truncation. */
+function sliceSpanRaw(root: string, path: string, from: number, to: number): string | null {
+  try {
+    const source = readSourceFile(join(root, path));
+    if (source === null) return null;
+    const lines = source.split("\n");
+    return lines.slice(Math.max(1, from) - 1, Math.min(lines.length, to)).join("\n");
+  } catch {
+    return null;
+  }
+}
+
 /** Attach inlined source to every hit whose pointer is a real `path:span`.
  * Crux-first: when the graph carries an LLM-chosen crux for the hit's node and
  * `full` is off, inline that ≤8-line excerpt (with an escalation marker) rather
  * than the whole definition — most hits only need the decision point, and the
- * marker tells the agent exactly how to get the rest when this one doesn't. */
+ * marker tells the agent exactly how to get the rest when this one doesn't.
+ * With no LLM crux, {@link ruleCrux} builds one from structure at the same size,
+ * so a keyless build is not silently 10× more expensive per hit. */
 function inlineSource(root: string, hits: AskHit[], graph: GraphV1 | null, full: boolean): void {
   const cruxByPointer = new Map<string, string>();
+  const nodeByPointer = new Map<string, NodeV1>();
   if (!full && graph) {
-    for (const n of graph.nodes)
-      if (n.crux?.code) cruxByPointer.set(`${n.path}:${n.span}`, n.crux.code);
+    for (const n of graph.nodes) {
+      const key = `${n.path}:${n.span}`;
+      if (n.crux?.code) cruxByPointer.set(key, n.crux.code);
+      if (!nodeByPointer.has(key)) nodeByPointer.set(key, n);
+    }
   }
   for (const h of hits) {
     const s = parseSpan(h.pointer);
@@ -780,6 +880,13 @@ function inlineSource(root: string, hits: AskHit[], graph: GraphV1 | null, full:
     if (crux) {
       h.code = `${crux}\n… (crux — full definition at ${h.pointer}; rerun with --full)`;
       continue;
+    }
+    if (!full && graph) {
+      const rule = ruleCrux(root, nodeByPointer.get(h.pointer), graph, s);
+      if (rule) {
+        h.code = rule;
+        continue;
+      }
     }
     const code = sliceSpan(root, s.path, s.from, s.to);
     if (code) h.code = code;
