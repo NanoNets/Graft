@@ -1,0 +1,256 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { buildGraph } from "../src/graph/build.js";
+import { extractFile } from "../src/graph/extract.js";
+import { resolveEdges } from "../src/graph/resolve.js";
+import { readGraph } from "../src/graph/write.js";
+import type { GraphV1, NodeV1 } from "../src/graph/types.js";
+
+function write(root: string, rel: string, source: string): void {
+  const path = join(root, rel);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, source);
+}
+
+async function buildFixture(root: string): Promise<GraphV1> {
+  const result = await buildGraph(root, {
+    contextDir: join(root, ".graft-test"),
+    graphOnly: true,
+    reuse: false,
+  });
+  const graph = readGraph(result.graphPath);
+  assert.ok(graph);
+  return graph;
+}
+
+function hasEdge(graph: GraphV1, source: string, target: string, relation: string): boolean {
+  return graph.edges.some((edge) => edge.source === source && edge.target === target && edge.relation === relation);
+}
+
+function node(
+  id: string,
+  kind: NodeV1["kind"],
+  name = id.includes("#") ? id.split("#")[1].split(".").at(-1)! : id,
+  owner?: string,
+): NodeV1 {
+  return {
+    id,
+    name,
+    kind,
+    ...(owner ? { owner } : {}),
+    path: id.split("#")[0],
+    span: "L1-L1",
+    signature: null,
+    exported: true,
+    origin: "ast",
+    body_hash: "h",
+    summary_state: "pending",
+    summary: null,
+    crux: null,
+  };
+}
+
+test("Rust module paths resolve file modules, items, scoped leaves, and scoped calls", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-resolve-"));
+  try {
+    write(dir, "Cargo.toml", "[package]\nname = 'root-crate'\n");
+    write(
+      dir,
+      "src/lib.rs",
+      [
+        "mod alpha;",
+        "mod nested;",
+        "mod parser;",
+        "use crate::a::B;",
+        "use crate::config::env;",
+        "use crate::bundle::{one::One, two::Two};",
+        "use serde::Serialize;",
+        "fn run() {}",
+        "fn invoke() { crate::worker::run(); crate::missing::run(); }",
+        "fn use_imports() { let _ = B; let _ = One; let _ = Two; }",
+        "",
+      ].join("\n"),
+    );
+    write(dir, "src/main.rs", "mod command;\n");
+    write(dir, "src/alpha.rs", "pub fn alpha() {}\n");
+    write(dir, "src/nested/mod.rs", "mod leaf;\nuse super::shared;\n");
+    write(dir, "src/nested/leaf.rs", "pub fn leaf() {}\n");
+    write(dir, "src/shared.rs", "pub fn shared() {}\n");
+    write(dir, "src/command.rs", "pub fn command() {}\n");
+    write(dir, "src/parser.rs", "mod lexer;\n");
+    write(dir, "src/parser/lexer.rs", "pub fn lex() {}\n");
+    write(dir, "src/lexer.rs", "pub fn wrong_lexer() {}\n");
+    write(dir, "src/a.rs", "pub struct B;\n");
+    write(dir, "src/config/env.rs", "pub fn load() {}\n");
+    write(dir, "src/bundle/one.rs", "pub struct One;\n");
+    write(dir, "src/bundle/two.rs", "pub struct Two;\n");
+    write(dir, "src/worker.rs", "pub fn run() {}\n");
+    write(dir, "src/feature/mod.rs", "use self::local;\n");
+    write(dir, "src/feature/local.rs", "pub fn local() {}\n");
+    write(dir, "src/feature/thing.rs", "use super::util::helper;\n");
+    write(dir, "src/feature/util.rs", "pub fn helper() {}\n");
+
+    const graph = await buildFixture(dir);
+
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/alpha.rs", "imports"), "mod x resolves x.rs");
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/nested/mod.rs", "imports"), "mod x resolves x/mod.rs");
+    assert.ok(hasEdge(graph, "src/parser.rs", "src/parser/lexer.rs", "imports"));
+    assert.ok(!hasEdge(graph, "src/parser.rs", "src/lexer.rs", "imports"), "non-root modules use their stem dir");
+    assert.ok(hasEdge(graph, "src/main.rs", "src/command.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/nested/mod.rs", "src/nested/leaf.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/nested/mod.rs", "src/shared.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/feature/mod.rs", "src/feature/local.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/feature/thing.rs", "src/feature/util.rs", "imports"));
+
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/a.rs", "imports"), "item suffix retries to its module");
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/config/env.rs", "imports"), "module leaf is not stripped early");
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/bundle/one.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/lib.rs", "src/bundle/two.rs", "imports"));
+    assert.ok(hasEdge(graph, "src/lib.rs", "serde::Serialize", "imports"), "external crates remain raw");
+    assert.ok(hasEdge(graph, "src/lib.rs#use_imports", "src/a.rs#B", "references"));
+    assert.ok(hasEdge(graph, "src/lib.rs#use_imports", "src/bundle/one.rs#One", "references"));
+    assert.ok(hasEdge(graph, "src/lib.rs#use_imports", "src/bundle/two.rs#Two", "references"));
+
+    assert.ok(hasEdge(graph, "src/lib.rs#invoke", "src/worker.rs#run", "calls"));
+    assert.ok(!hasEdge(graph, "src/lib.rs#invoke", "src/lib.rs#run", "calls"), "scoped calls never use bare fallback");
+    assert.equal(
+      graph.edges.filter((edge) => edge.source === "src/lib.rs#invoke" && edge.relation === "calls").length,
+      1,
+      "an unresolvable scoped call is dropped",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust workspace crate names resolve across crates and ignore non-package Cargo names", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rust-workspace-"));
+  try {
+    write(dir, "crates/foo-bar/Cargo.toml", "[package]\nname = 'foo-bar'\n");
+    write(dir, "crates/foo-bar/src/lib.rs", "use baz::local;\npub mod thing;\n");
+    write(dir, "crates/foo-bar/src/thing.rs", "pub fn work() {}\n");
+    write(
+      dir,
+      "crates/baz/Cargo.toml",
+      "[[bin]]\nname = \"foo_bar\"\npath = \"src/main.rs\"\n\n[package]\nname = \"baz\"\n",
+    );
+    write(dir, "crates/baz/src/main.rs", "use foo_bar::thing;\nmod local;\nfn main() {}\n");
+    write(dir, "crates/baz/src/local.rs", "pub fn local() {}\n");
+
+    const graph = await buildFixture(dir);
+
+    assert.ok(
+      hasEdge(graph, "crates/baz/src/main.rs", "crates/foo-bar/src/thing.rs", "imports"),
+      "hyphenated package name matches its underscored Rust path",
+    );
+    assert.ok(
+      hasEdge(graph, "crates/foo-bar/src/lib.rs", "crates/baz/src/local.rs", "imports"),
+      "the [[bin]] name does not shadow the [package] name",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Rust typed members drop duplicate same-file trait implementations but keep a single candidate", () => {
+  const singleExtract = extractFile(
+    "single.rs",
+    "struct Frame;\nimpl Frame { fn from() {} }\nfn use_frame() { Frame::from(); }\n",
+    "rust",
+  );
+  const single = resolveEdges(singleExtract.nodes, singleExtract.rawEdges);
+  assert.equal(single.find((edge) => edge.relation === "calls")?.target, "single.rs#Frame.from");
+
+  const ambiguousExtract = extractFile(
+    "frame.rs",
+    [
+      "trait First { fn from(); }",
+      "trait Second { fn from(); }",
+      "struct Frame;",
+      "impl First for Frame { fn from() {} }",
+      "impl Second for Frame { fn from() {} }",
+      "fn use_frame() { Frame::from(); }",
+      "",
+    ].join("\n"),
+    "rust",
+  );
+  assert.equal(
+    ambiguousExtract.nodes.filter((candidate) => candidate.owner === "Frame" && candidate.name === "from").length,
+    2,
+  );
+  const ambiguous = resolveEdges(ambiguousExtract.nodes, ambiguousExtract.rawEdges);
+  assert.equal(ambiguous.filter((edge) => edge.relation === "calls").length, 0);
+});
+
+test("Rust trait default methods resolve through same-file impl heritage", () => {
+  const { nodes, rawEdges } = extractFile(
+    "frame.rs",
+    "pub trait Paint { fn render(&self) {} }\npub struct Frame;\nimpl Paint for Frame {}\nfn use_frame() { Frame::render(); }\n",
+    "rust",
+  );
+  const edges = resolveEdges(nodes, rawEdges);
+  assert.ok(
+    edges.some(
+      (edge) =>
+        edge.source === "frame.rs#use_frame" &&
+        edge.target === "frame.rs#Paint.render" &&
+        edge.relation === "calls",
+    ),
+  );
+
+  const twoDefaults = extractFile(
+    "ambiguous-default.rs",
+    [
+      "trait First { fn render(&self) {} }",
+      "trait Second { fn render(&self) {} }",
+      "struct Frame;",
+      "impl First for Frame {}",
+      "impl Second for Frame {}",
+      "fn use_frame() { Frame::render(); }",
+      "",
+    ].join("\n"),
+    "rust",
+  );
+  const ambiguous = resolveEdges(twoDefaults.nodes, twoDefaults.rawEdges);
+  assert.equal(
+    ambiguous.filter((edge) => edge.source === "ambiguous-default.rs#use_frame" && edge.relation === "calls").length,
+    0,
+    "two default methods at the same ancestor level are ambiguous",
+  );
+});
+
+test("Rust and non-Rust bare-name resolution stay in separate global domains", () => {
+  const nodes = [
+    node("rust_def.rs", "file"),
+    node("rust_def.rs#shared", "function"),
+    node("python_def.py", "file"),
+    node("python_def.py#shared", "function"),
+    node("rust_call.rs", "file"),
+    node("rust_call.rs#invoke", "function"),
+    node("python_call.py", "file"),
+    node("python_call.py#invoke", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    { source: "rust_call.rs#invoke", relation: "calls", name: "shared", file: "rust_call.rs", lang: "rust" },
+    { source: "python_call.py#invoke", relation: "calls", name: "shared", file: "python_call.py" },
+  ]);
+
+  assert.ok(edges.some((edge) => edge.source === "rust_call.rs#invoke" && edge.target === "rust_def.rs#shared"));
+  assert.ok(edges.some((edge) => edge.source === "python_call.py#invoke" && edge.target === "python_def.py#shared"));
+  assert.ok(!edges.some((edge) => edge.source === "rust_call.rs#invoke" && edge.target.endsWith(".py#shared")));
+  assert.ok(!edges.some((edge) => edge.source === "python_call.py#invoke" && edge.target.endsWith(".rs#shared")));
+});
+
+test("Rust macro calls use the bang namespace while ordinary format functions still resolve", () => {
+  const { nodes, rawEdges } = extractFile(
+    "macros.rs",
+    "macro_rules! log_it { () => {} }\nfn format() {}\nfn invoke() { log_it!(); format(); }\n",
+    "rust",
+  );
+  const edges = resolveEdges(nodes, rawEdges);
+  assert.ok(edges.some((edge) => edge.source === "macros.rs#invoke" && edge.target === "macros.rs#log_it!"));
+  assert.ok(edges.some((edge) => edge.source === "macros.rs#invoke" && edge.target === "macros.rs#format"));
+});
