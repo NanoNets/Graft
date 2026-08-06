@@ -64,9 +64,13 @@
     "tree-sitter-go": "^0.25.0",
     "tree-sitter-powershell": "^0.26.4",
     "tree-sitter-python": "^0.25.0",
+    "tree-sitter-rust": "^0.24.0",
     "tree-sitter-typescript": "^0.23.2"
   },
   "overrides": {
+    "tree-sitter-rust": {
+      "tree-sitter": "$tree-sitter"
+    },
     "tree-sitter-typescript": {
       "tree-sitter": "$tree-sitter"
     }
