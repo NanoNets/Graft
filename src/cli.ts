@@ -268,7 +268,7 @@ program
       console.log(JSON.stringify(r, null, 2));
     } else {
       const { formatAsk } = await import("./ask/ask.js");
-      process.stdout.write(formatAsk(r));
+      process.stdout.write(formatAsk(r, { force: !!opts.full }));
     }
   });
 

@@ -80,7 +80,7 @@ export function runWorkspaceAsk(
 ): void {
   const r = federateAsk(root, override, query, { limit: opts.limit, source: opts.source, full: opts.full, in: opts.in });
   if (opts.json) console.log(JSON.stringify(r, null, 2));
-  else process.stdout.write(formatAsk(r));
+  else process.stdout.write(formatAsk(r, { force: !!opts.full }));
 }
 
 export function runWorkspaceGrep(

@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildGraph } from "../src/graph/build.js";
-import { ask, formatAsk, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
+import { ask, formatAsk, isWeakMatch, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
 
 test("isTestPath: de-ranks test files, not real source", () => {
   for (const p of ["server/download_test.go", "packages/x/tests/foo.test.tsx", "a/__tests__/b.ts", "src/api.spec.ts", "pkg/foo/bar_test.go"])
@@ -809,6 +809,75 @@ test("ask with source inlines the actual span from disk", async () => {
     assert.match(hit.code, /return a \+ b;/, "inlined code is the real definition body");
     // formatAsk renders it as a fenced block so it drops into agent context.
     assert.match(formatAsk(r), /```[\s\S]*return a \+ b;[\s\S]*```/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The pull-channel strength gate.
+ *
+ * `relevantRetrieval` (claude/format.ts) has gated the PUSH channel on
+ * STRONG_FLOOR / HIGH_FLOOR for a while. The pull channel had no such gate: a
+ * query the retriever scored 0.05 came back with its full top-N and source
+ * inlined, rendered identically to a 0.9 match. That is what made the
+ * django-13121 SWE-bench regression possible — a forced `graft ask` on a
+ * no-strong-match problem statement inlined 6,289 chars of the wrong code and
+ * the episode timed out at +28% tokens.
+ *
+ * The fixture query below shares no term with any symbol NAME, so it lands
+ * under both floors while still producing hits.
+ */
+test("weak lexical match: pointers only, no inlined source, and a named next move", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "intermittent flakiness during nightly deployment windows", { source: true });
+    if (!r.hits.length) return; // nothing matched at all; the empty path covers that
+    assert.ok(isWeakMatch(r), "this query should score under both floors");
+    const out = formatAsk(r);
+    assert.doesNotMatch(out, /```/, "a weak pack must not inline source");
+    assert.match(out, /LOW CONFIDENCE/, "the pack must say it is unsure");
+    assert.match(out, /graft grep/, "and must name the productive next tool");
+    assert.doesNotMatch(out, /tokens saved/, "a weak pack must not claim a saving for answering less");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("weak lexical match: --full/force overrules the gate and inlines source", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "intermittent flakiness during nightly deployment windows", { source: true });
+    if (!r.hits.length || !r.hits.some((h) => h.code)) return;
+    const out = formatAsk(r, { force: true });
+    assert.match(out, /```/, "an explicit --full is the caller overruling the score on purpose");
+    assert.doesNotMatch(out, /LOW CONFIDENCE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("strong lexical match is untouched by the gate: source still inlined", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "addNumbers", { source: true });
+    assert.ok(!isWeakMatch(r), "an exact symbol-name hit is not weak");
+    assert.match(formatAsk(r), /```[\s\S]*return a \+ b;[\s\S]*```/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("structural results are never gated — a resolved who-calls IS the answer", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "callers of addNumbers", { source: true });
+    if (r.mode !== "structural") return;
+    assert.ok(!isWeakMatch(r), "structural mode carries no coverage score and must never be weak");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

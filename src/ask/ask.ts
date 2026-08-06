@@ -30,7 +30,7 @@ import {
 import { normalizePathPrefix } from "../util/paths.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
-import { rankScopesAndFuse } from "./fuse.js";
+import { rankScopesAndFuse, HIGH_FLOOR, STRONG_FLOOR } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
@@ -922,8 +922,53 @@ function toTokens(chars: number): number {
   return Math.round(chars / 4);
 }
 
-/** Render an {@link AskResult} as a compact markdown context pack. */
-export function formatAsk(r: AskResult): string {
+/** How many pointers a weak pack shows. Three is enough to be a lead and few
+ * enough that a wrong lead is cheap to discard. */
+const WEAK_HIT_CAP = 3;
+
+/**
+ * Does this result fall below the strength floor the push channel already
+ * enforces (`relevantRetrieval` in claude/format.ts)?
+ *
+ * The floors were only ever applied to injected packs. A pull — `graft ask` from
+ * the CLI, or `graft_find_code` over MCP — returned its full top-N with source
+ * inlined at any score, so a query the retriever scored 0.05 came back looking
+ * exactly as authoritative as one it scored 0.9. That asymmetry is what made
+ * django-13121 possible: a forced ask on a no-strong-match prompt injected 6,289
+ * chars of the wrong code, +28% tokens, +31% cost, and the episode timed out.
+ *
+ * Structural results carry neither score and are never weak — a resolved
+ * "callers of X" IS the answer, not a guess about it.
+ */
+export function isWeakMatch(r: AskResult): boolean {
+  if (r.mode !== "lexical") return false;
+  // Absent scores mean "not measured" (older/federated shapes), not "weak".
+  if (r.coverage === undefined && r.coverageStrong === undefined) return false;
+  return (r.coverageStrong ?? 0) < STRONG_FLOOR && (r.coverage ?? 0) < HIGH_FLOOR;
+}
+
+/** The line a weak pack carries instead of inlined source. Says what happened,
+ * how sure it isn't, and which tool to reach for — silence or a bare hedge both
+ * leave the agent to fall back on the grep loop this is meant to prevent. */
+function weakMatchNote(r: AskResult, shown: number, total: number): string {
+  const strong = (r.coverageStrong ?? 0).toFixed(2);
+  const more = total > shown ? ` (${total - shown} more suppressed)` : "";
+  return (
+    `\n\n[graft] LOW CONFIDENCE — the query matched no symbol name well ` +
+    `(name match ${strong}). Showing ${shown} pointer${shown === 1 ? "" : "s"}${more} ` +
+    `without source: at this score the inlined code is as likely to mislead as help.\n` +
+    `[graft] Better move: pull an identifier out of the error/traceback/snippet and ` +
+    "run `graft grep \"<identifier>\"`, or `graft skeleton <file>` if you know the file. " +
+    "Re-run with `--full` to inline anyway."
+  );
+}
+
+/** Render an {@link AskResult} as a compact markdown context pack.
+ *
+ * `force` bypasses the weak-match gate — an explicit `--full` / `full: true` is
+ * the caller overruling the score on purpose, which is theirs to do. */
+export function formatAsk(r: AskResult, opts: { force?: boolean } = {}): string {
+  const weak = !opts.force && isWeakMatch(r);
   const head = `graft ask — "${r.query}"  (${r.mode})`;
   // The note prints as its own prominent line(s) right under the header —
   // above every hit — so a loud structural-fallthrough note (or the
@@ -950,7 +995,8 @@ export function formatAsk(r: AskResult): string {
       if (h.code) lines.push("", "```", h.code, "```", "");
     }
   } else {
-    r.hits.forEach((h, i) => {
+    const shown = weak ? r.hits.slice(0, WEAK_HIT_CAP) : r.hits;
+    shown.forEach((h, i) => {
       // Multi-scope results label each hit with its sub-project (root scope
       // "" stays unlabeled) so a reviewer can tell WHICH codebase answered.
       const label = r.scopes && h.scope ? `[${h.scope}/] ` : "";
@@ -958,12 +1004,16 @@ export function formatAsk(r: AskResult): string {
       lines.push(`   ${h.pointer}`);
       if (h.snippet) lines.push(`   ${h.snippet}`);
       if (h.related?.length) lines.push(`   related: ${h.related.join(", ")}`);
-      if (h.code) lines.push("", "```", h.code, "```");
+      if (h.code && !weak) lines.push("", "```", h.code, "```");
       lines.push("");
     });
     lines.push(...scopeFooterLines(r));
   }
   const body = lines.join("\n").trimEnd();
+  // No savings footer on a weak pack: the estimate is "this pack vs reading
+  // those files whole", and with the source withheld it would claim a large
+  // saving for having answered less. Weak output should not look like a win.
+  if (weak) return body + weakMatchNote(r, Math.min(WEAK_HIT_CAP, r.hits.length), r.hits.length) + "\n";
   return body + askSavingsFooter(r, body) + escalationNudge(r) + "\n";
 }
 
