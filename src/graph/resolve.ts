@@ -492,8 +492,19 @@ function rustModuleDir(file: string): string {
   const normalized = toPosixPath(file);
   const dir = posix.dirname(normalized);
   const base = posix.basename(normalized);
-  if (base === "lib.rs" || base === "main.rs" || base === "mod.rs") return dir;
+  if (
+    base === "lib.rs" ||
+    base === "main.rs" ||
+    base === "mod.rs" ||
+    isRustAuxiliaryCrateRoot(normalized)
+  ) {
+    return dir;
+  }
   return posix.join(dir, base.slice(0, -3));
+}
+
+function isRustAuxiliaryCrateRoot(file: string): boolean {
+  return /(?:^|\/)(?:tests|benches|examples)\/[^/]+\.rs$/.test(toPosixPath(file));
 }
 
 function rustCrateSrcDir(crate: RustCrate): string {
@@ -561,11 +572,16 @@ function resolveRustImport(
   let remaining: string[];
   let rootFile: string | null = null;
   if (segments[0] === "crate") {
-    const crate = owningRustCrate(file, crates);
-    if (!crate) return spec;
-    rootFile = rustCrateRoot(crate, byId);
-    if (!rootFile) return spec;
-    baseDir = rustCrateSrcDir(crate);
+    if (isRustAuxiliaryCrateRoot(file)) {
+      rootFile = toPosixPath(file);
+      baseDir = posix.dirname(rootFile);
+    } else {
+      const crate = owningRustCrate(file, crates);
+      if (!crate) return spec;
+      rootFile = rustCrateRoot(crate, byId);
+      if (!rootFile) return spec;
+      baseDir = rustCrateSrcDir(crate);
+    }
     remaining = segments.slice(1);
   } else if (segments[0] === "self") {
     baseDir = rustModuleDir(file);

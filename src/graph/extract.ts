@@ -477,8 +477,9 @@ function collectImportedSymbols(
       const argument = node.childForFieldName("argument");
       if (!argument) return;
       for (const leaf of rustUseLeaves(argument)) {
-        if (leaf.name && leaf.local && /^[A-Z]/.test(leaf.name) && /^[A-Z]/.test(leaf.local)) {
-          out.set(leaf.local, { name: leaf.name, specifier: leaf.specifier });
+        const specifier = rustConsumeInlineModPrefix(leaf.specifier, rustInlineModDepth(node));
+        if (specifier && leaf.name && leaf.local && /^[A-Z]/.test(leaf.name) && /^[A-Z]/.test(leaf.local)) {
+          out.set(leaf.local, { name: leaf.name, specifier });
         }
       }
       return;
@@ -548,6 +549,25 @@ function rustJoinPath(prefix: string, path: string): string {
 
 function rustPathLastName(node: Parser.SyntaxNode): string | null {
   return node.childForFieldName("name")?.text ?? (node.type === "identifier" ? node.text : null);
+}
+
+function rustInlineModDepth(node: Parser.SyntaxNode): number {
+  let depth = 0;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.type === "mod_item" && parent.childForFieldName("body")) depth++;
+  }
+  return depth;
+}
+
+function rustConsumeInlineModPrefix(specifier: string, depth: number): string | null {
+  if (depth === 0) return specifier;
+  const segments = specifier.split("::");
+  if (segments[0] === "self") return null;
+  let supers = 0;
+  while (segments[supers] === "super") supers++;
+  if (supers === 0) return specifier;
+  if (supers <= depth) return null;
+  return segments.slice(depth).join("::");
 }
 
 /**
@@ -968,7 +988,11 @@ function rustImportSpecifiers(node: Parser.SyntaxNode, scope: string[]): string[
     return name ? [[...scope, name].join("::")] : [];
   }
   const argument = node.childForFieldName("argument");
-  return argument ? rustUseLeaves(argument).map((leaf) => leaf.specifier) : [];
+  if (!argument) return [];
+  const depth = rustInlineModDepth(node);
+  return rustUseLeaves(argument)
+    .map((leaf) => rustConsumeInlineModPrefix(leaf.specifier, depth))
+    .filter((specifier): specifier is string => specifier !== null);
 }
 
 function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null {
