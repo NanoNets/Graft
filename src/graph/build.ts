@@ -31,7 +31,7 @@ import {
 import { writeFingerprint } from "./fingerprint.js";
 import { seedGraph, type SeedResult } from "./seed.js";
 import { listSourceStats } from "./source-files.js";
-import { resolveEdges, type GoModule } from "./resolve.js";
+import { resolveEdges, type GoModule, type RustCrate } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers, type CardStats } from "./cards.js";
@@ -135,6 +135,39 @@ function readGoModules(root: string, repoFiles: string[]): GoModule[] {
     }
   }
   return mods;
+}
+
+/** Every Cargo package in the repo, keyed by its package name and the directory
+ * containing Cargo.toml. Cargo files can contain several unrelated `name` keys
+ * (`[[bin]]`, dependencies, package metadata), so only `[package]` contributes. */
+function readCargoCrates(root: string, repoFiles: string[]): RustCrate[] {
+  const crates: RustCrate[] = [];
+  for (const f of repoFiles) {
+    if (basename(f) !== "Cargo.toml") continue;
+    try {
+      let section = "";
+      let name: string | null = null;
+      for (const line of readFileSync(f, "utf8").split(/\r?\n/)) {
+        const header = line.match(/^\s*\[{1,2}\s*([^\]]+?)\s*\]{1,2}\s*(?:#.*)?$/);
+        if (header) {
+          section = header[1];
+          continue;
+        }
+        if (section !== "package") continue;
+        const declared = line.match(/^\s*name\s*=\s*(["'])(.*?)\1\s*(?:#.*)?$/);
+        if (declared) {
+          name = declared[2];
+          break;
+        }
+      }
+      if (!name) continue;
+      const rel = relPosix(root, dirname(f));
+      crates.push({ name, dir: rel === "" ? "." : rel });
+    } catch {
+      /* unreadable Cargo.toml — skip this crate */
+    }
+  }
+  return crates;
 }
 
 export async function buildGraph(
@@ -247,7 +280,10 @@ export async function buildGraph(
     files: entries,
   });
 
-  const edges = resolveEdges(nodes, rawEdges, { goModules: readGoModules(root, repoFiles) });
+  const edges = resolveEdges(nodes, rawEdges, {
+    goModules: readGoModules(root, repoFiles),
+    rustCrates: readCargoCrates(root, repoFiles),
+  });
 
   // graph.json is its own Tier-2 cache: fold in the prior meaning layer so an
   // unchanged body is never re-summarized (and a Tier-1-only run never wipes it).

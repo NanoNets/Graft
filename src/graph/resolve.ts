@@ -77,11 +77,21 @@ export interface GoModule {
   dir: string;
 }
 
+/** A Cargo package discovered in the repo: its `[package]` name and the
+ * repo-relative directory containing Cargo.toml. */
+export interface RustCrate {
+  name: string;
+  dir: string;
+}
+
 export interface ResolveOptions {
   /** The Go modules found in the repo. Enables mapping Go import package paths
    * (`example.com/app/pkg/util`) to the in-repo directory they name, relative to the
    * owning module's `go.mod` location. Empty/absent → Go imports stay external strings. */
   goModules?: GoModule[];
+  /** Cargo packages found in the repo. Enables `crate::` and workspace-crate
+   * module paths to resolve against source file nodes already present in byId. */
+  rustCrates?: RustCrate[];
 }
 
 /** Bundled name-lookup indexes for {@link resolveName}: exact match and PS
@@ -95,6 +105,7 @@ export interface ResolveOptions {
 interface NameIndex {
   perFileName: Map<string, Map<string, NodeV1[]>>;
   globalName: Map<string, NodeV1[]>;
+  rustGlobalName: Map<string, NodeV1[]>;
   psPerFileName: Map<string, Map<string, NodeV1[]>>;
   psGlobalName: Map<string, NodeV1[]>;
   psTestPaths: Set<string>;
@@ -121,6 +132,7 @@ export function resolveEdges(
 ): EdgeV1[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const globalName = new Map<string, NodeV1[]>();
+  const rustGlobalName = new Map<string, NodeV1[]>();
   const perFileName = new Map<string, Map<string, NodeV1[]>>();
   const psGlobalName = new Map<string, NodeV1[]>();
   const psPerFileName = new Map<string, Map<string, NodeV1[]>>();
@@ -142,7 +154,8 @@ export function resolveEdges(
       }
       continue;
     }
-    push(globalName, n.name, n);
+    if (isRustPath(n.path)) push(rustGlobalName, n.name, n);
+    else push(globalName, n.name, n);
     let fileMap = perFileName.get(n.path);
     if (!fileMap) perFileName.set(n.path, (fileMap = new Map()));
     push(fileMap, n.name, n);
@@ -183,7 +196,14 @@ export function resolveEdges(
     }
   }
 
-  const nameIndex: NameIndex = { perFileName, globalName, psPerFileName, psGlobalName, psTestPaths };
+  const nameIndex: NameIndex = {
+    perFileName,
+    globalName,
+    rustGlobalName,
+    psPerFileName,
+    psGlobalName,
+    psTestPaths,
+  };
   const ownerIndex: OwnerIndex = { ownerMethod, classParents, psOwnerMethodExact, psOwnerMethod, psClassParents };
   // memoizes isTestPath(callerFile) across the whole rawEdges pass — many
   // edges share the same originating file.
@@ -205,7 +225,7 @@ export function resolveEdges(
       const target =
         hasGoModules && e.file.endsWith(".go")
           ? resolveGoImport(e.specifier, opts.goModules!, goFilesByDir)
-          : resolveImport(e.specifier, e.file, byId);
+          : resolveImport(e.specifier, e.file, byId, opts.rustCrates);
       add(e.source, target, "imports", "extracted");
     } else if (e.relation === "extends" || e.relation === "implements") {
       const kinds: Kind[] = e.relation === "implements" ? ["interface"] : ["class", "interface"];
@@ -218,11 +238,19 @@ export function resolveEdges(
       // A named import gives both halves needed for sound resolution: the module
       // it came from and the exported name. Resolve inside that file only, so a
       // same-named symbol elsewhere in the repo cannot become a false edge.
-      const targetFile = resolveImport(e.specifier, e.file, byId);
+      const targetFile = resolveImport(e.specifier, e.file, byId, opts.rustCrates);
       if (!byId.has(targetFile)) continue; // external or unresolved module
       const candidates = perFileName.get(targetFile)?.get(e.name) ?? [];
       if (candidates.length === 1) add(e.source, candidates[0].id, "references", "extracted");
     } else if (e.relation === "calls") {
+      if (e.lang === "rust" && e.specifier) {
+        const targetFile = resolveImport(e.specifier, e.file, byId, opts.rustCrates);
+        if (!byId.has(targetFile)) continue;
+        const candidates = (perFileName.get(targetFile)?.get(e.name!) ?? [])
+          .filter((candidate) => candidate.kind === "function");
+        if (candidates.length === 1) add(e.source, candidates[0].id, "calls", "extracted");
+        continue;
+      }
       if (e.viaMember) {
         if (!e.recvType) continue;
         const hit = resolveTypedMember(e.recvType, e.name!, e.file, e.lang, ownerIndex);
@@ -241,6 +269,10 @@ export function resolveEdges(
 
 function isPsPath(path: string): boolean {
   return languageOf(path) === "powershell";
+}
+
+function isRustPath(path: string): boolean {
+  return languageOf(path) === "rust";
 }
 
 function push<T>(map: Map<string, T[]>, key: string, val: T): void {
@@ -280,7 +312,7 @@ function resolveName(
   file: string,
   kinds: Kind[],
   lang: Language | undefined,
-  { perFileName, globalName, psPerFileName, psGlobalName, psTestPaths }: NameIndex,
+  { perFileName, globalName, rustGlobalName, psPerFileName, psGlobalName, psTestPaths }: NameIndex,
   callerIsTestCache: Map<string, boolean>,
 ): { id: string; confidence: EdgeV1["confidence"] } | null {
   const isPs = lang === "powershell";
@@ -298,6 +330,11 @@ function resolveName(
   // redefines a builtin and calls it still self-links above) but BEFORE either
   // global tier — like test-demotion below, it guards only global lookups.
   if (isPs && PS_BUILTIN_CMDLETS.has(name.toLowerCase())) return null;
+
+  if (lang === "rust") {
+    const rustGlobal = (rustGlobalName.get(name) ?? []).filter((n) => kinds.includes(n.kind));
+    return rustGlobal.length === 1 ? { id: rustGlobal[0].id, confidence: "inferred" } : null;
+  }
 
   const demoteTestCandidates = (candidates: NodeV1[]): NodeV1[] => {
     if (!isPs) return candidates;
@@ -351,7 +388,18 @@ function resolveTypedMember(
   const visited = new Set<string>([isPs ? recvType.toLowerCase() : recvType]);
   let frontier = [recvType];
   for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
+    if (lang === "rust") {
+      const level = frontier.flatMap((type) =>
+        (ownerMethod.get(`${type}.${name}`) ?? []).filter((candidate) => isRustPath(candidate.path)),
+      );
+      if (level.length > 1) return "ambiguous";
+      if (level.length === 1) {
+        const candidate = level[0];
+        return { id: candidate.id, confidence: candidate.path === file ? "extracted" : "inferred" };
+      }
+    }
     for (const type of frontier) {
+      if (lang === "rust") continue;
       const key = `${type}.${name}`;
       const exact = (isPs ? psOwnerMethodExact : ownerMethod).get(key) ?? [];
 
@@ -407,7 +455,13 @@ function resolveTypedMember(
  * EXECUTED later resolves `$PSScriptRoot` to the CALLER's directory at
  * runtime; we wire it to the DEFINING file's directory instead.
  */
-function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): string {
+function resolveImport(
+  spec: string,
+  file: string,
+  byId: Map<string, NodeV1>,
+  rustCrates?: RustCrate[],
+): string {
+  if (languageOf(file) === "rust") return resolveRustImport(spec, file, byId, rustCrates ?? []);
   const isPs = languageOf(file) === "powershell";
   const rel = isPs ? spec.replace(/^\$psscriptroot\//i, "./") : spec;
   if (!rel.startsWith(".")) return spec;
@@ -430,6 +484,119 @@ function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): s
   ];
   for (const c of candidates) if (byId.has(c)) return c;
   return spec;
+}
+
+/** A Rust module's child directory. Crate-root files and mod.rs own their
+ * containing directory; every other module file owns a same-named directory. */
+function rustModuleDir(file: string): string {
+  const normalized = toPosixPath(file);
+  const dir = posix.dirname(normalized);
+  const base = posix.basename(normalized);
+  if (base === "lib.rs" || base === "main.rs" || base === "mod.rs") return dir;
+  return posix.join(dir, base.slice(0, -3));
+}
+
+function rustCrateSrcDir(crate: RustCrate): string {
+  return crate.dir === "." ? "src" : posix.join(crate.dir, "src");
+}
+
+function pathIsWithin(path: string, dir: string): boolean {
+  return dir === "." || path === dir || path.startsWith(`${dir}/`);
+}
+
+function rustCrateRoot(crate: RustCrate, byId: Map<string, NodeV1>): string | null {
+  const srcDir = rustCrateSrcDir(crate);
+  const lib = posix.join(srcDir, "lib.rs");
+  if (byId.has(lib)) return lib;
+  const main = posix.join(srcDir, "main.rs");
+  return byId.has(main) ? main : null;
+}
+
+function owningRustCrate(file: string, crates: RustCrate[]): RustCrate | null {
+  const normalized = toPosixPath(file);
+  let best: { crate: RustCrate; prefixLength: number } | null = null;
+  for (const crate of crates) {
+    const srcDir = rustCrateSrcDir(crate);
+    const prefix = pathIsWithin(normalized, srcDir)
+      ? srcDir
+      : pathIsWithin(normalized, crate.dir)
+        ? crate.dir
+        : null;
+    if (prefix === null) continue;
+    if (!best || prefix.length > best.prefixLength) best = { crate, prefixLength: prefix.length };
+  }
+  return best?.crate ?? null;
+}
+
+function matchingRustCrate(segment: string, crates: RustCrate[]): RustCrate | null {
+  const normalized = segment.replace(/-/g, "_");
+  return crates.find((crate) => crate.name.replace(/-/g, "_") === normalized) ?? null;
+}
+
+function resolveRustModule(
+  baseDir: string,
+  segments: string[],
+  byId: Map<string, NodeV1>,
+): string | null {
+  for (let length = segments.length; length >= 1; length--) {
+    const stem = posix.join(baseDir, ...segments.slice(0, length));
+    const flat = `${stem}.rs`;
+    if (byId.has(flat)) return flat;
+    const nested = posix.join(stem, "mod.rs");
+    if (byId.has(nested)) return nested;
+  }
+  return null;
+}
+
+function resolveRustImport(
+  spec: string,
+  file: string,
+  byId: Map<string, NodeV1>,
+  crates: RustCrate[],
+): string {
+  const segments = spec.split("::").filter(Boolean);
+  if (segments.length === 0) return spec;
+
+  let baseDir: string;
+  let remaining: string[];
+  let rootFile: string | null = null;
+  if (segments[0] === "crate") {
+    const crate = owningRustCrate(file, crates);
+    if (!crate) return spec;
+    rootFile = rustCrateRoot(crate, byId);
+    if (!rootFile) return spec;
+    baseDir = rustCrateSrcDir(crate);
+    remaining = segments.slice(1);
+  } else if (segments[0] === "self") {
+    baseDir = rustModuleDir(file);
+    remaining = segments.slice(1);
+  } else if (segments[0] === "super") {
+    baseDir = rustModuleDir(file);
+    let index = 0;
+    while (segments[index] === "super") {
+      baseDir = posix.dirname(baseDir);
+      index++;
+    }
+    remaining = segments.slice(index);
+  } else {
+    const crate = matchingRustCrate(segments[0], crates);
+    if (crate) {
+      rootFile = rustCrateRoot(crate, byId);
+      if (!rootFile) return spec;
+      baseDir = rustCrateSrcDir(crate);
+      remaining = segments.slice(1);
+    } else if (segments.length === 1) {
+      // Bodyless `mod x;` has no syntactic marker by resolution time, but its
+      // single-segment shape is enough to try the declaring module's child dir.
+      baseDir = rustModuleDir(file);
+      remaining = segments;
+    } else {
+      return spec;
+    }
+  }
+
+  if (remaining.length === 0) return rootFile ?? spec;
+  return resolveRustModule(baseDir, remaining, byId) ?? spec;
 }
 
 /**
