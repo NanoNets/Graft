@@ -428,13 +428,13 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 /** A direct invocation already emits a stronger `calls` edge. */
 function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
   const parent = node.parent;
-  return parent?.type === callType && parent.childForFieldName("function") === node;
+  return parent?.type === callType && parent.childForFieldName("function")?.id === node.id;
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return parent?.childForFieldName("name")?.id === node.id;
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and

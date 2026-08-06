@@ -101,8 +101,10 @@
   `tree-sitter-typescript@0.23.2` is still the latest release and declares a
   `peerOptional tree-sitter@^0.21.0`, so an npm `overrides` entry pins its
   nested `tree-sitter` dependency to the root one and lets the install resolve
-  cleanly. No behavior change; the grammar's native binding loads and parses
-  correctly under tree-sitter 0.25.1, and the full suite is green.
+  cleanly. Syntax-node comparisons now use Tree-sitter's stable node IDs rather
+  than JavaScript object identity, whose behavior differs between runtime
+  versions. The minimum Node.js version is now 22.12, matching Commander 15 and
+  ensuring Windows installs can use Tree-sitter 0.25's prebuilt native module.
 
 [#33]: https://github.com/NanoNets/Graft/issues/33
 [#35]: https://github.com/NanoNets/Graft/issues/35
