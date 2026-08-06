@@ -9,6 +9,17 @@
   Dot-sourcing, `Import-Module`, and `using module` resolve local modules, while
   UTF-16LE source from Windows PowerShell is decoded during graph ingestion.
 
+- **Rust code graphs.** `.rs` files now contribute functions, structs, enums,
+  traits, type aliases, methods (with impl-block owners), and `macro_rules!`
+  definitions; calls, method calls with typed-receiver inference, macro
+  invocations (namespaced with their `!`), imports, and trait-impl heritage.
+  `mod` declarations and `use` paths resolve through the crate's module tree
+  (`crate::`/`super::`/`self::`, `x.rs` and `x/mod.rs` layouts), and workspace
+  crates resolve cross-crate via each `Cargo.toml`'s package name. Rust names
+  resolve in a Rust-only domain — a Rust symbol never links to a same-named
+  symbol from another language — and member calls on types with several trait
+  impls of the same method name are dropped as ambiguous rather than guessed.
+
 ### Changed
 
 - **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
