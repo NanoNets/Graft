@@ -82,11 +82,17 @@ const R_RIGHT_ASSIGN_OPS = new Set(["->", "->>"]);
 
 /**
  * The bare name a `binary_operator` (left-assign) or `function_definition`
- * (right-assign) node defines, for R's two assignment shapes — shared by
- * extract.ts's `describeR` (which also needs the underlying nodes to build
- * the rest of the descriptor) and this file's own `defName`, so the two can
- * never drift on what counts as a definition. See `describeR`'s doc comment
- * for why right-assign's AST shape needs its own branch rather than mirroring
+ * (right-assign) node defines, for R's two plain-function assignment shapes —
+ * this file's own `defName` uses it directly. extract.ts's `describeR`
+ * duplicates the same op-filtering check rather than importing this (same
+ * reasoning as the Go receiver helpers below: bindings.ts can't take a value
+ * import back on extract.ts), and additionally needs to distinguish an S3
+ * `generic.Class` method and R6/S4 class/method shapes this function doesn't
+ * know about — bindings.ts has no equivalent need since no `handleR` binding
+ * collector exists yet (R6/S4/S3 don't get a member/receiver-type table in
+ * this pass; `self`/`private` resolve directly via `ctx.enclosingClass`
+ * instead, needing no lookup). See `describeR`'s doc comment for why
+ * right-assign's AST shape needs its own branch rather than mirroring
  * left-assign's (empirically, not assumed — `->`'s low precedence means it's
  * absorbed into the function's own `body` field, not an outer wrapper).
  * Null if `node` isn't one of these two shapes.

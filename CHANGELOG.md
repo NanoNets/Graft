@@ -27,6 +27,34 @@
   roxygen `@export` tag detection is left for a follow-up once an
   extras-comment-scanning helper exists.
 
+- **R language support, Phase 2: S3/S4/R6 class awareness.** R's class systems
+  are library *convention*, not grammar syntax, so this is the first
+  "pattern-match known call idioms → sometimes a class/method" language in
+  graft rather than "one grammar construct → one kind." **R6**
+  (`Foo <- R6::R6Class("Foo", public = list(...), private = list(...))`) is
+  the highest-value target — this repo's own dominant R OOP style — and gets
+  full support: the class node, `public =`/`private =`/`active =` list
+  entries as methods (private ones unexported), `inherit =` heritage, and
+  `self$`/`private$` calls resolving directly to the enclosing class the same
+  way Python's `self`/TS's `this` already do. **S4** (`setClass()` /
+  `setMethod()`) — both are `call` nodes with side effects, essentially never
+  assigned to a variable — become a class and an owned method respectively,
+  with `contains =` (single or `c(...)`-vector) heritage; `setGeneric()` isn't
+  specially extracted (no natural class/method mapping). **S3**
+  (`generic.Class <- function() {}`) is the genuinely ambiguous one flagged in
+  the plan: `read.csv`/`data.frame` are NOT S3 dispatch, and nothing in the
+  grammar distinguishes them from `print.MyClass`. A `name.Class` assignment
+  only becomes an S3 method when `name` is a generic registered locally via a
+  `UseMethod()` call in the same file, or is one of a small curated set of
+  common base-R generics (`print`, `format`, `summary`, ...) — erring toward
+  false negatives (an unrecognized S3 method just stays a plain function)
+  over false positives. Known gaps: S3 generics registered in a *different*
+  file than their methods aren't recognized (no whole-repo pass exists yet —
+  same per-file limitation Go/C++ bindings already accept); S4's
+  `setMethod()` only handles a single string-literal dispatch class, not
+  `signature()`-based multiple dispatch; R6 active bindings are treated as
+  ordinary (exported) methods with no distinction from regular ones.
+
 ## 0.9.0
 
 ### Added
