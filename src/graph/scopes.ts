@@ -29,7 +29,7 @@ import { readIncludeDirs } from "../util/state.js";
 import type { GraphV1, ScopeV1 } from "./types.js";
 
 /** Project-marker files, checked in this order (also the order `markers` is built in). */
-const MARKERS = ["package.json", "go.mod", "pyproject.toml", "setup.py", "Cargo.toml"];
+const MARKERS = ["package.json", "go.mod", "pyproject.toml", "setup.py", "Cargo.toml", "composer.json"];
 
 const CANONICAL_ROOT: ScopeV1[] = [{ prefix: "", label: "", markers: [] }];
 
