@@ -24,7 +24,10 @@ hotspots), no LLM, no key.
   exhaustive tasks ("every occurrence / every caller of this pattern"), ranked
   results are top-N, not complete — run \`graft grep "<literal>"\` instead
   (exhaustive over indexed files, grouped by enclosing symbol), falling back
-  to raw \`grep -rn\` only for unindexed files.
+  to raw \`grep -rn\` for unindexed files: docs, configs, and any language
+  \`graft build\` reported as \`skipped:\` (no parser) — code in those languages
+  is invisible to the symbol tools, so a zero-hit result there is a coverage
+  gap, not an answer.
 - \`graft skeleton <file>\` → every definition's signature + span, ~10× cheaper
   than reading the file; use it to skim an API surface.
 - \`graft callers <symbol>\` gives precomputed, exact edges — who calls this.

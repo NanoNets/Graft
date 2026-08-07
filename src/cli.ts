@@ -28,6 +28,7 @@ import {
   runWorkspaceGrep,
   runWorkspaceMap,
 } from "./graph/workspace-cli.js";
+import { skippedLine } from "./graph/coverage.js";
 import { formatInitEpilogue } from "./cli-epilogue.js";
 import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
@@ -222,6 +223,10 @@ program
     process.stderr.write("\n");
     console.log(`✓ wiring: ${g.nodes} nodes (${fmt(g.byKind)}), ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
     console.log(`  parsed: ${g.parsed} of ${g.files} files (${g.reused} replayed from cache)`);
+    // Never silent about coverage: code with no parser looks exactly like code
+    // with no matches once queries run (issue #66).
+    const skippedNote = skippedLine(g.skipped);
+    if (skippedNote) console.log(`  ${skippedNote}`);
     // Worth one line: this build started from a graph the user never built *here*.
     if (g.seededFrom) console.log(`  seeded: copied a starting graph from ${g.seededFrom} (git worktree)`);
     if (deep) {

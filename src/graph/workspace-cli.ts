@@ -8,6 +8,7 @@
 import { Graft } from "../engine.js";
 import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { writeBuildConfig } from "../util/state.js";
+import { skippedLine } from "./coverage.js";
 import type { EngineConfig } from "../ai/providers.js";
 import { formatAsk } from "../ask/ask.js";
 import type { Direction } from "./traverse.js";
@@ -53,6 +54,8 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
     if (opts.deep) await engine.init(childDir, { extensions: opts.extensions });
     const g = await engine.graph(childDir, { llm: opts.deep, concurrency: opts.concurrency });
     console.log(`✓ ${childName}/: ${g.nodes} nodes, ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
+    const skipped = skippedLine(g.skipped);
+    if (skipped) console.log(`  ${childName}/: ${skipped}`);
     for (const e of g.errors) console.error(`✗ ${childName}/: ${e}`);
   };
 
@@ -89,13 +92,14 @@ export function runWorkspaceGrep(
   pattern: string,
   opts: { ignoreCase?: boolean; fixed?: boolean; json?: boolean },
 ): void {
-  const { result, coverage } = federateGrep(root, override, pattern, { ignoreCase: opts.ignoreCase, fixed: opts.fixed });
+  const { result, coverage, unindexed } = federateGrep(root, override, pattern, { ignoreCase: opts.ignoreCase, fixed: opts.fixed });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
   if (result.totalHits === 0) {
-    console.error(coverage ? `${zeroHitNote(result)}\n${coverage}` : zeroHitNote(result));
+    const note = zeroHitNote(result, unindexed);
+    console.error(coverage ? `${note}\n${coverage}` : note);
     return;
   }
   process.stdout.write(formatGrepResult(result));

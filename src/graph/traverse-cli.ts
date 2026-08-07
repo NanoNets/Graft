@@ -14,6 +14,8 @@
 import { resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { withSavings, savingsFor, type Savings } from "../context/savings.js";
+import { unindexedNote, type UnindexedStat } from "./coverage.js";
+import { hasEdgeExtraction, languageOf } from "./extract.js";
 import { loadGraphCached } from "./load.js";
 import { resolveSymbol, edgeWalk, type Direction, type EdgeHit } from "./traverse.js";
 import type { GraphV1, NodeV1 } from "./types.js";
@@ -71,14 +73,43 @@ export function callersSavings(
  * `resolve.ts` drops a cross-file call/reference for rather than guessing which
  * one it means. Without saying so, a zero-hit result here reads as "nothing
  * calls this" when it may really be "something does, but the edge was dropped". */
-export function looseNoteFor(direction: Direction, name: string, candidateCount: number): string {
+export function looseNoteFor(
+  direction: Direction,
+  name: string,
+  candidateCount: number,
+  opts: { edgeless?: boolean } = {},
+): string {
   const label = direction === "out" ? "callees" : "callers";
+  // A definitions-only language (C/C++) HAS no edge data — an empty result is
+  // "no data", never "nothing calls this", and must not read like a fact about
+  // the code (issue #66).
+  if (opts.edgeless) {
+    return `  no edge data — this symbol is in a definitions-only language (C/C++): call edges are not extracted, so the graph cannot know its ${label}. Find its uses with graft grep "${name}" or raw grep -rn`;
+  }
   const dir = direction === "out" ? "outgoing" : "incoming";
   const ambiguity =
     candidateCount > 1
       ? ` ${candidateCount} definitions share the name "${name}"; a cross-file caller of an ambiguous name is dropped rather than guessed, so this may undercount.`
       : "";
   return `  no indexed ${label} — the graph has no ${dir} call/reference edges for this symbol as written.${ambiguity} Check the name (try the bare symbol, or "Type.method"), or find its uses with graft grep "${name}". Fall back to raw grep -rn only for unindexed files`;
+}
+
+/** True when a symbol's language is indexed definitions-only (no call edges) —
+ * the case {@link looseNoteFor}'s `edgeless` note phrases honestly. */
+export function symbolEdgeless(node: NodeV1): boolean {
+  const lang = languageOf(node.path);
+  return lang !== null && !hasEdgeExtraction(lang);
+}
+
+/** The unknown-symbol error for `graft callers` and `graft_trace_calls` — one
+ * implementation so CLI and MCP say the same thing. With `unindexed` (the
+ * graph's `meta.unindexed`), it names the coverage gap: on an unsupported
+ * language, "check spelling" sends you chasing a typo that isn't there while
+ * the symbol sits in a file no parser ever read (issue #66). */
+export function unknownSymbolNote(query: string, unindexed?: UnindexedStat[]): string {
+  const base = `no symbol "${query}" in the graph — check spelling or run \`graft build\``;
+  const gap = unindexedNote(unindexed);
+  return gap ? `${base}. Note: ${gap}` : base;
 }
 
 interface SymbolJson {
@@ -155,7 +186,7 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
     return;
   }
   if (matches.length === 0) {
-    console.error(`✗ no symbol "${query}" in the graph — check spelling or run graft build`);
+    console.error(`✗ ${unknownSymbolNote(query, graph.meta.unindexed)}`);
     process.exit(1);
   }
 
@@ -189,7 +220,7 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
       matches: results.map((r): MatchJson => {
         const m: MatchJson = { symbol: symbolJson(r.symbol), hits: r.hits.map(hitJson) };
         if (r.hits.length === 0) {
-          m.note = looseNoteFor(direction, r.symbol.name, matches.length);
+          m.note = looseNoteFor(direction, r.symbol.name, matches.length, { edgeless: symbolEdgeless(r.symbol) });
         }
         return m;
       }),
@@ -202,7 +233,7 @@ export function runCallersCommand(query: string, dir: string, opts: CallersCliOp
   const lines: string[] = [];
   for (const { symbol, hits } of results) {
     lines.push(headerOf(symbol));
-    if (hits.length === 0) lines.push(looseNoteFor(direction, symbol.name, matches.length));
+    if (hits.length === 0) lines.push(looseNoteFor(direction, symbol.name, matches.length, { edgeless: symbolEdgeless(symbol) }));
     else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     lines.push("");
   }

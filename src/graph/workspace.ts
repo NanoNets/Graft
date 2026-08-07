@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { checkGraph } from "./check.js";
+import { mergeUnindexed, unindexedNote, type UnindexedStat } from "./coverage.js";
 import { loadGraphCached } from "./load.js";
 import { buildRepoMap, formatRepoMap } from "./map.js";
 import { discoverWorkspaceChildren } from "./scopes.js";
@@ -29,6 +30,7 @@ import {
   headerOf,
   hitLine,
   looseNoteFor,
+  symbolEdgeless,
 } from "./traverse-cli.js";
 import { edgeWalk, resolveSymbol, type Direction } from "./traverse.js";
 import { wiringPath } from "./write.js";
@@ -313,7 +315,7 @@ export function federateGrep(
   override: string | undefined,
   pattern: string,
   opts: { ignoreCase?: boolean; fixed?: boolean } = {},
-): { result: GrepResult; coverage: string } {
+): { result: GrepResult; coverage: string; unindexed: UnindexedStat[] } {
   const wg = loadWorkspaceGraphs(root, override);
   const groups: GrepGroup[] = [];
   let filesSearched = 0;
@@ -347,7 +349,10 @@ export function federateGrep(
   groups.sort((a, b) => b.inDegree - a.inDegree || a.path.localeCompare(b.path));
   const saved: Savings | undefined = savedChars > 0 ? { files: savedFiles, baselineChars: savedChars } : undefined;
   const result: GrepResult = { pattern, filesSearched, totalHits, groups, truncated, saved };
-  return { result, coverage: coverageNote(wg) };
+  // Every child's no-parser gap, merged — so a federated zero-hit note can be
+  // as honest as the single-repo one (issue #66).
+  const unindexed = mergeUnindexed(wg.loaded.map(({ graph }) => graph.meta.unindexed));
+  return { result, coverage: coverageNote(wg), unindexed };
 }
 
 /** One `graft map` section per child (each child's own map, budget split evenly
@@ -425,7 +430,7 @@ export function federateCallers(
     const lines = [`## ${child}/`];
     for (const { symbol: sym, hits } of results) {
       lines.push(headerOf(sym));
-      if (hits.length === 0) lines.push(looseNoteFor(direction, sym.name, matches.length));
+      if (hits.length === 0) lines.push(looseNoteFor(direction, sym.name, matches.length, { edgeless: symbolEdgeless(sym) }));
       else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     }
     const body = lines.join("\n");
@@ -434,7 +439,11 @@ export function federateCallers(
 
   const cov = coverageNote(wg);
   if (!found) {
-    const base = `no symbol "${symbol}" in any of the ${wg.loaded.length} workspace repo(s) — check spelling or run graft build`;
+    let base = `no symbol "${symbol}" in any of the ${wg.loaded.length} workspace repo(s) — check spelling or run graft build`;
+    // Same honesty as the single-repo path: name the no-parser gap before
+    // blaming spelling (issue #66).
+    const gap = unindexedNote(mergeUnindexed(wg.loaded.map(({ graph }) => graph.meta.unindexed)));
+    if (gap) base += `. Note: ${gap}`;
     return { text: cov ? `${base}\n${cov}` : base, found: false };
   }
   let text = blocks.join("\n\n");

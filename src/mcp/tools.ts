@@ -10,7 +10,7 @@ import { loadGraphCached } from '../graph/load.js';
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from '../graph/refresh.js';
 import { contextDirFor } from '../context/node-file.js';
 import { resolveSymbol, edgeWalk, type Direction, type EdgeHit } from '../graph/traverse.js';
-import { callersSavings, headerOf, hitLine, looseNoteFor } from '../graph/traverse-cli.js';
+import { callersSavings, headerOf, hitLine, looseNoteFor, symbolEdgeless, unknownSymbolNote } from '../graph/traverse-cli.js';
 import { withSavings } from '../context/savings.js';
 import { grepGraph } from '../search/grep.js';
 import { formatGrepResult, zeroHitNote } from '../search/grep-cli.js';
@@ -32,10 +32,6 @@ export interface ToolDef {
 }
 
 const NO_GRAPH = 'no graph found — run `graft build` first';
-
-function unknownSymbolText(query: string): string {
-  return `no symbol "${query}" in the graph — check spelling or run \`graft build\``;
-}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -137,7 +133,7 @@ function renderMatches(
     .map((m) => {
       const hits = hitsFor(m);
       const lines = [headerOf(m)];
-      if (hits.length === 0) lines.push(looseNoteFor(direction, m.name, matches.length));
+      if (hits.length === 0) lines.push(looseNoteFor(direction, m.name, matches.length, { edgeless: symbolEdgeless(m) }));
       else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
       return lines.join('\n');
     })
@@ -176,11 +172,11 @@ function callWorkspaceTool(
     case 'graft_find_all': {
       const pattern = String(args.pattern ?? '');
       if (!pattern) return { text: 'graft_find_all requires a pattern', isError: true };
-      const { result, coverage } = federateGrep(root, dirOverride, pattern, {
+      const { result, coverage, unindexed } = federateGrep(root, dirOverride, pattern, {
         ignoreCase: typeof args.ignore_case === 'boolean' ? args.ignore_case : undefined,
         fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
       });
-      const text = result.totalHits === 0 ? zeroHitNote(result) : formatGrepResult(result);
+      const text = result.totalHits === 0 ? zeroHitNote(result, unindexed) : formatGrepResult(result);
       return { text: coverage ? `${text}\n${coverage}` : text, isError: false };
     }
     case 'graft_repo_map': {
@@ -296,7 +292,7 @@ function callSingleTool(
         if (!w) return { text: NO_GRAPH, isError: true };
         const inOpt = typeof args.in === 'string' && args.in ? { in: args.in } : {};
         const matches = resolveSymbol(w, symbol, inOpt);
-        if (matches.length === 0) return { text: unknownSymbolText(symbol), isError: true };
+        if (matches.length === 0) return { text: unknownSymbolNote(symbol, w.meta.unindexed), isError: true };
         const direction: Direction = args.direction === 'out' ? 'out' : 'in';
         // `depth: "all"` (or a huge number) walks the full transitive closure —
         // every connected source — terminating when no new node is reached.
@@ -322,7 +318,7 @@ function callSingleTool(
           fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
           in: typeof args.in === 'string' && args.in ? args.in : undefined,
         });
-        if (result.totalHits === 0) return { text: zeroHitNote(result), isError: false };
+        if (result.totalHits === 0) return { text: zeroHitNote(result, w.meta.unindexed), isError: false };
         return { text: formatGrepResult(result), isError: false };
       }
       case 'graft_repo_map': {

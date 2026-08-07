@@ -3,6 +3,9 @@
  * stdout carries protocol messages ONLY; diagnostics go to stderr.
  */
 import { createInterface } from 'node:readline';
+import { resolve } from 'node:path';
+import { contextDirFor } from '../context/node-file.js';
+import { loadGraphCached } from '../graph/load.js';
 import { TOOLS, callTool } from './tools.js';
 import { mcpInstructions } from './instructions.js';
 
@@ -44,7 +47,11 @@ export function startMcpServer(root: string, dirOverride?: string, version = '0'
           capabilities: { tools: {} },
           serverInfo: { name: 'graft', version },
           // The one channel that survives tool deferral — see ./instructions.ts.
-          instructions: mcpInstructions(),
+          // The graph's coverage gap (meta.unindexed) scopes the "prefer these
+          // tools" claim; null graph (not built yet) sends the plain version.
+          instructions: mcpInstructions(
+            loadGraphCached(contextDirFor(resolve(root), dirOverride))?.meta.unindexed,
+          ),
         });
         return;
       case 'notifications/initialized':

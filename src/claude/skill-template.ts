@@ -50,7 +50,9 @@ enclosing symbol** and ranked by coupling; it also reports files it couldn't rea
   and signature, keep the bare name) and retry \`graft grep\` — do NOT switch to
   raw \`grep -rn\`, which is slower and unranked.
 - \`-i\` case-insensitive; \`--in <path>\` scopes to a subtree. Raw \`grep -rn\` is
-  only for files graft genuinely doesn't index (docs, configs, brand-new files).
+  for files graft doesn't index: docs, configs, brand-new files — and any
+  language \`graft build\` reported as \`skipped:\` (no parser); a zero-hit graft
+  grep on those is a coverage gap, not an answer.
 
 ### 3 · \`graft skeleton <file>\`: a file's API at a glance
 Signatures-only view of one file (every function / method / type with its span)

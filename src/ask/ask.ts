@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import matter from "gray-matter";
 import { contextDirFor } from "../context/node-file.js";
 import { withSavings, savingsFor, SAVINGS_TURN_NUDGE, type Savings } from "../context/savings.js";
+import { unsupportedFileNote } from "../graph/coverage.js";
 import { loadGraphCached, loadAskIndexCached } from "../graph/load.js";
 import {
   assertPrefixIndexed,
@@ -887,7 +888,12 @@ export function skeleton(dir: string, file: string, opts: { contextDir?: string 
     const [path] = matches;
     if (path) defs = graph.nodes.filter((n) => n.kind !== "file" && n.path === path);
   }
-  if (!defs.length) return { file, entries: [], note: "no definitions indexed for this file" };
+  if (!defs.length) {
+    // "no definitions indexed" on a language with no parser is a confident
+    // false negative — the honest answer is "no parser" (issue #66).
+    const unsupported = unsupportedFileNote(file);
+    return { file, entries: [], note: unsupported ?? "no definitions indexed for this file" };
+  }
 
   const startLine = (span: string) => Number(span.match(/^L(\d+)/)?.[1] ?? 0);
   defs.sort((a, b) => startLine(a.span) - startLine(b.span));

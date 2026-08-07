@@ -10,12 +10,26 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import Cpp from "tree-sitter-cpp";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "cpp";
+
+/**
+ * C/C++ is a definitions-only tier: nodes and `contains` edges, but no
+ * call/reference/import edges. Every other language resolves cross-file edges
+ * through import bindings; C++ has none (only #include, namespaces, overloads,
+ * templates), so name-only resolution would fabricate an edge between every
+ * same-named method in the repo (issue #66). Consumers use this to say
+ * honestly that edge data does not exist for a file, rather than answering
+ * "nothing calls this" from a graph that never could have known.
+ */
+export function hasEdgeExtraction(lang: Language): boolean {
+  return lang !== "cpp";
+}
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,6 +58,17 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  // One grammar and one label for the whole C family: the cpp grammar parses C,
+  // and `.h` can't be attributed to either language from its name alone, so a
+  // split label would misreport every C repo's headers (or every C++ one's).
+  { ext: ".cpp", grammar: "cpp", label: "c/c++" },
+  { ext: ".cxx", grammar: "cpp", label: "c/c++" },
+  { ext: ".cc", grammar: "cpp", label: "c/c++" },
+  { ext: ".hpp", grammar: "cpp", label: "c/c++" },
+  { ext: ".hxx", grammar: "cpp", label: "c/c++" },
+  { ext: ".hh", grammar: "cpp", label: "c/c++" },
+  { ext: ".c", grammar: "cpp", label: "c/c++" },
+  { ext: ".h", grammar: "cpp", label: "c/c++" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -149,11 +174,16 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+// C/C++: empty on purpose — every definition shape depends on its declarator
+// (or on having a body at all), so describeCpp() resolves them dynamically.
+const CPP_KINDS: Record<string, Kind> = {};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  cpp: CPP_KINDS,
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +199,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  cpp: Cpp,
 };
 
 export interface WalkCtx {
@@ -192,6 +223,10 @@ interface DefDescriptor {
   kind: Kind;
   headerEnd: number; // char index where the signature ends (body starts)
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
+  /** methods whose owner isn't the enclosing walk context: a C++ out-of-class
+   * definition (`Physics::step`) names its class in the declarator, not in any
+   * ancestor node. */
+  owner?: string;
 }
 
 /** tree-sitter's string `parse()` fails with "Invalid argument" on any input
@@ -284,7 +319,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class already set as ctx.enclosingClass. Only method nodes carry it — resolve.ts's
     // ownerMethod index is the sole consumer (see NodeV1.owner's doc comment).
     const owner: string | undefined =
-      desc.kind === "method" ? (isGoMethod ? (goReceiverType(node) ?? undefined) : (ctx.enclosingClass ?? undefined)) : undefined;
+      desc.kind === "method"
+        ? (desc.owner ?? (isGoMethod ? (goReceiverType(node) ?? undefined) : (ctx.enclosingClass ?? undefined)))
+        : undefined;
     out.push({
       id,
       name: desc.name,
@@ -297,7 +334,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "cpp"
+              ? true // no module system at Tier-1; linkage analysis is out of scope
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -311,7 +350,11 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class heritage
     if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
 
-    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
+    // structs count: a C++ struct is a class with default-public members, and its
+    // inline methods need an owner just like a class's. (Go structs never contain
+    // definitions, so including "struct" here is a no-op for them.)
+    const enclosingClass =
+      desc.kind === "class" || desc.kind === "struct" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
@@ -325,6 +368,15 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           : ctx.importedSymbols,
     };
     for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
+    return;
+  }
+
+  // Definitions-only language (C/C++): descend for nested definitions but emit no
+  // call/reference/import edges — see hasEdgeExtraction() for why guessing is worse
+  // than abstaining. Without this gate the C++ grammar's `call_expression` nodes
+  // would fall straight into the capture below.
+  if (!hasEdgeExtraction(ctx.lang)) {
+    for (const child of node.namedChildren) walk(child, ctx, out, edges, minted);
     return;
   }
 
@@ -469,6 +521,7 @@ function isDeclarationName(node: Parser.SyntaxNode): boolean {
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "cpp") return describeCpp(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -541,6 +594,82 @@ function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | nul
   }
 
   return null;
+}
+
+/** C/C++ definition shapes (issue #66, definitions-only): function definitions
+ * (free, inline-in-class, and out-of-class `Type::method`), plus named
+ * class/struct/enum bodies. Declarations without a body — prototypes, forward
+ * declarations, extern declarations — are intentionally NOT definitions: a
+ * header's `void update(float);` would otherwise shadow the one real
+ * definition under the same name in every skeleton/grep result.
+ *
+ * `namespace_definition` and `template_declaration` need no case of their own:
+ * describe() returning null makes the walk descend, so the definitions inside
+ * are found with their own spans (a template symbol's span excludes the
+ * `template<…>` header — a bounded imprecision, traded for never emitting the
+ * same definition twice). */
+function describeCpp(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  if (node.type === "function_definition") {
+    const named = cppDeclaratorName(node.childForFieldName("declarator"));
+    if (!named) return null;
+    const body = node.childForFieldName("body");
+    const headerEnd = body ? body.startIndex : node.endIndex;
+    // A qualifier (`Physics::step`) or an enclosing class/struct body makes it a
+    // method; the qualifier also names the owner the walk context can't see.
+    if (named.qualifier) {
+      return {
+        name: named.name,
+        idName: `${named.qualifier}.${named.name}`,
+        kind: "method",
+        owner: named.qualifier,
+        headerEnd,
+        hashNode: node,
+      };
+    }
+    const inType = ctx.enclosingKind === "class" || ctx.enclosingKind === "struct";
+    return { name: named.name, kind: inType ? "method" : "function", headerEnd, hashNode: node };
+  }
+
+  const kind: Kind | null =
+    node.type === "class_specifier"
+      ? "class"
+      : node.type === "struct_specifier"
+        ? "struct"
+        : node.type === "enum_specifier"
+          ? "enum"
+          : null;
+  if (kind) {
+    // Both name AND body required: `class Physics;` (forward declaration) and an
+    // anonymous `struct { … }` are not definitions we can index.
+    const name = node.childForFieldName("name")?.text;
+    const body = node.childForFieldName("body");
+    if (!name || !body) return null;
+    return { name, kind, headerEnd: body.startIndex, hashNode: node };
+  }
+
+  return null;
+}
+
+/** The defined name inside a C/C++ declarator, unwrapping pointer/reference
+ * wrappers (`int* make_buffer()`) and the function_declarator itself, then
+ * resolving qualified names (`game::Entity::~Entity` → name `~Entity`,
+ * qualifier `Entity` — the innermost scope is the owner). Handles plain
+ * identifiers, class-body `field_identifier`s, `destructor_name` and
+ * `operator_name`. Null when no name can be read (e.g. an abstract declarator). */
+function cppDeclaratorName(decl: Parser.SyntaxNode | null): { name: string; qualifier?: string } | null {
+  let d = decl;
+  while (d && (d.type === "pointer_declarator" || d.type === "reference_declarator" || d.type === "parenthesized_declarator")) {
+    d = d.childForFieldName("declarator") ?? d.namedChildren.at(-1) ?? null;
+  }
+  if (d?.type === "function_declarator") d = d.childForFieldName("declarator");
+  let qualifier: string | undefined;
+  while (d?.type === "qualified_identifier") {
+    qualifier = d.childForFieldName("scope")?.text ?? qualifier;
+    d = d.childForFieldName("name");
+  }
+  const NAME_TYPES = new Set(["identifier", "field_identifier", "destructor_name", "operator_name", "type_identifier"]);
+  if (!d || !NAME_TYPES.has(d.type)) return null;
+  return qualifier ? { name: d.text, qualifier } : { name: d.text };
 }
 
 /** The receiver's base type name for a Go method, unwrapping a pointer receiver

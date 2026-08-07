@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { withSavings } from "../context/savings.js";
+import { unindexedNote, type UnindexedStat } from "../graph/coverage.js";
 import { loadGraphCached } from "../graph/load.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "./grep.js";
 
@@ -69,9 +70,18 @@ export function formatGrepResult(result: GrepResult): string {
  * Truncation is never silent, even on the zero-hit path: if some indexed
  * files couldn't be read (`truncated.files > 0`), that's called out too —
  * otherwise a zero-hit result on a stale graph or wrong root reads as "no
- * matches" when really some files were never searched at all. */
-export function zeroHitNote(result: GrepResult): string {
-  const base = `no hits for "${result.pattern}" in ${result.filesSearched} indexed files. The pattern may be too specific — retry graft grep with a bare symbol name or short substring (drop the receiver, full signature, and regex anchors). All indexed code was searched; use raw grep -rn only for genuinely unindexed files (docs, configs, brand-new files)`;
+ * matches" when really some files were never searched at all.
+ *
+ * `unindexed` (the graph's `meta.unindexed`) flips the closing advice: when
+ * code files were never parsed, "all indexed code was searched" is true and
+ * deeply misleading — the pattern may simply live in a language with no
+ * parser, and raw grep -rn is then the RIGHT tool, not a fallback (issue #66). */
+export function zeroHitNote(result: GrepResult, unindexed?: UnindexedStat[]): string {
+  const retry = `no hits for "${result.pattern}" in ${result.filesSearched} indexed files. The pattern may be too specific — retry graft grep with a bare symbol name or short substring (drop the receiver, full signature, and regex anchors).`;
+  const gap = unindexedNote(unindexed);
+  const base = gap
+    ? `${retry} All indexed code was searched, but ${gap}`
+    : `${retry} All indexed code was searched; use raw grep -rn only for genuinely unindexed files (docs, configs, brand-new files)`;
   const { files } = result.truncated;
   if (files === 0) return base;
   return `${base} — note: ${files} indexed file${files === 1 ? "" : "s"} could not be read (stale graph? run graft build)`;
@@ -111,7 +121,7 @@ export function runGrepCommand(pattern: string, dir: string, opts: GrepCliOption
   }
 
   if (result.totalHits === 0) {
-    console.error(zeroHitNote(result));
+    console.error(zeroHitNote(result, graph.meta.unindexed));
     return;
   }
 

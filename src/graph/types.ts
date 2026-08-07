@@ -101,6 +101,12 @@ export interface GraphV1 {
     /** Ranking scopes: posix path prefixes relative to the graph root, "" = root scope.
      * Absent (old graphs) ≡ [{ prefix: "", label: "" }]. Sorted by prefix length desc. */
     scopes?: ScopeV1[];
+    /** Code-like files present in the repo that no Tier-1 grammar parses,
+     * grouped by extension (most files first). Recorded so query surfaces can
+     * answer "no parser" instead of a confident "no hits" (issue #66). Absent
+     * when every code file was parseable — and on graphs built before this
+     * field existed. */
+    unindexed?: { ext: string; files: number }[];
   };
   nodes: NodeV1[];
   edges: EdgeV1[];

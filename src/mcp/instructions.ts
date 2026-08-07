@@ -38,11 +38,21 @@ export function toolSearchQuery(prefix = 'mcp__graft__'): string {
   return `select:${TOOL_ORDER.map((t) => `${prefix}${t}`).join(',')}`;
 }
 
-export function mcpInstructions(): string {
+export function mcpInstructions(unindexed?: { ext: string; files: number }[]): string {
+  // Scope the "prefer these tools" claim to what the graph actually holds: on a
+  // repo with unparseable code, an agent that trusts it unconditionally will
+  // conclude a symbol doesn't exist when really no parser ever read its file
+  // (issue #66).
+  const total = (unindexed ?? []).reduce((n, s) => n + s.files, 0);
+  const coverage =
+    total > 0
+      ? `CAVEAT: ${total} source files (${(unindexed ?? []).map((s) => s.ext).join(', ')}) have no parser and are NOT in the graph — for those, raw grep/read are the right tools.`
+      : null;
   return [
     'This repo is indexed by graft: a prebuilt graph of every symbol, its file:line',
     'span, and who calls what. Prefer these tools over grep/read — one call usually',
     'replaces several file reads.',
+    ...(coverage ? [coverage] : []),
     '',
     `**If these tools are deferred (names shown, schemas withheld), load them all in ONE lookup:** ToolSearch "${toolSearchQuery()}" — one round trip for the whole session. Never load them one at a time.`,
     '',

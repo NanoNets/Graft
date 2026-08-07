@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **C/C++ in the Tier-1 symbol graph (definitions-only)** — `.c`, `.h`, `.cpp`,
+  `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx` are parsed with `tree-sitter-cpp`, so
+  `skeleton`, `grep` and `ask` now cover C/C++ repos: free functions, inline
+  and out-of-class methods (`Physics::step` → method with owner `Physics`),
+  classes, structs and enums, found through namespaces and template wrappers.
+  Prototypes and forward declarations are not definitions and are skipped.
+  Deliberately definitions-only: C++ has no import bindings (only `#include`,
+  namespaces, overloads, templates), so name-only call resolution would
+  fabricate edges between every same-named method in the repo — `callers` on a
+  C/C++ symbol says "no edge data … definitions-only" instead of answering
+  wrongly, and points at `graft grep` ([#66]).
+
+### Fixed
+
+- **Unsupported languages fail loudly instead of masquerading as answers.**
+  On a repo whose code has no Tier-1 parser, `grep`/`callers`/`skeleton`
+  returned confident false negatives ("no hits … all indexed code was
+  searched", "no symbol — check spelling", "no definitions indexed") that
+  steered callers away from raw grep, the only tool that would have worked.
+  Now: `graft build` prints `skipped: N files (no parser: …) — symbol tools
+  will not cover them` and records the gap in the graph (`meta.unindexed`);
+  zero-hit grep, unknown-symbol callers (single-repo and workspace) and
+  skeleton name the no-parser gap and point at raw grep/read; and the MCP
+  `instructions` scope the "prefer these tools over grep/read" claim to the
+  languages actually indexed ([#66]).
+
+[#66]: https://github.com/NanoNets/Graft/issues/66
+
 ## 0.9.0
 
 ### Added

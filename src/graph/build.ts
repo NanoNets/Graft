@@ -37,6 +37,7 @@ import { readGraph, writeGraph, wiringPath } from "./write.js";
 import { writeCards, writeIndex, writeCovers, type CardStats } from "./cards.js";
 import { writeAskIndex } from "../ask/index-file.js";
 import { discoverScopes, scopeOf } from "./scopes.js";
+import { unindexedCodeStats, type UnindexedStat } from "./coverage.js";
 import type { GraphV1, Kind, NodeV1, Relation, ScopeV1 } from "./types.js";
 import type { CruxSummarizer } from "../ai/crux.js";
 
@@ -108,6 +109,8 @@ export interface GraphBuildResult {
   byKind: Record<Kind, number>;
   byRelation: Record<Relation, number>;
   languages: string[];
+  /** Code-like files no Tier-1 grammar parses — never silent (issue #66). */
+  skipped: UnindexedStat[];
   meaning: EnrichStats;
   errors: string[];
 }
@@ -149,6 +152,9 @@ export async function buildGraph(
   const repoFiles = walkDir(root, readIncludeDirs(root));
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);
+  // Code the walk saw but no grammar can parse — reported in the banner and
+  // recorded in the graph so queries can say "no parser" instead of "no hits".
+  const skipped = unindexedCodeStats(repoFiles.filter((f) => !f.startsWith(outDir)));
 
   const nodes: NodeV1[] = [];
   const rawEdges: RawEdge[] = [];
@@ -274,6 +280,7 @@ export async function buildGraph(
       edgeCount: edges.length,
       languages: [...langs].sort(),
       scopes,
+      ...(skipped.length > 0 ? { unindexed: skipped } : {}),
     },
     nodes,
     edges,
@@ -347,6 +354,7 @@ export async function buildGraph(
     byKind,
     byRelation,
     languages: [...langs].sort(),
+    skipped,
     meaning,
     errors,
   };
