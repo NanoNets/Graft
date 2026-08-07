@@ -18,14 +18,21 @@ import type { Language, WalkCtx } from "./extract.js";
 export class FileBindings {
   private map = new Map<string, string>();
 
+  constructor(private readonly caseInsensitive = false) {}
+
+  private key(scopePath: string, name: string): string {
+    const key = `${scopePath}|${name}`;
+    return this.caseInsensitive ? key.toLowerCase() : key;
+  }
+
   set(scopePath: string, name: string, type: string): void {
-    this.map.set(`${scopePath}|${name}`, type);
+    this.map.set(this.key(scopePath, name), type);
   }
 
   /** Innermost-first: for scope ["a","b"] name "x", tries `a.b|x`, `a|x`, `|x`. */
   lookup(scope: string[], name: string): string | null {
     for (let i = scope.length; i >= 0; i--) {
-      const hit = this.map.get(`${scope.slice(0, i).join(".")}|${name}`);
+      const hit = this.map.get(this.key(scope.slice(0, i).join("."), name));
       if (hit) return hit;
     }
     return null;
@@ -43,6 +50,21 @@ const FN_VALUE_TYPES = new Set(["arrow_function", "function", "function_expressi
  * same scope key extract.ts's walk will look it up with), or null if `node`
  * isn't a definition. */
 export function defName(node: Parser.SyntaxNode, lang: Language): string | null {
+  if (lang === "powershell") {
+    if (node.type === "function_statement") {
+      const name = node.namedChildren.find((c) => c.type === "function_name")?.text ?? null;
+      // Lockstep contract: extract.ts's describePowerShell strips this same
+      // qualifier from its own scope-stack segment. Must match exactly, or a
+      // binding recorded under one scope key (e.g. "global:Setup") is invisible
+      // to a lookup keyed by the other ("Setup") — duplicated regex, not
+      // imported, per this file's no-value-import-of-extract rule (see header).
+      return name ? name.replace(/^(global|script|local|private):/i, "") : null;
+    }
+    if (["class_statement", "class_method_definition", "enum_statement"].includes(node.type)) {
+      return node.namedChildren.find((c) => c.type === "simple_name")?.text ?? null;
+    }
+    return null;
+  }
   if (lang === "go") {
     if (node.type === "method_declaration") {
       const name = node.childForFieldName("name")?.text;
@@ -105,6 +127,11 @@ export function resolveRecvType(
   ctx: Pick<WalkCtx, "scope" | "enclosingClass" | "goReceiverVar" | "lang" | "bindings">,
 ): string | undefined {
   if (!receiver) return undefined;
+  if (ctx.lang === "powershell") {
+    if (receiver.toLowerCase() === "$this") return ctx.enclosingClass ?? undefined;
+    const key = receiver.replace(/^\$this\./i, "self.");
+    return ctx.bindings.lookup(ctx.scope, key) ?? undefined;
+  }
   if (receiver === "self" || receiver === "cls" || receiver === "this") return ctx.enclosingClass ?? undefined;
   if (receiver.startsWith("self.") || receiver.startsWith("this.")) {
     return (
@@ -125,12 +152,13 @@ function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean {
   if (lang === "typescript" || lang === "tsx") {
     return node.type === "class_declaration" || node.type === "abstract_class_declaration";
   }
+  if (lang === "powershell") return node.type === "class_statement";
   return false;
 }
 
 /** Pass 1 over a parsed file: collect variable->type bindings. Pure. */
 export function collectBindings(root: Parser.SyntaxNode, lang: Language): FileBindings {
-  const bindings = new FileBindings();
+  const bindings = new FileBindings(lang === "powershell");
   const aliases = new Map<string, string>();
   collectAliases(root, lang, aliases);
   visit(root, lang, [], null, bindings, aliases);
@@ -140,6 +168,7 @@ export function collectBindings(root: Parser.SyntaxNode, lang: Language): FileBi
 /** Import aliases (`... as F`) can be declared anywhere relative to their use
  * textually, so this scans the whole tree once, ahead of the scope-aware walk. */
 function collectAliases(node: Parser.SyntaxNode, lang: Language, aliases: Map<string, string>): void {
+  if (lang === "go" || lang === "powershell") return;
   if (lang === "python" && node.type === "aliased_import") {
     const nameNode = node.childForFieldName("name");
     const aliasNode = node.childForFieldName("alias");
@@ -169,6 +198,7 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  else if (lang === "powershell") handlePs(node, scope, classScope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -281,6 +311,140 @@ function handleTs(
     if (pattern?.type !== "identifier") return;
     const typeName = tsAnnotationTypeName(node.childForFieldName("type"), aliases);
     if (typeName) bindings.set(scopePath, pattern.text, typeName);
+  }
+}
+
+const PS_EXPR_WRAPPERS = new Set([
+  "logical_expression", "bitwise_expression", "comparison_expression",
+  "additive_expression", "multiplicative_expression", "format_expression", "range_expression",
+  "logical_argument_expression", "bitwise_argument_expression", "comparison_argument_expression",
+  "additive_argument_expression", "multiplicative_argument_expression", "format_argument_expression",
+  "range_argument_expression", "array_literal_expression", "unary_expression", "expression_with_unary_operator",
+]);
+
+function unwrapExpr(node: Parser.SyntaxNode | null | undefined): Parser.SyntaxNode | null {
+  let current = node ?? null;
+  while (current && PS_EXPR_WRAPPERS.has(current.type) && current.namedChildCount === 1) {
+    current = current.namedChild(0);
+  }
+  return current;
+}
+
+/** A `type_literal`'s bare type name (`[Widget]` → `"Widget"`). Shared with
+ * extract.ts (its own psCalleeName needs the same lookup for a static-constructor
+ * receiver) — mirrors the existing goReceiverVarOf precedent of exporting a
+ * helper from here rather than duplicating it; the no-value-import rule only
+ * forbids the reverse direction (this file importing a value from extract.ts). */
+export function psTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (node?.type !== "type_literal") return null;
+  const spec = node.namedChildren.find((c) => c.type === "type_spec");
+  const name = spec?.namedChildren.find((c) => c.type === "type_name");
+  return name?.namedChildren.find((c) => c.type === "type_identifier")?.text ?? null;
+}
+
+function psAssignmentTarget(node: Parser.SyntaxNode): { name: string; type: string | null } | null {
+  const left = node.namedChildren.find((c) => c.type === "left_assignment_expression");
+  const value = unwrapExpr(left?.namedChild(0));
+  if (value?.type === "variable") return { name: value.text, type: null };
+  if (value?.type !== "cast_expression") return null;
+  const type = psTypeName(value.namedChildren.find((c) => c.type === "type_literal"));
+  const variable = unwrapExpr(value.namedChildren.find((c) => c.type !== "type_literal"));
+  return type && variable?.type === "variable" ? { name: variable.text, type } : null;
+}
+
+/** `New-Object`'s type argument, parameter-aware: `-TypeName`'s value always wins
+ * (wherever it falls among the command's elements — `-ArgumentList`'s own value
+ * must never be mistaken for it just because it comes first). Without an explicit
+ * `-TypeName`: a switch parameter (e.g. `-Verbose`) takes no value, so when the
+ * command has exactly one candidate element left (neither a parameter nor
+ * `-ArgumentList`'s own value), that lone element is the type regardless of which
+ * parameter it happens to sit next to — `New-Object -Verbose Widget` must still
+ * bind "Widget". Only `-ArgumentList` is known to actually consume the element
+ * after it (`-ArgumentList Widget`'s "Widget" is an argument, not a type name), so
+ * it alone disqualifies an adjacent lone candidate. With multiple candidates
+ * remaining, position is genuinely ambiguous without cmdlet metadata; fall back to
+ * the first element that is neither a parameter nor immediately after one. */
+function psNewObjectType(command: Parser.SyntaxNode): string | null {
+  if (command.childForFieldName("command_name")?.text.toLowerCase() !== "new-object") return null;
+  const elements = (command.childForFieldName("command_elements")?.namedChildren ?? []).filter(
+    (c) => c.type !== "command_argument_sep",
+  );
+  const clean = (text: string) => text.replace(/^['"]|['"]$/g, "");
+
+  const typeNameIdx = elements.findIndex((c) => c.type === "command_parameter" && /^-TypeName$/i.test(c.text));
+  if (typeNameIdx !== -1) {
+    const value = elements[typeNameIdx + 1];
+    return value && value.type !== "command_parameter" ? clean(value.text) : null;
+  }
+
+  const candidates = elements.filter((c) => c.type !== "command_parameter");
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    const precedingParam = elements[elements.indexOf(only) - 1];
+    const ownedByArgumentList =
+      precedingParam?.type === "command_parameter" && /^-ArgumentList$/i.test(precedingParam.text);
+    return ownedByArgumentList ? null : clean(only.text);
+  }
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    if (el.type === "command_parameter") continue;
+    if (elements[i - 1]?.type === "command_parameter") continue; // that param's own value
+    return clean(el.text);
+  }
+  return null;
+}
+
+function psInvocationType(node: Parser.SyntaxNode | null): string | null {
+  if (node?.type !== "invokation_expression") return null;
+  const receiver = node.child(0);
+  const member = node.namedChildren.find((c) => c.type === "member_name");
+  return receiver?.type === "type_literal" && member?.text.toLowerCase() === "new"
+    ? psTypeName(receiver)
+    : null;
+}
+
+function psRhsType(node: Parser.SyntaxNode): string | null {
+  const pipeline = node.childForFieldName("value");
+  const chain = pipeline?.namedChildren.find((c) => c.type === "pipeline_chain");
+  const value = chain?.namedChild(0) ?? null;
+  if (value?.type === "command") return psNewObjectType(value);
+  return psInvocationType(unwrapExpr(value));
+}
+
+function psParameterBinding(node: Parser.SyntaxNode): { name: string; type: string } | null {
+  const variable = node.namedChildren.find((c) => c.type === "variable");
+  let typeLiteral = node.namedChildren.find((c) => c.type === "type_literal");
+  if (!typeLiteral) {
+    // The type can sit behind ANY attribute, not just the first — e.g.
+    // `[Parameter(Mandatory=$true)][Widget]$w` puts `Parameter` at index 0 and the
+    // type_literal at index 1. Scan every attribute for one that carries it.
+    const attrs = node.namedChildren.find((c) => c.type === "attribute_list");
+    typeLiteral = attrs?.namedChildren
+      .map((a) => a.namedChildren.find((c) => c.type === "type_literal"))
+      .find(Boolean);
+  }
+  const type = psTypeName(typeLiteral);
+  return variable && type ? { name: variable.text, type } : null;
+}
+
+function handlePs(
+  node: Parser.SyntaxNode,
+  scope: string[],
+  classScope: string | null,
+  bindings: FileBindings,
+): void {
+  const scopePath = scope.join(".");
+  if (node.type === "assignment_expression") {
+    const target = psAssignmentTarget(node);
+    const type = target?.type ?? psRhsType(node);
+    if (target && type) bindings.set(scopePath, target.name, type);
+  } else if (node.type === "script_parameter" || node.type === "class_method_parameter") {
+    const param = psParameterBinding(node);
+    if (param) bindings.set(scopePath, param.name, param.type);
+  } else if (node.type === "class_property_definition") {
+    const property = psParameterBinding(node);
+    if (property) bindings.set(classScope ?? scopePath, `self.${property.name.replace(/^\$/, "")}`, property.type);
   }
 }
 

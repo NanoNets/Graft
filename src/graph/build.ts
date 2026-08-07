@@ -202,8 +202,6 @@ export async function buildGraph(
       return;
     }
     if (source === null) {
-      // Unsupported encoding (UTF-16BE) — a skip, never an error: recorded with
-      // an empty entry so the freshness probe doesn't treat it as new every run.
       entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: "", nodes: [], rawEdges: [] };
       return;
     }

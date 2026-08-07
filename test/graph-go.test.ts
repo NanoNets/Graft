@@ -167,7 +167,7 @@ test("Go extraction: go.mod in a subdirectory resolves intra-module imports", as
   }
 });
 
-test("A5: a go.mod under a persisted --include-dir override is found, so imports inside it resolve internally", async () => {
+test("V3: a go.mod under a persisted --include-dir override is found, so imports inside it resolve internally", async () => {
   // build/ is in SKIP_DIRS by default — readGoModules must honor the same
   // persisted include-dir override source-files.ts already reads, or a
   // go.mod living under an included dir is missed while its .go files (which

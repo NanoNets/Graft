@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-/** Read source text, decoding Windows tooling's common UTF-16LE output. UTF-16BE
+/** Read source text, decoding PowerShell 5.1's common UTF-16LE output. UTF-16BE
  * is rare and unsupported by Node's built-in decoders, so callers silently skip it. */
 export function readSourceFile(path: string): string | null {
   const bytes = readFileSync(path);

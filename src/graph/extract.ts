@@ -10,12 +10,14 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+// Deep import avoids the package's extensionless-main DEP0151 warning under ESM.
+import PowerShell from "tree-sitter-powershell/bindings/node/index.js";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
-import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
+import { collectBindings, goReceiverVarOf, psTypeName, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "powershell";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,6 +46,8 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  { ext: ".psm1", grammar: "powershell", label: "powershell" },
+  { ext: ".ps1", grammar: "powershell", label: "powershell" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -80,6 +84,7 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
+  lang?: Language; // PowerShell edges carry this for case-insensitive resolution.
 }
 
 export interface ExtractResult {
@@ -149,11 +154,27 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+const PS_KINDS: Record<string, Kind> = {
+  function_statement: "function",
+  class_statement: "class",
+  enum_statement: "enum",
+  class_method_definition: "method",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  powershell: PS_KINDS,
+};
+
+const CALL_NODE_TYPES: Record<Language, ReadonlySet<string>> = {
+  typescript: new Set(["call_expression"]),
+  tsx: new Set(["call_expression"]),
+  python: new Set(["call"]),
+  go: new Set(["call_expression"]),
+  powershell: new Set(["command", "invokation_expression"]),
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +190,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  powershell: PowerShell,
 };
 
 export interface WalkCtx {
@@ -194,11 +216,12 @@ interface DefDescriptor {
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
 }
 
-/** tree-sitter's string `parse()` fails with "Invalid argument" on any input
- * ≥ 32 KB, which silently drops large files — often the most important ones (a
- * 2000-line command module, a core tab implementation). The callback form has
- * no such limit as long as each returned chunk is under 32 KB, so we always feed
- * the source in <32 KB slices. Code-unit indexing matches `String.slice`. */
+/** The chunked-callback parse predates tree-sitter 0.25, which lifted the
+ * string `parse()` size limit that used to fail with "Invalid argument" on
+ * any input ≥ 32 KB and silently drop large files — often the most important
+ * ones (a 2000-line command module, a core tab implementation). Kept because
+ * it is behavior-identical and exercised by existing tests. Code-unit
+ * indexing matches `String.slice`. */
 const PARSE_CHUNK = 16384;
 function parseSource(source: string): Parser.SyntaxNode {
   return parser.parse((index: number) => source.slice(index, index + PARSE_CHUNK)).rootNode;
@@ -255,20 +278,6 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
   return { nodes, rawEdges };
 }
 
-/** Mint-time uniqueness: a document-order duplicate (same name reopened, or two
- * sibling defs that happen to collide) gets `~2`, `~3`, ... instead of silently
- * shadowing the first. The while-loop (not a single `~2` guess) is what makes
- * this collision-proof: a source name that itself ends in ~N would collide
- * with a single-guess suffix, so this keeps incrementing until it finds a
- * truly free id rather than trusting one candidate suffix is unused. */
-export function mintId(base: string, minted: Set<string>): string {
-  let id = base;
-  let k = 2;
-  while (minted.has(id)) id = `${base}~${k++}`;
-  minted.add(id);
-  return id;
-}
-
 function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEdge[], minted: Set<string>): void {
   const desc = describe(node, ctx);
   if (desc) {
@@ -276,7 +285,16 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // `name` stays the bare symbol name so member-call resolution matches it.
     const idPart = desc.idName ?? desc.name;
     const base = `${ctx.rel}#${[...ctx.scope, idPart].join(".")}`;
-    const id = mintId(base, minted);
+    // Mint-time uniqueness: a document-order duplicate (same name reopened, or two
+    // sibling defs that happen to collide) gets `~2`, `~3`, ... instead of silently
+    // shadowing the first. The while-loop (not a single `~2` guess) is what makes
+    // this collision-proof against a literal source name that already contains
+    // `~N` (PowerShell can forge one) — it keeps incrementing until truly free
+    // rather than trusting one candidate suffix is unused.
+    let id = base;
+    let k = 2;
+    while (minted.has(id)) id = `${base}~${k++}`;
+    minted.add(id);
     const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
     // The bare name of this node's OWN immediate enclosing class/receiver — for a
     // Go method that's its receiver type (methods aren't nested, so ctx.enclosingClass
@@ -297,7 +315,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "powershell"
+              ? psExported(node, ctx)
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -329,8 +349,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   }
 
   // not a definition — capture calls/imports/references, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
-  if (node.type === callType) {
+  if (CALL_NODE_TYPES[ctx.lang].has(node.type) && !psSkipsCall(node, ctx.lang)) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
@@ -339,19 +358,30 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: callee.name,
         viaMember: callee.viaMember,
         file: ctx.rel,
+        ...(ctx.lang === "powershell" ? { lang: ctx.lang } : {}),
       };
-      const recvType = resolveRecvType(callee.receiver, ctx);
+      const recvType = callee.recvType ?? resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
   } else if (isImport(node, ctx.lang)) {
     const spec = importSpecifier(node, ctx.lang);
-    if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
+    if (spec) {
+      edges.push({
+        source: ctx.rel,
+        relation: "imports",
+        specifier: spec,
+        file: ctx.rel,
+        ...(ctx.lang === "powershell" ? { lang: ctx.lang } : {}),
+      });
+    }
     // Imported identifiers are declarations, not uses. The import-binding pass
     // above already recorded them, so do not descend and emit false references.
-    return;
+    // PowerShell is the exception: a dot-source can wrap a whole script block
+    // (`. { ... }`), whose body must still be walked for its own calls.
+    if (ctx.lang !== "powershell") return;
   } else if (
     node.type === "identifier" &&
-    !isDirectCallee(node, callType) &&
+    !isDirectCallee(node, CALL_NODE_TYPES[ctx.lang]) &&
     !isDeclarationName(node)
   ) {
     const imported = ctx.importedSymbols.get(node.text);
@@ -454,21 +484,22 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 }
 
 /** A direct invocation already emits a stronger `calls` edge. */
-function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
+function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
-  return parent?.type === callType && parent.childForFieldName("function") === node;
+  return parent != null && callTypes.has(parent.type) && parent.childForFieldName("function")?.id === node.id;
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return parent?.childForFieldName("name")?.id === node.id;
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "powershell") return describePowerShell(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -498,6 +529,31 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+/** Function-definition scope qualifiers PowerShell allows (`function global:Foo`,
+ * `script:Foo`, …). Call sites already strip these (see psCalleeName below) — a
+ * definition's OWN name must too, or a globally-qualified def stores its
+ * verbatim "global:Foo" name and can never match a call site's stripped "Foo". */
+const PS_SCOPE_QUALIFIER = /^(global|script|local|private):/i;
+
+/** PowerShell definitions have no fields, so names and header boundaries are positional. */
+function describePowerShell(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const kind = ctx.kinds[node.type];
+  if (!kind) return null;
+  const nameNode =
+    node.type === "function_statement"
+      ? node.namedChildren.find((c) => c.type === "function_name")
+      : node.namedChildren.find((c) => c.type === "simple_name");
+  if (!nameNode) return null;
+  const open = node.children.find((c) => c.type === "{");
+  const name = node.type === "function_statement" ? nameNode.text.replace(PS_SCOPE_QUALIFIER, "") : nameNode.text;
+  return {
+    name,
+    kind,
+    headerEnd: open?.startIndex ?? node.endIndex,
+    hashNode: node,
+  };
 }
 
 /** Go definition shapes: top-level funcs, receiver methods, and named types
@@ -572,6 +628,17 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     }
     return edges;
   }
+  if (ctx.lang === "powershell") {
+    // PS class base lists conflate the base class and any implemented interfaces
+    // (no separate `implements` clause) — every entry emits "extends" here.
+    // Harmless: PS cannot itself define an interface, so an interface entry is
+    // always an external type anyway (never a repo symbol misclassified as a class).
+    const bases = node.namedChildren.filter((c) => c.type === "simple_name").slice(1);
+    for (const base of bases) {
+      edges.push({ source: classId, relation: "extends", name: base.text, file: ctx.rel, lang: ctx.lang });
+    }
+    return edges;
+  }
   const heritage = node.namedChildren.find((c) => c.type === "class_heritage");
   for (const clause of heritage?.namedChildren ?? []) {
     const relation: Relation | null =
@@ -593,7 +660,8 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
-): { name: string; viaMember: boolean; receiver?: string } | null {
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string } | null {
+  if (lang === "powershell") return psCalleeName(node);
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -611,6 +679,54 @@ function calleeName(
   if ((lang === "typescript" || lang === "tsx") && fn.type === "member_expression") {
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
+  }
+  return null;
+}
+
+function psCalleeName(
+  node: Parser.SyntaxNode,
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string } | null {
+  if (node.type === "command") {
+    const raw = psStaticCommandName(node.childForFieldName("command_name") ?? null);
+    if (!raw) return null;
+    const name = raw
+      .replace(PS_SCOPE_QUALIFIER, "")
+      .replace(/^.*\\/, "");
+    return name ? { name, viaMember: false } : null;
+  }
+  if (node.type !== "invokation_expression") return null;
+  const receiverNode = node.child(0);
+  const member = node.namedChildren.find((c) => c.type === "member_name");
+  if (!receiverNode || !member) return null;
+  if (receiverNode.type === "type_literal") {
+    const recvType = psTypeName(receiverNode);
+    return recvType ? { name: member.text, viaMember: true, recvType } : null;
+  }
+  return { name: member.text, viaMember: true, receiver: receiverNode.text };
+}
+
+/** The static command name text for a `command` node's `command_name` field, or
+ * null when it's absent or names dynamic/string content. Plain commands
+ * (`Get-Helper`) type the field `command_name` directly; the call operator (`&`)
+ * and dot-source (`.`) both wrap it in `command_name_expr` instead — a static
+ * bareword through `&` shows up one level deeper as `path_command_name` →
+ * `path_command_name_token` (a qualified/dotted name like `script:Get-Helper`
+ * types straight to `command_name` even there). A `variable`/`string_literal`/
+ * `script_block_expression`/`parenthesized_expression` child means dynamic or
+ * non-command content — never treated as static. A `path_command_name` can
+ * ALSO carry a `variable` sibling of its `path_command_name_token` (`&
+ * $dir\Get-Helper`) — the trailing token's text alone still reads as a plain
+ * name, so that variable prefix must be checked explicitly rather than
+ * inferred from the token shape. */
+function psStaticCommandName(command: Parser.SyntaxNode | null): string | null {
+  if (!command) return null;
+  if (command.type === "command_name") return command.text;
+  if (command.type !== "command_name_expr") return null;
+  const inner = command.namedChildren[0];
+  if (inner?.type === "command_name") return inner.text;
+  if (inner?.type === "path_command_name") {
+    if (inner.descendantsOfType("variable").length > 0) return null;
+    return inner.namedChildren.find((c) => c.type === "path_command_name_token")?.text ?? null;
   }
   return null;
 }
@@ -645,6 +761,7 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "powershell") return psImportKind(node) !== null;
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -660,10 +777,128 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
   }
+  if (lang === "powershell") return psImportSpecifier(node);
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
   const frag = str.namedChildren.find((c) => c.type === "string_fragment");
   return frag?.text ?? str.text.replace(/^['"]|['"]$/g, "");
+}
+
+type PsImportKind = "dotsource" | "import-module" | "using-module";
+
+/** PowerShell's grammar represents all imports as commands (there is no
+ * using_statement). `$PSScriptRoot` interpolation, Join-Path, wildcard/dynamic
+ * Import-Module, manifest RootModule/NestedModules, and `using namespace`
+ * intentionally remain raw or absent rather than erroring. */
+function psImportKind(node: Parser.SyntaxNode): PsImportKind | null {
+  if (node.type !== "command") return null;
+  const operator = node.namedChildren.find((c) => c.type === "command_invokation_operator");
+  if (operator?.text === ".") return "dotsource";
+  const command = node.childForFieldName("command_name")?.text.toLowerCase();
+  if (command === "import-module") return "import-module";
+  if (command !== "using") return null;
+  const tokens = psCommandElements(node).filter((c) => c.type === "generic_token");
+  return tokens[0]?.text.toLowerCase() === "module" && tokens[1] ? "using-module" : null;
+}
+
+function psCommandElements(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  return node.childForFieldName("command_elements")?.namedChildren ?? [];
+}
+
+function psImportSpecifier(node: Parser.SyntaxNode): string | null {
+  const kind = psImportKind(node);
+  let raw: string | undefined;
+  if (kind === "dotsource") {
+    const commandNameField = node.childForFieldName("command_name") ?? null;
+    // A dot-sourced script block (`. { … }`) or subexpression (`. ( … )`) has no
+    // path at all — classify by the field's NODE TYPE rather than guessing from
+    // its text, so a quoted path that merely starts with `(` (e.g.
+    // `. "(helpers).ps1"`) is never mistaken for one (see psDotSourcePathShaped).
+    if (!psDotSourcePathShaped(commandNameField)) return null;
+    raw = commandNameField?.text;
+  } else if (kind === "import-module") {
+    raw = psImportModuleSpecifier(node) ?? undefined;
+  } else if (kind === "using-module") {
+    raw = psCommandElements(node).filter((c) => c.type === "generic_token")[1]?.text;
+  }
+  if (!raw) return null;
+  return raw.replace(/^['"]|['"]$/g, "").replace(/\\/g, "/");
+}
+
+/** Import-Module's module specifier, parameter-aware: a `-Name` parameter's
+ * value always wins, wherever it falls among the command's elements — in
+ * `-Force -ErrorAction stop`, `-ErrorAction`'s own value ("stop") must never be
+ * mistaken for the module target just because it's the first non-parameter
+ * element left. Without an explicit `-Name`, the specifier is the first element
+ * that is neither a parameter NOR immediately preceded by one (that element
+ * belongs to the preceding parameter, not the module) — this also keeps a
+ * positional specifier before a trailing switch working
+ * (`Import-Module ./Mod.psm1 -Force`). No qualifying candidate → null (no
+ * edge), never a guess. Mirrors bindings.ts's psNewObjectType, which solves the
+ * same parameter-vs-positional ambiguity for `New-Object`. */
+function psImportModuleSpecifier(node: Parser.SyntaxNode): string | null {
+  const elements = psCommandElements(node).filter((c) => c.type !== "command_argument_sep");
+  const nameIdx = elements.findIndex((c) => c.type === "command_parameter" && /^-Name$/i.test(c.text));
+  if (nameIdx !== -1) {
+    const value = elements[nameIdx + 1];
+    return value && value.type !== "command_parameter" ? value.text : null;
+  }
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    if (el.type === "command_parameter") continue;
+    if (elements[i - 1]?.type === "command_parameter") continue; // that param's own value
+    return el.text;
+  }
+  return null;
+}
+
+/** Whether a dot-sourced command's `command_name` field names a real path
+ * rather than a script block or subexpression. A plain bareword path types
+ * this field `command_name` directly. The call operator's `command_name_expr`
+ * wrapper (also used here for `.`) is drilled one level: a qualified/dotted
+ * bareword still types `command_name`, a variable-rooted path (`$dir\Foo.ps1`)
+ * types `path_command_name` — accepted only when its trailing token actually
+ * starts with a path separator, so a property-access-like suffix
+ * (`$obj.Method`, token ".Method") is never mistaken for a path — and a
+ * quoted path types `string_literal` (its surrounding quotes are stripped by
+ * the caller). A POSIX-separator variable-rooted path (`$PSScriptRoot/Foo.ps1`)
+ * parses as `member_access` instead (with a grammar-level ERROR node from the
+ * bare `/`) — accepted only when its text is a bare `$Var/…` shape,
+ * mirroring the backslash form's specifier so `$PSScriptRoot` resolution
+ * sees the same raw text either way. `script_block_expression` (`. { … }`) and
+ * `parenthesized_expression` (`. ( … )`) carry no path at all and are rejected
+ * outright. */
+function psDotSourcePathShaped(commandNameField: Parser.SyntaxNode | null): boolean {
+  if (!commandNameField) return false;
+  if (commandNameField.type === "command_name") return true;
+  if (commandNameField.type !== "command_name_expr") return false;
+  const inner = commandNameField.namedChildren[0];
+  if (inner?.type === "command_name" || inner?.type === "string_literal") return true;
+  if (inner?.type === "path_command_name") {
+    const token = inner.namedChildren.find((c) => c.type === "path_command_name_token")?.text ?? "";
+    return /^[\\/]/.test(token);
+  }
+  if (inner?.type === "member_access") return /^\$[A-Za-z_]\w*\//.test(inner.text);
+  return false;
+}
+
+function psSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
+  if (lang !== "powershell" || node.type !== "command") return false;
+  // psImportKind already returns non-null for every dot-sourced command (whatever
+  // it dot-sources), so this alone keeps `.` out of the call graph. `&` is
+  // deliberately NOT blanket-skipped here — psCalleeName decides per-callee
+  // whether a call-operator target is static (a real call) or dynamic (none).
+  if (psImportKind(node)) return true;
+  return node.childForFieldName("command_name")?.text.toLowerCase() === "using";
+}
+
+/** PowerShell has no file-local syntactic export marker. Export-ModuleMember and
+ * `.psd1` FunctionsToExport need cross-file/manifest context extractFile cannot
+ * see (and the common unquoted Export-ModuleMember list does not parse). Class
+ * members and top-level definitions are public; a function nested inside another
+ * function OR a class method body is local. */
+function psExported(node: Parser.SyntaxNode, ctx: WalkCtx): boolean {
+  return node.type !== "function_statement" || (ctx.enclosingKind !== "function" && ctx.enclosingKind !== "method");
 }
 
 /** Signature = the definition header, whitespace-collapsed, trailing punctuation stripped. */

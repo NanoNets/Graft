@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **PowerShell code graphs.** `.ps1` and `.psm1` files now contribute functions,
+  classes, methods, enums, calls, imports, and case-insensitive receiver bindings.
+  Dot-sourcing, `Import-Module`, and `using module` resolve local modules, while
+  UTF-16LE source from Windows PowerShell is decoded during graph ingestion.
+
+### Changed
+
+- **Bump the tree-sitter runtime to 0.25, and the Python and Go grammars to match.**
+  Groundwork for adding new language grammars that require the 0.25 runtime.
+  `tree-sitter-typescript@0.23.2` is still the latest release and declares a
+  `peerOptional tree-sitter@^0.21.0`, so an npm `overrides` entry pins its
+  nested `tree-sitter` dependency to the root one and lets the install resolve
+  cleanly. Syntax-node comparisons now use Tree-sitter's stable node IDs rather
+  than JavaScript object identity, whose behavior differs between runtime
+  versions. The minimum Node.js version is now 22.12, matching Commander 15 and
+  ensuring Windows installs can use Tree-sitter 0.25's prebuilt native module.
+
 ## 0.9.0
 
 ### Added

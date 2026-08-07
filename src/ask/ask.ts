@@ -32,7 +32,13 @@ import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { rankScopesAndFuse } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
+import { isTestPath } from "../util/testpath.js";
 import { readSourceFile } from "../util/source.js";
+
+// Re-exported for backward compatibility — moved to util/testpath.ts since
+// resolve.ts now consumes it too, as a hard graph-topology input rather than
+// just ask's own soft rank-penalty. See that file for the dual-contract note.
+export { isTestPath };
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
 
 export interface AskHit {
@@ -148,10 +154,9 @@ function loadCorpus(outDir: string): Corpus {
  * and land as the top hit (observed: an `ask` returning a `Test…` function first,
  * sending the agent to the wrong file). A multiplicative de-rank keeps tests in
  * the results (they still matter for "where are the tests") but below the real
- * definition. Covers Go (`_test.go`), JS/TS (`.test.` / `.spec.`), and test dirs. */
-export function isTestPath(path: string): boolean {
-  return /(^|\/)(tests?|__tests__|spec)\/|(_test|\.test|\.spec)\.[a-z]+$|(^|\/)(test_[^/]+|conftest)\.py$/i.test(path || "");
-}
+ * definition. `isTestPath` itself now lives in util/testpath.ts — imported
+ * and re-exported above so this stays the one place ask.ts's own callers (and
+ * test/ask.test.ts) look for it. */
 const TEST_RANK_PENALTY = 0.35;
 
 function score(

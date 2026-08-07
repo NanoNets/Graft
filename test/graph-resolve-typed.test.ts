@@ -33,6 +33,51 @@ test("typed member call resolves despite global name ambiguity", () => {
   assert.equal(call?.confidence, "inferred");
 });
 
+test("non-PowerShell typed member call cannot resolve to a PowerShell method owner", () => {
+  const nodes = [
+    n("widget.ps1", "file"),
+    n("widget.ps1#Widget", "class"),
+    n("widget.ps1#Widget.run", "method"),
+    n("use.py", "file"),
+    n("use.py#use", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    { source: "use.py#use", relation: "calls", name: "run", viaMember: true, recvType: "Widget", file: "use.py" },
+  ]);
+  assert.equal(edges.filter((e) => e.relation === "calls").length, 0);
+});
+
+test("PowerShell typed member call still resolves an exact-case method owner", () => {
+  const nodes = [
+    n("widget.ps1", "file"),
+    n("widget.ps1#Widget", "class"),
+    n("widget.ps1#Widget.Run", "method"),
+    n("use.ps1", "file"),
+    n("use.ps1#Use-Widget", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    { source: "use.ps1#Use-Widget", relation: "calls", name: "Run", viaMember: true, recvType: "Widget", file: "use.ps1", lang: "powershell" },
+  ]);
+  assert.equal(edges.find((e) => e.relation === "calls")?.target, "widget.ps1#Widget.Run");
+});
+
+test("PowerShell extends chain resolves a parent method case-insensitively", () => {
+  const nodes = [
+    n("base.ps1", "file"),
+    n("base.ps1#BaseWidget", "class"),
+    n("base.ps1#BaseWidget.Run", "method"),
+    n("child.ps1", "file"),
+    n("child.ps1#ChildWidget", "class"),
+    n("use.ps1", "file"),
+    n("use.ps1#Use-Widget", "function"),
+  ];
+  const edges = resolveEdges(nodes, [
+    { source: "child.ps1#ChildWidget", relation: "extends", name: "BASEWIDGET", file: "child.ps1", lang: "powershell" },
+    { source: "use.ps1#Use-Widget", relation: "calls", name: "run", viaMember: true, recvType: "CHILDWIDGET", file: "use.ps1", lang: "powershell" },
+  ]);
+  assert.equal(edges.find((e) => e.relation === "calls")?.target, "base.ps1#BaseWidget.Run");
+});
+
 test("untyped ambiguous member call still drops (regression guard)", () => {
   const edges = resolveEdges(NODES, [
     { source: "t.py#test_x", relation: "calls", name: "include_router", viaMember: true, file: "t.py" },
