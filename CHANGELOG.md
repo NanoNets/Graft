@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **R language support (Phase 1: flat function extraction).** `tree-sitter-r`
+  (`npm:@davisvaughan/tree-sitter-r`, since `tree-sitter-r` on npm is an
+  unrelated squatted placeholder) parses `.R`/`.r` files. Every
+  `name <- function(...) {}` / `name = function(...) {}` /
+  `function(...) {} -> name` becomes a flat `function` node — the same
+  altitude Python support already operates at for module-level `def`s, and no
+  S3/S4/R6 class awareness (that convention-based, ambiguity-prone work is
+  scoped as a separate Phase 2). `function_definition` carries no name field
+  at all in this grammar — the identifier always comes from an enclosing
+  assignment, and R's one generic `binary_operator` node is shared by every
+  binary op, not just assignment, so a filtering pass was needed. Right-assign
+  (`->`/`->>`) needed its own logic rather than mirroring left-assign: its low
+  operator precedence means it's absorbed into the function definition's own
+  `body` field instead of the function sitting inside an outer
+  `binary_operator`, which only empirically dumping the real AST caught.
+  `library()`/`require()`/`source()` calls are recognized as imports by
+  pattern-matching the callee name (R has no import statement at the grammar
+  level); `pkg::fn()` and `obj$method()` calls resolve by bare name, since
+  Phase 1 has no type-binding table to back a typed member-call match yet.
+  Visibility is the leading-dot naming convention only (`.helper` = internal);
+  roxygen `@export` tag detection is left for a follow-up once an
+  extras-comment-scanning helper exists.
+
 ## 0.9.0
 
 ### Added

@@ -55,6 +55,7 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     }
     return null;
   }
+  if (lang === "r") return rDefName(node);
   const defTypes =
     lang === "python"
       ? new Set(["class_definition", "function_definition"])
@@ -72,6 +73,39 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
   if ((lang === "typescript" || lang === "tsx") && node.type === "variable_declarator") {
     const value = node.childForFieldName("value");
     if (value && FN_VALUE_TYPES.has(value.type)) return node.childForFieldName("name")?.text ?? null;
+  }
+  return null;
+}
+
+const R_ASSIGN_OPS = new Set(["<-", "<<-", "="]);
+const R_RIGHT_ASSIGN_OPS = new Set(["->", "->>"]);
+
+/**
+ * The bare name a `binary_operator` (left-assign) or `function_definition`
+ * (right-assign) node defines, for R's two assignment shapes — shared by
+ * extract.ts's `describeR` (which also needs the underlying nodes to build
+ * the rest of the descriptor) and this file's own `defName`, so the two can
+ * never drift on what counts as a definition. See `describeR`'s doc comment
+ * for why right-assign's AST shape needs its own branch rather than mirroring
+ * left-assign's (empirically, not assumed — `->`'s low precedence means it's
+ * absorbed into the function's own `body` field, not an outer wrapper).
+ * Null if `node` isn't one of these two shapes.
+ */
+export function rDefName(node: Parser.SyntaxNode): string | null {
+  if (node.type === "binary_operator") {
+    const op = node.childForFieldName("operator")?.text;
+    if (!op || !R_ASSIGN_OPS.has(op)) return null;
+    const lhs = node.childForFieldName("lhs");
+    const rhs = node.childForFieldName("rhs");
+    return lhs?.type === "identifier" && rhs?.type === "function_definition" ? lhs.text : null;
+  }
+  if (node.type === "function_definition") {
+    const body = node.childForFieldName("body");
+    if (body?.type !== "binary_operator") return null;
+    const op = body.childForFieldName("operator")?.text;
+    if (!op || !R_RIGHT_ASSIGN_OPS.has(op)) return null;
+    const rhs = body.childForFieldName("rhs");
+    return rhs?.type === "identifier" ? rhs.text : null;
   }
   return null;
 }
@@ -169,6 +203,9 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  // R Phase 1 has no classes, so there's no member/receiver-type binding to
+  // collect yet (see extract.ts's calleeName R branch) — no handleR needed.
+  else if (lang === "r") void 0;
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);

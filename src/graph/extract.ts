@@ -10,12 +10,13 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import R from "tree-sitter-r";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
-import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
+import { collectBindings, goReceiverVarOf, resolveRecvType, rDefName, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "r";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,6 +45,9 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  // `entryFor` lower-cases the path before matching, so this one entry covers
+  // both `.R` (the conventional case in real R codebases) and `.r`.
+  { ext: ".r", grammar: "r", label: "r" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -149,11 +153,18 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+// R: `function_definition` carries no name field at all (unlike every other
+// supported language) — its identifier always comes from context (an
+// assignment's other side), resolved dynamically in describeR(). Empty, like
+// Go's own table — never consulted, kept only to satisfy KINDS_BY_LANG's type.
+const R_KINDS: Record<string, Kind> = {};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  r: R_KINDS,
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +180,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  r: R,
 };
 
 export interface WalkCtx {
@@ -297,7 +309,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "r"
+              ? !desc.name.startsWith(".")
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -329,8 +343,18 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   }
 
   // not a definition — capture calls/imports/references, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
-  if (node.type === callType) {
+  // R's `call` node is also its ONLY vehicle for library()/require()/source() —
+  // there's no separate import-statement grammar construct to key off, so isImport
+  // must be checked before the generic calls path or every import call would be
+  // captured as a (harmlessly unresolvable, but wrong) `calls` edge instead.
+  const callType = ctx.lang === "python" || ctx.lang === "r" ? "call" : "call_expression";
+  if (isImport(node, ctx.lang)) {
+    const spec = importSpecifier(node, ctx.lang);
+    if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
+    // Imported identifiers are declarations, not uses. The import-binding pass
+    // above already recorded them, so do not descend and emit false references.
+    return;
+  } else if (node.type === callType) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
@@ -343,12 +367,6 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       const recvType = resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
-  } else if (isImport(node, ctx.lang)) {
-    const spec = importSpecifier(node, ctx.lang);
-    if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
-    // Imported identifiers are declarations, not uses. The import-binding pass
-    // above already recorded them, so do not descend and emit false references.
-    return;
   } else if (
     node.type === "identifier" &&
     !isDirectCallee(node, callType) &&
@@ -469,6 +487,7 @@ function isDeclarationName(node: Parser.SyntaxNode): boolean {
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "r") return describeR(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -543,6 +562,47 @@ function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | nul
   return null;
 }
 
+/**
+ * R definition shapes: Phase 1 is deliberately flat (every named function
+ * becomes a plain `function` node, no S3/S4/R6 awareness — see the plan's
+ * phasing rationale). `function_definition` carries no name field at all, so
+ * unlike every other supported language the name always comes from an
+ * enclosing assignment, detected here (and shared with bindings.ts's
+ * `defName` via `rDefName`, so the two can never drift on the shape).
+ *
+ * Two shapes, both assignment-operator-filtered out of R's one generic
+ * `binary_operator` node (shared with every other binary op — arithmetic,
+ * comparison, pipe, formula...):
+ *   - left-assign (`<-`/`<<-`/`=`): `foo <- function() {}` — the ordinary
+ *     shape, a `binary_operator` whose `rhs` is the `function_definition`.
+ *   - right-assign (`->`/`->>`): `function() {} -> foo`. Empirically (dumped
+ *     the real AST, not assumed) this does NOT mirror left-assign's shape as
+ *     an outer `binary_operator` wrapping the function on its `lhs` — R's `->`
+ *     has low enough precedence that it gets absorbed into the
+ *     `function_definition`'s OWN `body` field as a `binary_operator`
+ *     instead. Only an explicitly parenthesized `(function() {}) -> foo`
+ *     produces the "expected" outer-wrapping shape; that rare form isn't
+ *     specially handled (falls through as an anonymous function, same as any
+ *     unassigned one).
+ */
+function describeR(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const name = rDefName(node);
+  if (!name) return null;
+
+  if (node.type === "binary_operator") {
+    // rDefName already confirmed rhs is a function_definition.
+    const fn = node.childForFieldName("rhs")!;
+    const body = fn.childForFieldName("body");
+    return { name, kind: "function", headerEnd: body ? body.startIndex : fn.endIndex, hashNode: fn };
+  }
+
+  // function_definition (right-assign): rDefName already confirmed `body` is a
+  // `->`/`->>` binary_operator; its `lhs` is the function's REAL body content.
+  const bodyOp = node.childForFieldName("body")!;
+  const realBody = bodyOp.childForFieldName("lhs");
+  return { name, kind: "function", headerEnd: realBody ? realBody.startIndex : bodyOp.endIndex, hashNode: node };
+}
+
 /** The receiver's base type name for a Go method, unwrapping a pointer receiver
  * (`func (u *User) …` → `User`). Null if it can't be read. */
 function goReceiverType(node: Parser.SyntaxNode): string | null {
@@ -612,6 +672,17 @@ function calleeName(
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
+  if (lang === "r" && (fn.type === "extract_operator" || fn.type === "namespace_operator")) {
+    // `obj$method()` (R6/list/S4 member-style access) and `pkg::fun()` (qualified
+    // call) both resolve as a PLAIN name match, not a typed member call: Phase 1
+    // has no classes, so there's no type-binding table to feed a receiver lookup
+    // — marking these viaMember:true would mean every single one drops (resolve.ts
+    // requires a resolved recvType for any viaMember call, and none is ever
+    // available yet). Accepting the occasional wrong-namesake match is the
+    // intentional recall/precision tradeoff for Phase 1.
+    const rhs = fn.childForFieldName("rhs");
+    return rhs?.type === "identifier" ? { name: rhs.text, viaMember: false } : null;
+  }
   return null;
 }
 
@@ -641,10 +712,22 @@ function tsReceiver(fn: Parser.SyntaxNode): string | undefined {
   return undefined;
 }
 
+/** R has no import statement at the grammar level — `library(x)`, `require(x)`,
+ * and `source("f.R")` are ordinary `call` nodes, indistinguishable from any other
+ * call except by their callee name. This is call-SITE pattern matching, a first
+ * for this function's normal node-type switch — every other language's import
+ * shape is a dedicated grammar construct. */
+const R_IMPORT_CALLS = new Set(["library", "require", "source"]);
+
 function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "r") {
+    if (node.type !== "call") return false;
+    const fn = node.childForFieldName("function");
+    return fn?.type === "identifier" && R_IMPORT_CALLS.has(fn.text);
+  }
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -659,6 +742,19 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
+  }
+  if (lang === "r") {
+    // library(pkg) / library("pkg") / require(pkg) / source("f.R") — the target is
+    // always the first (and normally only) positional argument, bare symbol or string.
+    const args = node.childForFieldName("arguments");
+    const first = args?.namedChildren.find((c) => c.type === "argument");
+    const value = first?.childForFieldName("value");
+    if (value?.type === "identifier") return value.text;
+    if (value?.type === "string") {
+      const content = value.namedChildren.find((c) => c.type === "string_content");
+      return content?.text ?? null;
+    }
+    return null;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
