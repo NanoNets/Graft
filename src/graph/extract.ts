@@ -194,11 +194,12 @@ interface DefDescriptor {
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
 }
 
-/** tree-sitter's string `parse()` fails with "Invalid argument" on any input
- * ≥ 32 KB, which silently drops large files — often the most important ones (a
- * 2000-line command module, a core tab implementation). The callback form has
- * no such limit as long as each returned chunk is under 32 KB, so we always feed
- * the source in <32 KB slices. Code-unit indexing matches `String.slice`. */
+/** The chunked-callback parse predates tree-sitter 0.25, which lifted the
+ * string `parse()` size limit that used to fail with "Invalid argument" on
+ * any input ≥ 32 KB and silently drop large files — often the most important
+ * ones (a 2000-line command module, a core tab implementation). Kept because
+ * it is behavior-identical and exercised by existing tests. Code-unit
+ * indexing matches `String.slice`. */
 const PARSE_CHUNK = 16384;
 function parseSource(source: string): Parser.SyntaxNode {
   return parser.parse((index: number) => source.slice(index, index + PARSE_CHUNK)).rootNode;
@@ -456,13 +457,13 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 /** A direct invocation already emits a stronger `calls` edge. */
 function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
   const parent = node.parent;
-  return parent?.type === callType && parent.childForFieldName("function") === node;
+  return parent?.type === callType && parent.childForFieldName("function")?.id === node.id;
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return parent?.childForFieldName("name")?.id === node.id;
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and
