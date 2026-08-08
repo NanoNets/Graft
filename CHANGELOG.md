@@ -75,6 +75,28 @@
   generates a spurious (harmless — always unresolved and dropped, but wasted)
   `calls`-edge intent to a function literally named `"R6Class"`.
 
+- **R language support, Phase 4: untyped R6 composition calls resolve to a
+  uniquely-named method.** `private$other_obj$method()` — one class holding
+  another as a field, then calling into it — was investigated against a real
+  R6-heavy corpus and found to be a real, common pattern (40+ occurrences in
+  one production package) that the field-type-binding table other languages
+  have (C#/Go/TS's "`field <- SomeClass$new()`" pattern match) wouldn't
+  actually have helped with anyway: the dominant real-world field-assignment
+  shape there is constructor-parameter pass-through and `do.call(class_var$new,
+  ...)` dynamic dispatch, neither of which names a class anywhere in the
+  syntax a static pattern-matcher could read. The narrower, real fix: these
+  calls were marked `viaMember: false` (a plain bare-name match, same as any
+  free-function call in every language), but bare-name resolution only ever
+  matched `"function"`-kind nodes — never `"method"` — so since R6 methods are
+  always kind `"method"`, EVERY such call was unconditionally unresolvable,
+  not just occasionally imprecise. Bare-name resolution for this one shape
+  (an untyped `$` call, not `self`/`private`/`super`, which already resolve
+  precisely) now also considers `"method"`-kind nodes, using the exact same
+  "unique match resolves, ambiguous match safely drops" logic already used
+  everywhere else — no new false-positive risk, only new resolutions for
+  method names that happen to be unique across the repo. `pkg::fun()`
+  qualified calls are untouched (never an R6 method target).
+
 ## 0.9.0
 
 ### Added

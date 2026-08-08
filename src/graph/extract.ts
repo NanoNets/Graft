@@ -84,6 +84,16 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
+  /** calls without viaMember: which kinds the bare-name match may resolve to.
+   * Every other language's bare-name call is always a free function, so this
+   * is absent for them (resolve.ts defaults to `["function"]`). R (Phase 4) is
+   * the one exception: `obj$method()` with an untyped receiver (not
+   * self/private/super, which already resolve precisely via viaMember+recvType)
+   * still has a real shot at a correct match if the method name happens to be
+   * uniquely defined across the repo — R6 methods are kind "method", not
+   * "function", so without this override every such call would be
+   * unconditionally unresolvable rather than just occasionally ambiguous. */
+  kinds?: Kind[];
 }
 
 export interface ExtractResult {
@@ -452,6 +462,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: callee.name,
         viaMember: callee.viaMember,
         file: ctx.rel,
+        ...(callee.kinds ? { kinds: callee.kinds } : {}),
       };
       const recvType = resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
@@ -1120,7 +1131,7 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
-): { name: string; viaMember: boolean; receiver?: string } | null {
+): { name: string; viaMember: boolean; receiver?: string; kinds?: Kind[] } | null {
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -1158,14 +1169,26 @@ function calleeName(
         // same-named override instead of climbing to the parent).
         return { name: rhs.text, viaMember: true, receiver: "super" };
       }
+      // Any other `obj$method()` (Phase 4): still a PLAIN name match, not a
+      // typed member call — there's no general field-type-binding table for
+      // R6 composition (`private$other_obj$method()`), and a real codebase's
+      // dominant field-assignment shape (constructor-parameter pass-through,
+      // `do.call(class_var$new, ...)` dynamic dispatch) turned out to defeat
+      // the simple "field <- SomeClass$new()" pattern every other language's
+      // binding table relies on anyway — see plan_r_language_support.md's
+      // Phase 2 "known gaps" and the follow-up investigation against a real
+      // R6-heavy corpus. What DOES help: bare-name resolution must be allowed
+      // to match a "method" node here, not just "function" — R6 methods are
+      // always kind "method", so without `kinds` below, EVERY untyped `$`
+      // call would be unconditionally unresolvable rather than just
+      // occasionally ambiguous (resolve.ts already drops a genuinely
+      // ambiguous bare-name match rather than guessing, so this only adds
+      // resolutions for uniquely-named methods, never a wrong-class guess).
+      return { name: rhs.text, viaMember: false, kinds: ["function", "method"] };
     }
-    // `pkg::fun()` (qualified call) and any other `obj$method()` resolve as a
-    // PLAIN name match, not a typed member call: there's no general type-
-    // binding table for R (Phase 2 only resolves self/private directly, above)
-    // — marking these viaMember:true would mean every single one drops
-    // (resolve.ts requires a resolved recvType for any viaMember call).
-    // Accepting the occasional wrong-namesake match is an intentional
-    // recall/precision tradeoff.
+    // `pkg::fun()` (qualified call) — always a real function/exported symbol,
+    // never an R6 method (those are only ever reached via `$` on an instance),
+    // so no need to widen the match kinds here.
     return { name: rhs.text, viaMember: false };
   }
   return null;
