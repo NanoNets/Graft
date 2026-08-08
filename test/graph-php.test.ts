@@ -10,6 +10,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
+import { checkGraph } from "../src/graph/check.js";
+import { extractFile } from "../src/graph/extract.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
 
@@ -181,6 +183,79 @@ test("PHP extraction: trait use and typed-parameter receiver binding", async () 
       ),
       "act should resolve $b->label() to Base.label through the parameter binding",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A variable-assigned closure is named after its variable, so its node id is
+// `…#<var>`. If that name is recomputed as the anonymous `{closure}` on a later
+// pass, the stored id and the recomputed id disagree — the exact drift that made
+// `graft check` report STALE on closure-heavy PHP right after a clean build
+// (reported against this branch on a ~2k-file Laravel repo). These closures are
+// shaped like that report: a top-level `static function … use (…)` and a
+// variable-assigned closure nested inside a method.
+const CLOSURES_PHP = `<?php
+declare(strict_types=1);
+
+$itemGroupCallback = static function ($itemGroup) use ($response) {
+    return $itemGroup->id;
+};
+
+class Service
+{
+    public function getItemList(): array
+    {
+        $mapper = function ($row) {
+            return $row->value;
+        };
+        return array_map($mapper, []);
+    }
+}
+`;
+
+function makeClosureFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-php-closures-"));
+  writeFileSync(join(dir, "composer.json"), `{"name": "acme/closures"}\n`);
+  writeFileSync(join(dir, "closures.php"), CLOSURES_PHP);
+  return dir;
+}
+
+test("PHP closures: variable-assigned closures are named after their variable", () => {
+  const { nodes } = extractFile("closures.php", CLOSURES_PHP, "php");
+  const ids = nodes.map((n) => n.id);
+  // top-level `static function` assigned to $itemGroupCallback, and the closure
+  // assigned to $mapper inside the method — both keep the variable name, no {closure}.
+  assert.ok(ids.includes("closures.php#itemGroupCallback"), `expected named top-level closure, got: ${ids.join(", ")}`);
+  assert.ok(
+    ids.includes("closures.php#Service.getItemList.mapper"),
+    `expected named nested closure, got: ${ids.join(", ")}`,
+  );
+  assert.ok(!ids.some((id) => id.includes("{closure}")), `no closure should collapse to {closure}, got: ${ids.join(", ")}`);
+});
+
+test("PHP closures: closure names are stable across repeated extraction", () => {
+  // The name derives from a tree-sitter node comparison; wrapper identity is not
+  // stable across traversals, so the comparison must use node `.id`, not `===`.
+  // Re-extracting the same source must yield the identical closure-node id set.
+  const first = extractFile("closures.php", CLOSURES_PHP, "php").nodes.map((n) => n.id).sort();
+  for (let i = 0; i < 5; i++) {
+    const again = extractFile("closures.php", CLOSURES_PHP, "php").nodes.map((n) => n.id).sort();
+    assert.deepEqual(again, first, "closure-node ids must be identical on every extraction");
+  }
+});
+
+test("PHP closures: `graft check` stays fresh after build (no name drift)", async () => {
+  const dir = makeClosureFixture();
+  try {
+    await buildGraph(dir);
+    // No source changed between build and check, so the recomputed Tier-1 node set
+    // must match the committed graph exactly — in particular the closure ids.
+    const result = await checkGraph(dir);
+    assert.deepEqual(result.added, [], "check should report no added nodes");
+    assert.deepEqual(result.removed, [], "check should report no removed nodes");
+    assert.deepEqual(result.changed, [], "check should report no changed nodes");
+    assert.equal(result.ok, true, "graph check should be OK immediately after build");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

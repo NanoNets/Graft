@@ -727,10 +727,17 @@ function phpExported(node: Parser.SyntaxNode): boolean {
 
 /** Name for a PHP closure / arrow-fn: the variable it's assigned to
  * (`$handler = fn(...)` -> `handler`, mirroring how TS names arrow-consts),
- * else the anonymous `{closure}` (deduplicated per file by mintId). */
+ * else the anonymous `{closure}` (deduplicated per file by mintId).
+ *
+ * The "is this the assignment's right-hand side" check compares tree-sitter node
+ * `.id` (a stable per-tree node identity) rather than `===` on the wrapper
+ * objects: the binding does not guarantee that two traversals to the same
+ * underlying node hand back the same JS wrapper, so `right === node` can be false
+ * even when they are the same node — producing a stray `{closure}` name that
+ * makes `graft check` report the graph STALE against its own stored output. */
 function phpClosureName(node: Parser.SyntaxNode): string {
   const parent = node.parent;
-  if (parent?.type === "assignment_expression" && parent.childForFieldName("right") === node) {
+  if (parent?.type === "assignment_expression" && parent.childForFieldName("right")?.id === node.id) {
     const left = parent.childForFieldName("left");
     if (left?.type === "variable_name") return left.text.replace(/^\$/, "");
   }

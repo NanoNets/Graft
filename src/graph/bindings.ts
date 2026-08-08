@@ -274,10 +274,13 @@ function handlePhp(node: Parser.SyntaxNode, scope: string[], bindings: FileBindi
 
 /** Closure name, duplicated from extract.ts's `phpClosureName` (this file must
  * not value-import extract.ts) so the two scope stacks agree on the segment a
- * closure pushes. */
+ * closure pushes. The right-hand-side check compares node `.id` rather than
+ * `===` on wrappers for the same reason as extract.ts: wrapper identity is not
+ * stable across traversals, so `===` can spuriously fall through to `{closure}`
+ * and desync this scope segment from the one extract.ts mints. */
 function phpClosureName(node: Parser.SyntaxNode): string {
   const parent = node.parent;
-  if (parent?.type === "assignment_expression" && parent.childForFieldName("right") === node) {
+  if (parent?.type === "assignment_expression" && parent.childForFieldName("right")?.id === node.id) {
     const left = parent.childForFieldName("left");
     if (left?.type === "variable_name") return left.text.replace(/^\$/, "");
   }
