@@ -138,14 +138,18 @@ function goReceiverTypeOf(node: Parser.SyntaxNode): string | null {
 
 /** Resolves a call site's receiver text (from `calleeName`) to a bound type
  * name, given the enclosing walk state. `self`/`cls`/`this`/the Go receiver
- * var resolve directly to the enclosing class; anything else is a bindings-map
- * lookup, normalizing `this.` to `self.` since both are stored the same way. */
+ * var resolve directly to the enclosing class; R6's `super` (Phase 3) resolves
+ * to the PARENT class instead (`ctx.rSuperClass`, not `ctx.enclosingClass` —
+ * a `super$method()` call must climb past the current class's own same-named
+ * override, not find it); anything else is a bindings-map lookup, normalizing
+ * `this.` to `self.` since both are stored the same way. */
 export function resolveRecvType(
   receiver: string | undefined,
-  ctx: Pick<WalkCtx, "scope" | "enclosingClass" | "goReceiverVar" | "lang" | "bindings">,
+  ctx: Pick<WalkCtx, "scope" | "enclosingClass" | "goReceiverVar" | "lang" | "bindings" | "rSuperClass">,
 ): string | undefined {
   if (!receiver) return undefined;
   if (receiver === "self" || receiver === "cls" || receiver === "this") return ctx.enclosingClass ?? undefined;
+  if (receiver === "super") return ctx.rSuperClass ?? undefined;
   if (receiver.startsWith("self.") || receiver.startsWith("this.")) {
     return (
       ctx.bindings.lookup(ctx.scope, receiver) ??

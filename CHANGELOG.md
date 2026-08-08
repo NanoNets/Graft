@@ -55,6 +55,26 @@
   `signature()`-based multiple dispatch; R6 active bindings are treated as
   ordinary (exported) methods with no distinction from regular ones.
 
+- **R language support, Phase 3: roxygen `@export` visibility and R6
+  `super$` dispatch.** Scoped for an R6-plus-roxygen setup specifically (no
+  S3/S4 involved). A `#' @export` roxygen tag now marks its definition
+  exported regardless of the leading-dot naming convention; a definition with
+  *some* roxygen doc block but no `@export` tag is instead treated as an
+  explicit "not exported" (roxygen's own NAMESPACE-generation convention: only
+  `@export`-tagged items are exported, so documented-but-untagged is a real
+  signal, not an absence of evidence) — the naming-convention fallback only
+  kicks in when there's no roxygen block at all. `comment` is a grammar extra
+  (floats as an ordinary sibling rather than attaching to "the next
+  statement"), so this walks backward through a definition's preceding
+  `previousNamedSibling` chain collecting a contiguous roxygen (`#'`) comment
+  run. R6's `super$method()` — its inheritance-dispatch keyword — now resolves
+  directly to the parent class's method (via the same `inherit =` heritage
+  already extracted in Phase 2), rather than falling back to a plain bare-name
+  match that could just as easily match the current class's own same-named
+  override. Also fixed in passing: the `R6Class(...)` call itself no longer
+  generates a spurious (harmless — always unresolved and dropped, but wasted)
+  `calls`-edge intent to a function literally named `"R6Class"`.
+
 ## 0.9.0
 
 ### Added

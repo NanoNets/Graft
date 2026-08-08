@@ -208,6 +208,14 @@ export interface WalkCtx {
   // curated base-R generics list — see describeR's doc comment for the
   // ambiguity this guards against (`read.csv` is not S3 dispatch).
   rGenerics: ReadonlySet<string>;
+  // R6 (Phase 3): the immediate parent class's name (from `inherit =`) for the
+  // R6 class we're currently inside, so a `super$method()` call in any of its
+  // methods' bodies can resolve directly to the PARENT's method instead of
+  // (wrongly) the current class's own same-named override. Unlike rR6Access,
+  // this is NOT reset when descending into a method — it needs to stay live
+  // for the method's whole body, only changing when a genuinely different
+  // class is entered. Null outside any class, or for a class with no parent.
+  rSuperClass: string | null;
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -276,6 +284,7 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     importedSymbols,
     rR6Access: null,
     rGenerics,
+    rSuperClass: null,
   };
   // Every id minted this file, seeded with the file node's own id (`rel`) so a
   // top-level definition can never collide with it. Threaded as its own
@@ -337,7 +346,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           : ctx.lang === "go"
             ? goExported(desc.name)
             : ctx.lang === "r"
-              ? rExported(desc.name, ctx)
+              ? rExported(desc.name, ctx, node)
               : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
@@ -375,6 +384,10 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       // (a method's own body, or — vanishingly rare but possible — another class
       // defined inside one).
       rR6Access: null,
+      // Unlike rR6Access, only reset when entering a genuinely new class (so it
+      // stays live through a method's whole body, where super$ calls actually
+      // happen) — inherited unchanged for every other definition kind.
+      rSuperClass: desc.kind === "class" ? (ctx.lang === "r" ? rR6ParentClass(node) : null) : ctx.rSuperClass,
     };
     for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
     return;
@@ -425,7 +438,13 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // above already recorded them, so do not descend and emit false references.
     return;
   } else if (node.type === callType) {
-    const callee = calleeName(node, ctx.lang);
+    // R6Class(...) is already consumed by its enclosing binary_operator as the
+    // class definition (see describeR) — the walk still reaches this SAME call
+    // node again, recursing generically to find its public=/private=/active=
+    // arguments (there's no other path to them), and it must not ALSO be
+    // treated as an ordinary call to a function literally named "R6Class".
+    const isConsumedR6ClassCall = ctx.lang === "r" && node.type === "call" && rCalleeName(node) === "R6Class";
+    const callee = isConsumedR6ClassCall ? null : calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
         source: ctx.parentId,
@@ -946,6 +965,19 @@ function rNamedArg(node: Parser.SyntaxNode, argName: string): Parser.SyntaxNode 
   return arg?.childForFieldName("value") ?? null;
 }
 
+/** An R6 class-defining node's `inherit =` parent class name (a bare
+ * identifier — the parent's own generator variable, not a string), for
+ * `super$` call resolution (Phase 3). `node` is whatever describeR matched: a
+ * binary_operator for R6 (`Foo <- R6::R6Class(...)`) or, for any other kind of
+ * class (S4's setClass, which has no `super`), the call itself — always null
+ * there since `rCalleeName(call) !== "R6Class"`. */
+function rR6ParentClass(node: Parser.SyntaxNode): string | null {
+  const call = node.type === "binary_operator" ? node.childForFieldName("rhs") : node;
+  if (call?.type !== "call" || rCalleeName(call) !== "R6Class") return null;
+  const value = rNamedArg(call, "inherit");
+  return value?.type === "identifier" ? value.text : null;
+}
+
 /** A base-class name list from either a bare string (`contains = "Base"`) or
  * a `c(...)` call of strings (`contains = c("Base1", "Base2")`) — S4's
  * multiple-inheritance form. */
@@ -964,11 +996,55 @@ function rStringOrCVector(value: Parser.SyntaxNode | null): string[] {
 /** R6 visibility follows the `public =`/`private =`/`active =` section a
  * method was declared in (see walk()'s `argument`-node interception) —
  * `ctx.rR6Access` is only set for that direct span, so a plain function or an
- * S3/S4 method (neither of which has a real visibility concept) falls back
- * to the leading-dot naming convention, same as Phase 1. */
-function rExported(name: string, ctx: WalkCtx): boolean {
+ * S3/S4 method (neither of which has a real visibility concept) checks for a
+ * roxygen `@export` tag next (Phase 3), falling back to the leading-dot naming
+ * convention only when there's no roxygen evidence to go on at all. `node` is
+ * the exact node describeR matched — see `rRoxygenExported`'s doc comment for
+ * why that's always the right one to check for a preceding comment block. */
+function rExported(name: string, ctx: WalkCtx, node: Parser.SyntaxNode): boolean {
   if (ctx.rR6Access !== null) return ctx.rR6Access !== "private";
+  const roxygen = rRoxygenExported(node);
+  if (roxygen !== null) return roxygen;
   return !name.startsWith(".");
+}
+
+/**
+ * Roxygen `@export` detection (Phase 3): does `node` — a top-level definition
+ * statement (a `binary_operator` assignment, a right-assigned
+ * `function_definition`, or an S4 `setClass`/`setMethod` call) — have a
+ * roxygen doc block immediately preceding it, and if so, is it tagged
+ * `@export`?
+ *
+ * `comment` is a grammar EXTRA in this grammar (floats loosely between
+ * sibling nodes rather than attaching to "the next statement" via a field),
+ * so this walks backward through `previousNamedSibling` collecting a
+ * contiguous run of `comment` nodes — the run ends at the first non-comment
+ * sibling, or at the first comment that isn't itself a roxygen (`#'`) line,
+ * either of which is roxygen's own "this block documents the next statement"
+ * boundary.
+ *
+ * Returns:
+ *  - `true` — a roxygen block was found and it contains `@export`.
+ *  - `false` — a roxygen block was found but it does NOT contain `@export`.
+ *    This is deliberately a confident "not exported," not "unknown": roxygen
+ *    generates a package's NAMESPACE from exactly its `@export`-tagged items,
+ *    so a documented-but-untagged function is an explicit "internal, for
+ *    maintainers only" signal, not an absence of evidence.
+ *  - `null` — no roxygen block at all, so the caller should fall back to the
+ *    leading-dot naming convention instead of guessing.
+ */
+function rRoxygenExported(node: Parser.SyntaxNode): boolean | null {
+  let sib = node.previousNamedSibling;
+  let sawRoxygen = false;
+  let exported = false;
+  while (sib?.type === "comment") {
+    const text = sib.text.trim();
+    if (!text.startsWith("#'")) break; // an ordinary # comment ends the roxygen block
+    sawRoxygen = true;
+    if (/^#'\s*@export\b/.test(text)) exported = true;
+    sib = sib.previousNamedSibling;
+  }
+  return sawRoxygen ? exported : null;
 }
 
 /** The receiver's base type name for a Go method, unwrapping a pointer receiver
@@ -1074,6 +1150,13 @@ function calleeName(
         // magic receiver string) as Python/TS's self/cls/this — see
         // resolveRecvType, which already special-cases "self" generically.
         return { name: rhs.text, viaMember: true, receiver: "self" };
+      }
+      if (lhs?.type === "identifier" && lhs.text === "super") {
+        // R6 (Phase 3): `super$method()` — R6's inheritance-dispatch keyword,
+        // resolves directly to the PARENT class via ctx.rSuperClass (NOT
+        // ctx.enclosingClass — that would wrongly find the current class's own
+        // same-named override instead of climbing to the parent).
+        return { name: rhs.text, viaMember: true, receiver: "super" };
       }
     }
     // `pkg::fun()` (qualified call) and any other `obj$method()` resolve as a
