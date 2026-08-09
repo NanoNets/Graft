@@ -97,6 +97,29 @@
   method names that happen to be unique across the repo. `pkg::fun()`
   qualified calls are untouched (never an R6 method target).
 
+- **R language support, Phase 5: plain-list "mixin"/"extension" bundles
+  recognized as classes.** Found dogfooding a full rebuild of the same real
+  R6-heavy corpus (forced with `--no-reuse`, not the extraction cache) used to
+  scope Phase 4: 12 files with substantial content produced zero extracted
+  symbols. 11 of them shared one cause — a real, deliberate convention that
+  codebase calls "Pattern-1 mixin/extension": `Foo <- list(public = list(...),
+  private = list(...))`, sharing a method bundle across classes by splicing
+  (`public = c(Foo$public, list(...))`) rather than `inherit =`-based
+  inheritance, and so never wrapped in `R6::R6Class(...)` at all. 25 files in
+  the corpus use this convention. `Name <- list(...)` is now recognized as a
+  class-like container specifically when the list has a `public =` or
+  `private =` entry whose own value is itself a `list(...)` call — precise
+  enough that an ordinary data/config list is never mistaken for one, since
+  real data never coincidentally shapes itself that way. Nothing else needed
+  to change: every downstream mechanism (the `public=`/`private=` list-walk,
+  method visibility, `self$`/`private$` call resolution) already worked
+  purely off `ctx.enclosingKind === "class"`, indifferent to how the class
+  was spelled. No heritage edge is emitted for these (splicing isn't
+  `inherit =`). Re-running the same corpus rebuild after this fix: all 11
+  previously-empty files now extract correctly (zero unexplained empty files
+  remain — the one exception, `EDI.R`, is a package-doc-only file with no
+  real code), classes 256→277, methods 1764→1916, edges 9089→9415.
+
 ## 0.9.0
 
 ### Added

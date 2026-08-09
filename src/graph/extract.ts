@@ -448,13 +448,16 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // above already recorded them, so do not descend and emit false references.
     return;
   } else if (node.type === callType) {
-    // R6Class(...) is already consumed by its enclosing binary_operator as the
-    // class definition (see describeR) — the walk still reaches this SAME call
-    // node again, recursing generically to find its public=/private=/active=
-    // arguments (there's no other path to them), and it must not ALSO be
-    // treated as an ordinary call to a function literally named "R6Class".
-    const isConsumedR6ClassCall = ctx.lang === "r" && node.type === "call" && rCalleeName(node) === "R6Class";
-    const callee = isConsumedR6ClassCall ? null : calleeName(node, ctx.lang);
+    // R6Class(...) / a Phase-5 mixin list(...) is already consumed by its
+    // enclosing binary_operator as the class definition (see describeR) — the
+    // walk still reaches this SAME call node again, recursing generically to
+    // find its public=/private=/active= arguments (there's no other path to
+    // them), and it must not ALSO be treated as an ordinary call to a
+    // function literally named "R6Class"/"list".
+    const consumedCallee = ctx.lang === "r" && node.type === "call" ? rCalleeName(node) : null;
+    const isConsumedRClassCall =
+      consumedCallee === "R6Class" || (consumedCallee === "list" && rIsMixinContainer(node));
+    const callee = isConsumedRClassCall ? null : calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
         source: ctx.parentId,
@@ -696,6 +699,18 @@ function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | nul
  *     function only recognizes the class itself; the "a call defines a
  *     symbol" list-walking lives in walk() since it needs to mint several
  *     nodes, not describe a single one).
+ *   - `Foo <- list(public = list(...), private = list(...))` (Phase 5) — a
+ *     plain-list "mixin"/"extension" bundle, NOT wrapped in `R6::R6Class(...)`
+ *     at all: a real, deliberate convention found dogfooding against a real
+ *     R6-heavy corpus (25 files, 11 of them entirely invisible to the graph
+ *     without this) for sharing method bundles across classes via splicing
+ *     (`public = c(Foo$public, list(...))`) rather than `inherit =`. Only
+ *     recognized when the list actually has a `public =`/`private =` entry
+ *     (see `rIsMixinContainer`) — an ordinary data/config list never matches.
+ *     Reuses kind "class" (nothing better-fitting exists, and everything
+ *     downstream — the method-list walking, visibility — only cares that
+ *     ctx.enclosingKind is "class", not how the container was spelled); no
+ *     heritage edge, since splicing isn't `inherit =`-based inheritance.
  *   - `setClass("Foo", ...)` / `setMethod("generic", "Foo", function() {})`
  *     — S4 class/method calls, recognized as bare top-level `call` nodes
  *     (setClass/setMethod have side effects registering with the S4 system;
@@ -716,6 +731,10 @@ function describeR(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null 
     if (rhs?.type === "call" && rCalleeName(rhs) === "R6Class") {
       // The class node itself; its public=/private=/active= method lists are
       // handled by walk()'s own `argument`-node interception, not here.
+      return { name: lhs.text, kind: "class", headerEnd: rhs.endIndex, hashNode: rhs };
+    }
+    if (rhs?.type === "call" && rCalleeName(rhs) === "list" && rIsMixinContainer(rhs)) {
+      // Phase 5: a plain-list mixin/extension bundle — same treatment as R6Class.
       return { name: lhs.text, kind: "class", headerEnd: rhs.endIndex, hashNode: rhs };
     }
     return null;
@@ -987,6 +1006,22 @@ function rR6ParentClass(node: Parser.SyntaxNode): string | null {
   if (call?.type !== "call" || rCalleeName(call) !== "R6Class") return null;
   const value = rNamedArg(call, "inherit");
   return value?.type === "identifier" ? value.text : null;
+}
+
+/** Does this `list(...)` call look like a Phase-5 mixin/extension bundle —
+ * i.e. does it have a `public =` or `private =` entry whose own value is
+ * itself a `list(...)` call? This is the one check standing between "class-
+ * like container" and an ordinary data/config list (`list(a = 1, b = 2)`,
+ * or even one that happens to have a field named "public" holding something
+ * else) — real code never coincidentally shapes plain data this way, so it's
+ * a safe, precise signal without needing a naming-convention heuristic. */
+function rIsMixinContainer(node: Parser.SyntaxNode): boolean {
+  return rCallArgs(node).some((a) => {
+    const name = a.childForFieldName("name")?.text;
+    if (name !== "public" && name !== "private") return false;
+    const value = a.childForFieldName("value");
+    return value?.type === "call" && rCalleeName(value) === "list";
+  });
 }
 
 /** A base-class name list from either a bare string (`contains = "Base"`) or
