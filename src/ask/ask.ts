@@ -30,7 +30,7 @@ import {
 import { normalizePathPrefix } from "../util/paths.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
-import { rankScopesAndFuse } from "./fuse.js";
+import { rankScopesAndFuse, HIGH_FLOOR, STRONG_FLOOR } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
@@ -762,16 +762,116 @@ function sliceSpan(root: string, path: string, from: number, to: number): string
   }
 }
 
+/** Lines a rule-built crux shows for a function-like node before it truncates. */
+const RULE_CRUX_LINES = 8;
+/** Member signatures a rule-built crux shows for a class-like node. */
+const RULE_CRUX_MEMBERS = 8;
+
+/** Node kinds whose useful summary is their MEMBER LIST, not their first lines.
+ * A long class opens with `__init__` boilerplate; what it does is the set of
+ * methods it exposes. */
+const CONTAINER_KINDS = new Set(["class", "interface", "struct", "trait", "enum"]);
+
+/** Rule-built crux for a container: the declaration line plus its members'
+ * signatures, found by span containment (same file, span nested inside). This
+ * is the same view `graft skeleton` gives for a whole file, narrowed to one
+ * type — and for a container it is arguably better than an LLM excerpt, because
+ * it is the complete API rather than a chosen fragment. */
+function containerCrux(node: NodeV1, graph: GraphV1, declLine: string): string | null {
+  const outer = spanRange(node.span);
+  if (!outer) return null;
+  const members = graph.nodes
+    .filter((n) => {
+      if (n === node || n.path !== node.path || n.kind === "file") return false;
+      const r = spanRange(n.span);
+      return !!r && r.from >= outer.from && r.to <= outer.to;
+    })
+    .sort((a, b) => (spanRange(a.span)?.from ?? 0) - (spanRange(b.span)?.from ?? 0));
+  if (!members.length) return null;
+  const shown = members.slice(0, RULE_CRUX_MEMBERS);
+  const lines = [declLine.trimEnd()];
+  for (const m of shown) lines.push(`    ${m.signature?.trim() || `${m.kind} ${m.name}`}`);
+  const rest = members.length - shown.length;
+  lines.push(
+    `… (${rest > 0 ? `${rest} more member${rest === 1 ? "" : "s"}; ` : ""}` +
+      `full definition at ${node.path}:${node.span}; rerun with --full)`,
+  );
+  return lines.join("\n");
+}
+
+/** `Lx-Ly` → numeric range. */
+function spanRange(span: string): { from: number; to: number } | null {
+  const m = span?.match(/^L(\d+)-L(\d+)$/);
+  return m ? { from: Number(m[1]), to: Number(m[2]) } : null;
+}
+
+/**
+ * Rule-built crux — the $0 stand-in for the LLM-chosen one.
+ *
+ * Without a key there is no `crux`, and the fallback was the whole definition
+ * capped at {@link MAX_SPAN_LINES} = 80. So the free build inlined up to 10× more
+ * per hit than the paid one, and at 5-8 hits a single `ask` could return several
+ * hundred lines. That is the bulk of what the SWE-bench graft arm was paying for.
+ *
+ * The rule is kind-aware, because "first N lines" is the wrong answer for a
+ * container: functions get their opening (signature, docstring, first
+ * statements — where the contract lives), containers get their member
+ * signatures. Both truncate to a marker naming the pointer and `--full`.
+ *
+ * It is deterministic and structural, so it can be honestly worse than the LLM
+ * crux on one shape: a long function whose interesting branch is far down. The
+ * 80-line cap did not reach that either.
+ */
+function ruleCrux(
+  root: string,
+  node: NodeV1 | undefined,
+  graph: GraphV1,
+  s: { path: string; from: number; to: number },
+): string | null {
+  const full = sliceSpanRaw(root, s.path, s.from, s.to);
+  if (!full) return null;
+  const lines = full.split("\n");
+  if (node && CONTAINER_KINDS.has(node.kind)) {
+    const c = containerCrux(node, graph, lines[0] ?? "");
+    if (c) return c;
+  }
+  if (lines.length <= RULE_CRUX_LINES) return full;
+  const head = lines.slice(0, RULE_CRUX_LINES);
+  head.push(
+    `… (+${lines.length - RULE_CRUX_LINES} more lines; full definition at ` +
+      `${s.path}:L${s.from}-L${s.to}; rerun with --full)`,
+  );
+  return head.join("\n");
+}
+
+/** Read span lines with no cap — the rule crux does its own truncation. */
+function sliceSpanRaw(root: string, path: string, from: number, to: number): string | null {
+  try {
+    const source = readSourceFile(join(root, path));
+    if (source === null) return null;
+    const lines = source.split("\n");
+    return lines.slice(Math.max(1, from) - 1, Math.min(lines.length, to)).join("\n");
+  } catch {
+    return null;
+  }
+}
+
 /** Attach inlined source to every hit whose pointer is a real `path:span`.
  * Crux-first: when the graph carries an LLM-chosen crux for the hit's node and
  * `full` is off, inline that ≤8-line excerpt (with an escalation marker) rather
  * than the whole definition — most hits only need the decision point, and the
- * marker tells the agent exactly how to get the rest when this one doesn't. */
+ * marker tells the agent exactly how to get the rest when this one doesn't.
+ * With no LLM crux, {@link ruleCrux} builds one from structure at the same size,
+ * so a keyless build is not silently 10× more expensive per hit. */
 function inlineSource(root: string, hits: AskHit[], graph: GraphV1 | null, full: boolean): void {
   const cruxByPointer = new Map<string, string>();
+  const nodeByPointer = new Map<string, NodeV1>();
   if (!full && graph) {
-    for (const n of graph.nodes)
-      if (n.crux?.code) cruxByPointer.set(`${n.path}:${n.span}`, n.crux.code);
+    for (const n of graph.nodes) {
+      const key = `${n.path}:${n.span}`;
+      if (n.crux?.code) cruxByPointer.set(key, n.crux.code);
+      if (!nodeByPointer.has(key)) nodeByPointer.set(key, n);
+    }
   }
   for (const h of hits) {
     const s = parseSpan(h.pointer);
@@ -780,6 +880,13 @@ function inlineSource(root: string, hits: AskHit[], graph: GraphV1 | null, full:
     if (crux) {
       h.code = `${crux}\n… (crux — full definition at ${h.pointer}; rerun with --full)`;
       continue;
+    }
+    if (!full && graph) {
+      const rule = ruleCrux(root, nodeByPointer.get(h.pointer), graph, s);
+      if (rule) {
+        h.code = rule;
+        continue;
+      }
     }
     const code = sliceSpan(root, s.path, s.from, s.to);
     if (code) h.code = code;
@@ -922,8 +1029,53 @@ function toTokens(chars: number): number {
   return Math.round(chars / 4);
 }
 
-/** Render an {@link AskResult} as a compact markdown context pack. */
-export function formatAsk(r: AskResult): string {
+/** How many pointers a weak pack shows. Three is enough to be a lead and few
+ * enough that a wrong lead is cheap to discard. */
+const WEAK_HIT_CAP = 3;
+
+/**
+ * Does this result fall below the strength floor the push channel already
+ * enforces (`relevantRetrieval` in claude/format.ts)?
+ *
+ * The floors were only ever applied to injected packs. A pull — `graft ask` from
+ * the CLI, or `graft_find_code` over MCP — returned its full top-N with source
+ * inlined at any score, so a query the retriever scored 0.05 came back looking
+ * exactly as authoritative as one it scored 0.9. That asymmetry is what made
+ * django-13121 possible: a forced ask on a no-strong-match prompt injected 6,289
+ * chars of the wrong code, +28% tokens, +31% cost, and the episode timed out.
+ *
+ * Structural results carry neither score and are never weak — a resolved
+ * "callers of X" IS the answer, not a guess about it.
+ */
+export function isWeakMatch(r: AskResult): boolean {
+  if (r.mode !== "lexical") return false;
+  // Absent scores mean "not measured" (older/federated shapes), not "weak".
+  if (r.coverage === undefined && r.coverageStrong === undefined) return false;
+  return (r.coverageStrong ?? 0) < STRONG_FLOOR && (r.coverage ?? 0) < HIGH_FLOOR;
+}
+
+/** The line a weak pack carries instead of inlined source. Says what happened,
+ * how sure it isn't, and which tool to reach for — silence or a bare hedge both
+ * leave the agent to fall back on the grep loop this is meant to prevent. */
+function weakMatchNote(r: AskResult, shown: number, total: number): string {
+  const strong = (r.coverageStrong ?? 0).toFixed(2);
+  const more = total > shown ? ` (${total - shown} more suppressed)` : "";
+  return (
+    `\n\n[graft] LOW CONFIDENCE — the query matched no symbol name well ` +
+    `(name match ${strong}). Showing ${shown} pointer${shown === 1 ? "" : "s"}${more} ` +
+    `without source: at this score the inlined code is as likely to mislead as help.\n` +
+    `[graft] Better move: pull an identifier out of the error/traceback/snippet and ` +
+    "run `graft grep \"<identifier>\"`, or `graft skeleton <file>` if you know the file. " +
+    "Re-run with `--full` to inline anyway."
+  );
+}
+
+/** Render an {@link AskResult} as a compact markdown context pack.
+ *
+ * `force` bypasses the weak-match gate — an explicit `--full` / `full: true` is
+ * the caller overruling the score on purpose, which is theirs to do. */
+export function formatAsk(r: AskResult, opts: { force?: boolean } = {}): string {
+  const weak = !opts.force && isWeakMatch(r);
   const head = `graft ask — "${r.query}"  (${r.mode})`;
   // The note prints as its own prominent line(s) right under the header —
   // above every hit — so a loud structural-fallthrough note (or the
@@ -950,7 +1102,8 @@ export function formatAsk(r: AskResult): string {
       if (h.code) lines.push("", "```", h.code, "```", "");
     }
   } else {
-    r.hits.forEach((h, i) => {
+    const shown = weak ? r.hits.slice(0, WEAK_HIT_CAP) : r.hits;
+    shown.forEach((h, i) => {
       // Multi-scope results label each hit with its sub-project (root scope
       // "" stays unlabeled) so a reviewer can tell WHICH codebase answered.
       const label = r.scopes && h.scope ? `[${h.scope}/] ` : "";
@@ -958,12 +1111,16 @@ export function formatAsk(r: AskResult): string {
       lines.push(`   ${h.pointer}`);
       if (h.snippet) lines.push(`   ${h.snippet}`);
       if (h.related?.length) lines.push(`   related: ${h.related.join(", ")}`);
-      if (h.code) lines.push("", "```", h.code, "```");
+      if (h.code && !weak) lines.push("", "```", h.code, "```");
       lines.push("");
     });
     lines.push(...scopeFooterLines(r));
   }
   const body = lines.join("\n").trimEnd();
+  // No savings footer on a weak pack: the estimate is "this pack vs reading
+  // those files whole", and with the source withheld it would claim a large
+  // saving for having answered less. Weak output should not look like a win.
+  if (weak) return body + weakMatchNote(r, Math.min(WEAK_HIT_CAP, r.hits.length), r.hits.length) + "\n";
   return body + askSavingsFooter(r, body) + escalationNudge(r) + "\n";
 }
 

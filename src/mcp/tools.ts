@@ -161,7 +161,7 @@ function callWorkspaceTool(
       const limit = typeof args.limit === 'number' ? args.limit : 5;
       const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
       const r = federateAsk(root, dirOverride, query, { limit, source: true, full: args.full === true, in: inArg });
-      return { text: formatAsk(r), isError: false };
+      return { text: formatAsk(r, { force: args.full === true }), isError: false };
     }
     case 'graft_trace_calls': {
       const symbol = String(args.symbol ?? args.file ?? '');
@@ -267,7 +267,7 @@ function callSingleTool(
         const engine = new Graft({ contextDir: dirOverride });
         const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
         const r = engine.ask(root, query, { limit, source: true, full: args.full === true, in: inArg });
-        return { text: formatAsk(r), isError: false };
+        return { text: formatAsk(r, { force: args.full === true }), isError: false };
       }
       case 'graft_file_api': {
         const file = String(args.file ?? '');

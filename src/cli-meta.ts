@@ -147,3 +147,28 @@ export function runUpgrade(moduleUrl: string): UpgradeResult {
   const newVersion = readGlobalInstalledVersion(PKG_NAME) ?? getNpmViewVersion(PKG_NAME).version ?? oldVersion;
   return { ran: true, ok: true, oldVersion, newVersion };
 }
+
+/** Which LLM layers a `graft build` invocation should actually run.
+ *
+ * There are two, with very different economics, and they were previously
+ * conflated under one `--deep` boolean resolved inline in the action handler:
+ *
+ *   concepts — the prose map in `graft/*.md`. One summarize call per file plus a
+ *              synthesis pass over batches. The most expensive layer.
+ *   meaning  — per-symbol summary + crux on the wiring nodes. One call per file,
+ *              and the crux is what caps an `ask` hit at ~8 lines instead of the
+ *              whole definition span.
+ *
+ * Only the second one pays off per token, so `--crux` buys it alone. Neither can
+ * run without a key; a keyless build still gets a rule-built crux at `ask` time,
+ * which is close in size but not in judgement — hence the wording of the warning.
+ */
+export function resolveBuildLayers(opts: {
+  deep?: boolean;
+  crux?: boolean;
+  hasApiKey: boolean;
+}): { concepts: boolean; llm: boolean; degraded: boolean } {
+  const wanted = !!(opts.deep || opts.crux);
+  if (wanted && !opts.hasApiKey) return { concepts: false, llm: false, degraded: true };
+  return { concepts: !!opts.deep, llm: wanted, degraded: false };
+}

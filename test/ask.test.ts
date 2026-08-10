@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildGraph } from "../src/graph/build.js";
-import { ask, formatAsk, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
+import { ask, formatAsk, isWeakMatch, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
 
 test("isTestPath: de-ranks test files, not real source", () => {
   for (const p of ["server/download_test.go", "packages/x/tests/foo.test.tsx", "a/__tests__/b.ts", "src/api.spec.ts", "pkg/foo/bar_test.go"])
@@ -809,6 +809,166 @@ test("ask with source inlines the actual span from disk", async () => {
     assert.match(hit.code, /return a \+ b;/, "inlined code is the real definition body");
     // formatAsk renders it as a fenced block so it drops into agent context.
     assert.match(formatAsk(r), /```[\s\S]*return a \+ b;[\s\S]*```/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The pull-channel strength gate.
+ *
+ * `relevantRetrieval` (claude/format.ts) has gated the PUSH channel on
+ * STRONG_FLOOR / HIGH_FLOOR for a while. The pull channel had no such gate: a
+ * query the retriever scored 0.05 came back with its full top-N and source
+ * inlined, rendered identically to a 0.9 match. That is what made the
+ * django-13121 SWE-bench regression possible — a forced `graft ask` on a
+ * no-strong-match problem statement inlined 6,289 chars of the wrong code and
+ * the episode timed out at +28% tokens.
+ *
+ * The fixture query below shares no term with any symbol NAME, so it lands
+ * under both floors while still producing hits.
+ */
+test("weak lexical match: pointers only, no inlined source, and a named next move", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "intermittent flakiness during nightly deployment windows", { source: true });
+    if (!r.hits.length) return; // nothing matched at all; the empty path covers that
+    assert.ok(isWeakMatch(r), "this query should score under both floors");
+    const out = formatAsk(r);
+    assert.doesNotMatch(out, /```/, "a weak pack must not inline source");
+    assert.match(out, /LOW CONFIDENCE/, "the pack must say it is unsure");
+    assert.match(out, /graft grep/, "and must name the productive next tool");
+    assert.doesNotMatch(out, /tokens saved/, "a weak pack must not claim a saving for answering less");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("weak lexical match: --full/force overrules the gate and inlines source", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "intermittent flakiness during nightly deployment windows", { source: true });
+    if (!r.hits.length || !r.hits.some((h) => h.code)) return;
+    const out = formatAsk(r, { force: true });
+    assert.match(out, /```/, "an explicit --full is the caller overruling the score on purpose");
+    assert.doesNotMatch(out, /LOW CONFIDENCE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("strong lexical match is untouched by the gate: source still inlined", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "addNumbers", { source: true });
+    assert.ok(!isWeakMatch(r), "an exact symbol-name hit is not weak");
+    assert.match(formatAsk(r), /```[\s\S]*return a \+ b;[\s\S]*```/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("structural results are never gated — a resolved who-calls IS the answer", async () => {
+  const dir = makeFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "callers of addNumbers", { source: true });
+    if (r.mode !== "structural") return;
+    assert.ok(!isWeakMatch(r), "structural mode carries no coverage score and must never be weak");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Fixture with the two shapes the rule crux treats differently: a container
+ * whose value is its member list, and a function far longer than the crux
+ * budget but still under the old 80-line span cap — i.e. a definition the old
+ * fallback inlined in full. */
+function ruleCruxFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-rulecrux-"));
+  const body = Array.from({ length: 60 }, (_, i) => `    step_${i} = compute(value, ${i})`).join("\n");
+  writeFileSync(
+    join(dir, "engine.py"),
+    `class DurationEngine:\n` +
+      `    """Handles duration arithmetic across backends."""\n\n` +
+      `    def __init__(self, connection):\n        self.connection = connection\n\n` +
+      `    def as_sqlite(self, compiler, connection):\n        return "sqlite"\n\n` +
+      `    def as_mysql(self, compiler, connection):\n        return "mysql"\n\n\n` +
+      `def temporal_subtraction(value, connection):\n` +
+      `    """Subtract two temporal values."""\n` +
+      `    if value is None:\n        return None\n${body}\n    return step_59\n`,
+  );
+  return dir;
+}
+
+/**
+ * Without an API key there is no LLM crux, and the fallback used to be the whole
+ * definition capped at MAX_SPAN_LINES = 80 — so a keyless build inlined up to 10x
+ * more per hit than a paid one. That gap is most of what the SWE-bench graft arm
+ * was paying for, since its container builds structurally on purpose.
+ */
+test("rule crux: a long function inlines its opening, not the whole span", async () => {
+  const dir = ruleCruxFixture();
+  try {
+    await buildGraph(dir); // structural: no summarizer, so no LLM crux
+    const r = ask(dir, "temporal_subtraction", { source: true });
+    const hit = r.hits.find((h) => h.title.startsWith("temporal_subtraction"));
+    assert.ok(hit?.code, "source should be inlined");
+    assert.match(hit.code, /def temporal_subtraction/, "keeps the signature");
+    assert.match(hit.code, /Subtract two temporal values/, "keeps the docstring");
+    assert.match(hit.code, /more lines; full definition at/, "marks the truncation and the pointer");
+    assert.doesNotMatch(hit.code, /step_59/, "must not reach the end of a 60-line body");
+    assert.ok(hit.code.split("\n").length <= 10, `crux stayed small (got ${hit.code.split("\n").length} lines)`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rule crux: a class inlines its member signatures, not its first lines", async () => {
+  const dir = ruleCruxFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "DurationEngine", { source: true });
+    const hit = r.hits.find((h) => h.title.startsWith("DurationEngine · class"));
+    assert.ok(hit?.code, "source should be inlined");
+    // The whole API, which is what a container is FOR — not the __init__ body.
+    for (const m of ["__init__", "as_sqlite", "as_mysql"])
+      assert.ok(hit.code.includes(m), `member ${m} should be listed`);
+    assert.doesNotMatch(hit.code, /self\.connection = connection/, "member bodies are not inlined");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rule crux: --full still returns the whole span", async () => {
+  const dir = ruleCruxFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "temporal_subtraction", { source: true, full: true });
+    const hit = r.hits.find((h) => h.title.startsWith("temporal_subtraction"));
+    assert.ok(hit?.code, "source should be inlined");
+    assert.match(hit.code, /step_59/, "--full is the escape hatch and must not be truncated to a crux");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rule crux never overrides an LLM crux when the graph carries one", async () => {
+  const dir = ruleCruxFixture();
+  try {
+    await buildGraph(dir);
+    const p = join(dir, "graft", ".graph", "wiring.json");
+    const g = JSON.parse(readFileSync(p, "utf8"));
+    const node = g.nodes.find((n: { name: string }) => n.name === "temporal_subtraction");
+    assert.ok(node, "fixture node should exist");
+    node.crux = { code: "LLM_CHOSEN_EXCERPT" };
+    writeFileSync(p, JSON.stringify(g));
+    const r = ask(dir, "temporal_subtraction", { source: true });
+    const hit = r.hits.find((h) => h.title.startsWith("temporal_subtraction"));
+    assert.match(hit!.code!, /LLM_CHOSEN_EXCERPT/, "a paid crux still wins over the rule");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

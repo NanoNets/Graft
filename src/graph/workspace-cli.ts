@@ -24,7 +24,11 @@ import {
 } from "./workspace.js";
 
 export interface WorkspaceBuildOptions {
+  /** Run the prose concept pass (graft/*.md) on each child. `--deep` only. */
   deep: boolean;
+  /** Run the per-symbol summary/crux pass on each child. Set by `--deep` OR
+   * `--crux`; kept separate so `--crux` does not drag the prose pass along. */
+  llm?: boolean;
   extensions?: string[];
   concurrency?: number;
   /** Provider/model/key config for child builds — WITHOUT any contextDir
@@ -51,7 +55,7 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
     }
     const engine = new Graft({ ...opts.childConfig, contextDir: undefined });
     if (opts.deep) await engine.init(childDir, { extensions: opts.extensions });
-    const g = await engine.graph(childDir, { llm: opts.deep, concurrency: opts.concurrency });
+    const g = await engine.graph(childDir, { llm: opts.llm ?? opts.deep, concurrency: opts.concurrency });
     console.log(`✓ ${childName}/: ${g.nodes} nodes, ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
     for (const e of g.errors) console.error(`✗ ${childName}/: ${e}`);
   };
@@ -80,7 +84,7 @@ export function runWorkspaceAsk(
 ): void {
   const r = federateAsk(root, override, query, { limit: opts.limit, source: opts.source, full: opts.full, in: opts.in });
   if (opts.json) console.log(JSON.stringify(r, null, 2));
-  else process.stdout.write(formatAsk(r));
+  else process.stdout.write(formatAsk(r, { force: !!opts.full }));
 }
 
 export function runWorkspaceGrep(

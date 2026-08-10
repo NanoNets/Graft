@@ -9,6 +9,7 @@ import {
   resolvePackageJsonPath,
   readCurrentVersion,
   isRunningViaNpx,
+  resolveBuildLayers,
 } from '../src/cli-meta.js';
 
 // --- formatVersionReport: pure formatting, injected npm-view results (no network) ---
@@ -86,4 +87,35 @@ test('isRunningViaNpx is false for a regular global install', () => {
     join(sep, 'usr', 'local', 'lib', 'node_modules', '@nanonets', 'graft', 'dist', 'cli.js'),
   ).href;
   assert.equal(isRunningViaNpx(globalPath), false);
+});
+
+
+// --- resolveBuildLayers: which LLM passes a build actually runs ---
+
+test('resolveBuildLayers: default build runs neither LLM layer', () => {
+  assert.deepEqual(resolveBuildLayers({ hasApiKey: true }), { concepts: false, llm: false, degraded: false });
+});
+
+test('resolveBuildLayers: --deep runs both layers', () => {
+  assert.deepEqual(resolveBuildLayers({ deep: true, hasApiKey: true }), { concepts: true, llm: true, degraded: false });
+});
+
+/** The whole point of the flag: the crux without the prose bill. */
+test('resolveBuildLayers: --crux runs meaning only, never the concept pass', () => {
+  assert.deepEqual(resolveBuildLayers({ crux: true, hasApiKey: true }), { concepts: false, llm: true, degraded: false });
+});
+
+test('resolveBuildLayers: --deep --crux is still --deep, not an error', () => {
+  assert.deepEqual(resolveBuildLayers({ deep: true, crux: true, hasApiKey: true }), { concepts: true, llm: true, degraded: false });
+});
+
+/** No key degrades to the structural build rather than failing: `ask` still
+ * truncates with a rule-built crux, so the pack stays small either way. */
+test('resolveBuildLayers: no API key degrades both layers off and flags it', () => {
+  assert.deepEqual(resolveBuildLayers({ deep: true, hasApiKey: false }), { concepts: false, llm: false, degraded: true });
+  assert.deepEqual(resolveBuildLayers({ crux: true, hasApiKey: false }), { concepts: false, llm: false, degraded: true });
+});
+
+test('resolveBuildLayers: no key with no flags is not a degradation', () => {
+  assert.equal(resolveBuildLayers({ hasApiKey: false }).degraded, false);
 });
