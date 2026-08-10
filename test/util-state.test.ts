@@ -1,5 +1,5 @@
 /**
- * A5 — persisted --include-dir override.
+ * W4 — persisted --include-dir override.
  *
  * `graft build --include-dir <name>` needs a per-repo, persisted record of
  * which SKIP_DIRS names to include, so a LATER no-flag build (or the hooks/

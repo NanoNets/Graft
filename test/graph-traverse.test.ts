@@ -156,7 +156,7 @@ test("resolveSymbol: unknown symbol returns empty array", () => {
   assert.deepEqual(resolveSymbol(g, "NoSuchSymbol"), []);
 });
 
-test("resolveSymbol: qualified query matches both the bare and ordinal-suffixed ids of a duplicated definition (A3)", () => {
+test("resolveSymbol: qualified query matches both the bare and ordinal-suffixed ids of a duplicated definition (V1)", () => {
   // extract.ts mints `~2`, `~3`, ... on a document-order duplicate definition
   // (same name reopened) rather than shadowing the first — see extract.ts's
   // mint-time uniqueness comment. Before this fix, a qualified query like

@@ -71,7 +71,7 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
     } catch {
       continue; // unreadable now → its nodes show up as `removed` below
     }
-    if (source === null) continue; // unsupported encoding (e.g. UTF-16BE)
+    if (source === null) continue;
     try {
       const { nodes } = extractFile(relPosix(root, file), source, lang);
       for (const n of nodes) current.set(n.id, n.body_hash);

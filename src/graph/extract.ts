@@ -10,12 +10,15 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+// Deep import avoids the package's extensionless-main DEP0151 warning under ESM.
+import PowerShell from "tree-sitter-powershell/bindings/node/index.js";
+import Rust from "tree-sitter-rust/bindings/node/index.js";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
-import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
+import { collectBindings, goReceiverVarOf, psTypeName, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "powershell" | "rust";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,6 +47,9 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  { ext: ".psm1", grammar: "powershell", label: "powershell" },
+  { ext: ".ps1", grammar: "powershell", label: "powershell" },
+  { ext: ".rs", grammar: "rust", label: "rust" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
@@ -80,6 +86,7 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
+  lang?: Language; // Language-specific name-resolution domain, when required.
 }
 
 export interface ExtractResult {
@@ -149,11 +156,40 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+const PS_KINDS: Record<string, Kind> = {
+  function_statement: "function",
+  class_statement: "class",
+  enum_statement: "enum",
+  class_method_definition: "method",
+};
+
+const RUST_KINDS: Record<string, Kind> = {
+  function_item: "function",
+  function_signature_item: "function",
+  struct_item: "struct",
+  enum_item: "enum",
+  trait_item: "interface",
+  type_item: "type",
+  union_item: "struct",
+  macro_definition: "function",
+};
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  powershell: PS_KINDS,
+  rust: RUST_KINDS,
+};
+
+const CALL_NODE_TYPES: Record<Language, ReadonlySet<string>> = {
+  typescript: new Set(["call_expression"]),
+  tsx: new Set(["call_expression"]),
+  python: new Set(["call"]),
+  go: new Set(["call_expression"]),
+  powershell: new Set(["command", "invokation_expression"]),
+  rust: new Set(["call_expression", "macro_invocation"]),
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +205,8 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  powershell: PowerShell,
+  rust: Rust,
 };
 
 export interface WalkCtx {
@@ -183,6 +221,10 @@ export interface WalkCtx {
   enclosingClass: string | null; // nearest enclosing class (py/ts `self`/`this`)
   goReceiverVar: string | null; // Go receiver var, e.g. `w` in `func (w *Worker)`
   importedSymbols: ReadonlyMap<string, { name: string; specifier: string }>;
+  rustInImpl: boolean;
+  rustTraitImpl: boolean;
+  rustCfgTest: boolean;
+  rustInlineModDepth: number;
 }
 
 /** A definition we're about to emit, normalized across the shapes we handle. */
@@ -194,11 +236,12 @@ interface DefDescriptor {
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
 }
 
-/** tree-sitter's string `parse()` fails with "Invalid argument" on any input
- * ≥ 32 KB, which silently drops large files — often the most important ones (a
- * 2000-line command module, a core tab implementation). The callback form has
- * no such limit as long as each returned chunk is under 32 KB, so we always feed
- * the source in <32 KB slices. Code-unit indexing matches `String.slice`. */
+/** The chunked-callback parse predates tree-sitter 0.25, which lifted the
+ * string `parse()` size limit that used to fail with "Invalid argument" on
+ * any input ≥ 32 KB and silently drop large files — often the most important
+ * ones (a 2000-line command module, a core tab implementation). Kept because
+ * it is behavior-identical and exercised by existing tests. Code-unit
+ * indexing matches `String.slice`. */
 const PARSE_CHUNK = 16384;
 function parseSource(source: string): Parser.SyntaxNode {
   return parser.parse((index: number) => source.slice(index, index + PARSE_CHUNK)).rootNode;
@@ -241,6 +284,10 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
     enclosingClass: null,
     goReceiverVar: null,
     importedSymbols,
+    rustInImpl: false,
+    rustTraitImpl: false,
+    rustCfgTest: false,
+    rustInlineModDepth: 0,
   };
   // Every id minted this file, seeded with the file node's own id (`rel`) so a
   // top-level definition can never collide with it. Threaded as its own
@@ -249,24 +296,11 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
   // when it's actually accidental shared mutable state across the whole walk.
   const minted = new Set<string>([rel]);
   for (const child of root.namedChildren) walk(child, ctx, nodes, rawEdges, minted);
+  if (lang === "rust") rawEdges.push(...rustHeritageEdges(root, nodes, rel));
   // nodes[0] is the file node; the rest are its symbols. Index the module-level
   // residual on the file node so a term outside every symbol still surfaces it.
   nodes[0].body_text = fileResidual(source, nodes.slice(1));
   return { nodes, rawEdges };
-}
-
-/** Mint-time uniqueness: a document-order duplicate (same name reopened, or two
- * sibling defs that happen to collide) gets `~2`, `~3`, ... instead of silently
- * shadowing the first. The while-loop (not a single `~2` guess) is what makes
- * this collision-proof: a source name that itself ends in ~N would collide
- * with a single-guess suffix, so this keeps incrementing until it finds a
- * truly free id rather than trusting one candidate suffix is unused. */
-export function mintId(base: string, minted: Set<string>): string {
-  let id = base;
-  let k = 2;
-  while (minted.has(id)) id = `${base}~${k++}`;
-  minted.add(id);
-  return id;
 }
 
 function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEdge[], minted: Set<string>): void {
@@ -276,7 +310,16 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // `name` stays the bare symbol name so member-call resolution matches it.
     const idPart = desc.idName ?? desc.name;
     const base = `${ctx.rel}#${[...ctx.scope, idPart].join(".")}`;
-    const id = mintId(base, minted);
+    // Mint-time uniqueness: a document-order duplicate (same name reopened, or two
+    // sibling defs that happen to collide) gets `~2`, `~3`, ... instead of silently
+    // shadowing the first. The while-loop (not a single `~2` guess) is what makes
+    // this collision-proof against a literal source name that already contains
+    // `~N` (PowerShell can forge one) — it keeps incrementing until truly free
+    // rather than trusting one candidate suffix is unused.
+    let id = base;
+    let k = 2;
+    while (minted.has(id)) id = `${base}~${k++}`;
+    minted.add(id);
     const isGoMethod = ctx.lang === "go" && node.type === "method_declaration";
     // The bare name of this node's OWN immediate enclosing class/receiver — for a
     // Go method that's its receiver type (methods aren't nested, so ctx.enclosingClass
@@ -297,7 +340,11 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "powershell"
+              ? psExported(node, ctx)
+              : ctx.lang === "rust"
+                ? rustExported(node, ctx)
+                : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -311,7 +358,12 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class heritage
     if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
 
-    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
+    const enclosingClass =
+      desc.kind === "class" || (ctx.lang === "rust" && desc.kind === "interface")
+        ? desc.name
+        : isGoMethod
+          ? goReceiverType(node)
+          : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
@@ -328,10 +380,38 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     return;
   }
 
+  if (ctx.lang === "rust" && node.type === "impl_item") {
+    const owner = rustTypeName(node.childForFieldName("type"));
+    if (owner) {
+      const childCtx: WalkCtx = {
+        ...ctx,
+        scope: [...ctx.scope, owner],
+        enclosingClass: owner,
+        rustInImpl: true,
+        rustTraitImpl: node.childForFieldName("trait") !== null,
+      };
+      for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
+      return;
+    }
+  }
+
+  if (ctx.lang === "rust" && node.type === "mod_item" && node.childForFieldName("body")) {
+    const name = node.childForFieldName("name")?.text;
+    if (name) {
+      const childCtx: WalkCtx = {
+        ...ctx,
+        scope: [...ctx.scope, name],
+        rustCfgTest: ctx.rustCfgTest || hasRustAttribute(node, "cfg", "test"),
+        rustInlineModDepth: ctx.rustInlineModDepth + 1,
+      };
+      for (const child of node.namedChildren) walk(child, childCtx, out, edges, minted);
+      return;
+    }
+  }
+
   // not a definition — capture calls/imports/references, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
-  if (node.type === callType) {
-    const callee = calleeName(node, ctx.lang);
+  if (CALL_NODE_TYPES[ctx.lang].has(node.type) && !psSkipsCall(node, ctx.lang) && !rustSkipsCall(node, ctx.lang)) {
+    const callee = calleeName(node, ctx.lang, ctx.rustInlineModDepth);
     if (callee) {
       const callEdge: RawEdge = {
         source: ctx.parentId,
@@ -339,19 +419,32 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: callee.name,
         viaMember: callee.viaMember,
         file: ctx.rel,
+        ...(callee.specifier ? { specifier: callee.specifier } : {}),
+        ...(ctx.lang === "powershell" || ctx.lang === "rust" ? { lang: ctx.lang } : {}),
       };
-      const recvType = resolveRecvType(callee.receiver, ctx);
+      const recvType = callee.recvType ?? resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
   } else if (isImport(node, ctx.lang)) {
-    const spec = importSpecifier(node, ctx.lang);
-    if (spec) edges.push({ source: ctx.rel, relation: "imports", specifier: spec, file: ctx.rel });
+    const specs = ctx.lang === "rust" ? rustImportSpecifiers(node, ctx.scope) : [importSpecifier(node, ctx.lang)];
+    for (const spec of specs) {
+      if (!spec) continue;
+      edges.push({
+        source: ctx.rel,
+        relation: "imports",
+        specifier: spec,
+        file: ctx.rel,
+        ...(ctx.lang === "powershell" || ctx.lang === "rust" ? { lang: ctx.lang } : {}),
+      });
+    }
     // Imported identifiers are declarations, not uses. The import-binding pass
     // above already recorded them, so do not descend and emit false references.
-    return;
+    // PowerShell is the exception: a dot-source can wrap a whole script block
+    // (`. { ... }`), whose body must still be walked for its own calls.
+    if (ctx.lang !== "powershell") return;
   } else if (
-    node.type === "identifier" &&
-    !isDirectCallee(node, callType) &&
+    (node.type === "identifier" || (ctx.lang === "rust" && node.type === "type_identifier")) &&
+    !isDirectCallee(node, CALL_NODE_TYPES[ctx.lang]) &&
     !isDeclarationName(node)
   ) {
     const imported = ctx.importedSymbols.get(node.text);
@@ -362,6 +455,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         name: imported.name,
         specifier: imported.specifier,
         file: ctx.rel,
+        ...(ctx.lang === "rust" ? { lang: ctx.lang } : {}),
       });
     }
   }
@@ -379,9 +473,20 @@ function collectImportedSymbols(
   lang: Language,
 ): Map<string, { name: string; specifier: string }> {
   const out = new Map<string, { name: string; specifier: string }>();
-  if (lang !== "typescript" && lang !== "tsx") return out;
+  if (lang !== "typescript" && lang !== "tsx" && lang !== "rust") return out;
 
   const visit = (node: Parser.SyntaxNode): void => {
+    if (lang === "rust" && node.type === "use_declaration") {
+      const argument = node.childForFieldName("argument");
+      if (!argument) return;
+      for (const leaf of rustUseLeaves(argument)) {
+        const specifier = rustConsumeInlineModPrefix(leaf.specifier, rustInlineModDepth(node));
+        if (specifier && leaf.name && leaf.local && /^[A-Z]/.test(leaf.name) && /^[A-Z]/.test(leaf.local)) {
+          out.set(leaf.local, { name: leaf.name, specifier });
+        }
+      }
+      return;
+    }
     if (node.type === "import_statement") {
       const specifier = importSpecifier(node, lang);
       if (!specifier) return;
@@ -406,6 +511,66 @@ function collectTsImportBindings(
     return;
   }
   for (const child of node.namedChildren) collectTsImportBindings(child, specifier, out);
+}
+
+interface RustUseLeaf {
+  specifier: string;
+  name?: string;
+  local?: string;
+}
+
+function rustUseLeaves(node: Parser.SyntaxNode, prefix = ""): RustUseLeaf[] {
+  if (node.type === "use_list") return node.namedChildren.flatMap((child) => rustUseLeaves(child, prefix));
+  if (node.type === "scoped_use_list") {
+    const path = node.childForFieldName("path")?.text;
+    const list = node.namedChildren.find((child) => child.type === "use_list");
+    return path && list ? rustUseLeaves(list, rustJoinPath(prefix, path)) : [];
+  }
+  if (node.type === "use_as_clause") {
+    const path = node.childForFieldName("path");
+    const local = node.childForFieldName("alias")?.text;
+    const name = path ? rustPathLastName(path) : null;
+    return path && local && name
+      ? [{ specifier: rustJoinPath(prefix, path.text), name, local }]
+      : [];
+  }
+  if (node.type === "use_wildcard" || node.type === "self") {
+    return [{ specifier: rustJoinPath(prefix, node.text) }];
+  }
+  if (node.type === "identifier" || node.type === "scoped_identifier") {
+    const name = rustPathLastName(node);
+    return name
+      ? [{ specifier: rustJoinPath(prefix, node.text), name, local: name }]
+      : [];
+  }
+  return [];
+}
+
+function rustJoinPath(prefix: string, path: string): string {
+  return prefix ? `${prefix}::${path}` : path;
+}
+
+function rustPathLastName(node: Parser.SyntaxNode): string | null {
+  return node.childForFieldName("name")?.text ?? (node.type === "identifier" ? node.text : null);
+}
+
+function rustInlineModDepth(node: Parser.SyntaxNode): number {
+  let depth = 0;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.type === "mod_item" && parent.childForFieldName("body")) depth++;
+  }
+  return depth;
+}
+
+function rustConsumeInlineModPrefix(specifier: string, depth: number): string | null {
+  if (depth === 0) return specifier;
+  const segments = specifier.split("::");
+  if (segments[0] === "self") return null;
+  let supers = 0;
+  while (segments[supers] === "super") supers++;
+  if (supers === 0) return specifier;
+  if (supers <= depth) return null;
+  return segments.slice(depth).join("::");
 }
 
 /**
@@ -454,21 +619,23 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 }
 
 /** A direct invocation already emits a stronger `calls` edge. */
-function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
+function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
-  return parent?.type === callType && parent.childForFieldName("function") === node;
+  return parent != null && callTypes.has(parent.type) && parent.childForFieldName("function")?.id === node.id;
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return parent?.childForFieldName("name")?.id === node.id;
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "powershell") return describePowerShell(node, ctx);
+  if (ctx.lang === "rust") return describeRust(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -498,6 +665,83 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     }
   }
   return null;
+}
+
+function describeRust(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = ctx.kinds[node.type];
+  if (!mapped) return null;
+  const rawName = node.childForFieldName("name")?.text;
+  if (!rawName) return null;
+  const name = node.type === "macro_definition" ? `${rawName}!` : rawName;
+  const directImplMember =
+    ctx.rustInImpl && ctx.enclosingKind !== "function" && ctx.enclosingKind !== "method";
+  const kind =
+    mapped === "function" &&
+    node.type !== "macro_definition" &&
+    (directImplMember || ctx.enclosingKind === "interface")
+      ? "method"
+      : mapped;
+  const body = node.type === "macro_definition"
+    ? node.descendantsOfType("token_tree")[0]
+    : node.childForFieldName("body");
+  return { name, kind, headerEnd: body ? body.startIndex : node.endIndex, hashNode: node };
+}
+
+function rustTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "generic_type" || node.type === "reference_type") {
+    return rustTypeName(node.childForFieldName("type"));
+  }
+  if (node.type === "scoped_type_identifier") {
+    return node.childForFieldName("name")?.text ?? null;
+  }
+  if (node.type === "type_identifier" || node.type === "identifier") return node.text;
+  return null;
+}
+
+function rustHeritageEdges(root: Parser.SyntaxNode, nodes: NodeV1[], rel: string): RawEdge[] {
+  const impls: Array<{ owner: string; trait: string }> = [];
+  const visit = (node: Parser.SyntaxNode): void => {
+    if (node.type === "impl_item") {
+      const owner = rustTypeName(node.childForFieldName("type"));
+      const trait = rustTypeName(node.childForFieldName("trait"));
+      if (owner && trait) impls.push({ owner, trait });
+    }
+    for (const child of node.namedChildren) visit(child);
+  };
+  visit(root);
+  const typeKinds = new Set<Kind>(["class", "struct", "interface", "type", "enum"]);
+  return impls.flatMap(({ owner, trait }) => {
+    const target = nodes.find((node) => node.name === owner && typeKinds.has(node.kind));
+    return target
+      ? [{ source: target.id, relation: "extends", name: trait, file: rel, lang: "rust" as const }]
+      : [];
+  });
+}
+
+/** Function-definition scope qualifiers PowerShell allows (`function global:Foo`,
+ * `script:Foo`, …). Call sites already strip these (see psCalleeName below) — a
+ * definition's OWN name must too, or a globally-qualified def stores its
+ * verbatim "global:Foo" name and can never match a call site's stripped "Foo". */
+const PS_SCOPE_QUALIFIER = /^(global|script|local|private):/i;
+
+/** PowerShell definitions have no fields, so names and header boundaries are positional. */
+function describePowerShell(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const kind = ctx.kinds[node.type];
+  if (!kind) return null;
+  const nameNode =
+    node.type === "function_statement"
+      ? node.namedChildren.find((c) => c.type === "function_name")
+      : node.namedChildren.find((c) => c.type === "simple_name");
+  if (!nameNode) return null;
+  const open = node.children.find((c) => c.type === "{");
+  const name = node.type === "function_statement" ? nameNode.text.replace(PS_SCOPE_QUALIFIER, "") : nameNode.text;
+  return {
+    name,
+    kind,
+    headerEnd: open?.startIndex ?? node.endIndex,
+    hashNode: node,
+  };
 }
 
 /** Go definition shapes: top-level funcs, receiver methods, and named types
@@ -572,6 +816,17 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     }
     return edges;
   }
+  if (ctx.lang === "powershell") {
+    // PS class base lists conflate the base class and any implemented interfaces
+    // (no separate `implements` clause) — every entry emits "extends" here.
+    // Harmless: PS cannot itself define an interface, so an interface entry is
+    // always an external type anyway (never a repo symbol misclassified as a class).
+    const bases = node.namedChildren.filter((c) => c.type === "simple_name").slice(1);
+    for (const base of bases) {
+      edges.push({ source: classId, relation: "extends", name: base.text, file: ctx.rel, lang: ctx.lang });
+    }
+    return edges;
+  }
   const heritage = node.namedChildren.find((c) => c.type === "class_heritage");
   for (const clause of heritage?.namedChildren ?? []) {
     const relation: Relation | null =
@@ -593,7 +848,10 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
-): { name: string; viaMember: boolean; receiver?: string } | null {
+  rustInlineDepth = 0,
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
+  if (lang === "powershell") return psCalleeName(node);
+  if (lang === "rust") return rustCalleeName(node, rustInlineDepth);
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -611,6 +869,89 @@ function calleeName(
   if ((lang === "typescript" || lang === "tsx") && fn.type === "member_expression") {
     const p = fn.childForFieldName("property") ?? fn.namedChildren.at(-1);
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
+  }
+  return null;
+}
+
+function rustCalleeName(
+  node: Parser.SyntaxNode,
+  inlineModDepth: number,
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string; specifier?: string } | null {
+  if (node.type === "macro_invocation") {
+    const macro = node.childForFieldName("macro");
+    const name = macro ? rustPathLastName(macro) : null;
+    return name ? { name: `${name}!`, viaMember: false } : null;
+  }
+  let fn = node.childForFieldName("function");
+  while (fn?.type === "generic_function") fn = fn.childForFieldName("function");
+  if (fn?.type === "identifier") return { name: fn.text, viaMember: false };
+  if (fn?.type === "field_expression") {
+    const field = fn.childForFieldName("field");
+    if (field?.type !== "field_identifier") return null;
+    const value = fn.childForFieldName("value");
+    const receiver = value?.type === "identifier" || value?.type === "self" ? value.text : undefined;
+    return { name: field.text, viaMember: true, receiver };
+  }
+  if (fn?.type !== "scoped_identifier") return null;
+  const name = fn.childForFieldName("name")?.text;
+  const path = fn.childForFieldName("path");
+  if (!name || !path) return null;
+  if (path.type === "identifier" && path.text === "Self") {
+    return { name, viaMember: true, receiver: "self" };
+  }
+  if (path.type === "identifier" && /^[A-Z]/.test(path.text)) {
+    return { name, viaMember: true, recvType: path.text };
+  }
+  const specifier = rustConsumeInlineModPrefix(path.text, inlineModDepth);
+  return specifier
+    ? { name, viaMember: false, specifier }
+    : { name, viaMember: false };
+}
+
+function psCalleeName(
+  node: Parser.SyntaxNode,
+): { name: string; viaMember: boolean; receiver?: string; recvType?: string } | null {
+  if (node.type === "command") {
+    const raw = psStaticCommandName(node.childForFieldName("command_name") ?? null);
+    if (!raw) return null;
+    const name = raw
+      .replace(PS_SCOPE_QUALIFIER, "")
+      .replace(/^.*\\/, "");
+    return name ? { name, viaMember: false } : null;
+  }
+  if (node.type !== "invokation_expression") return null;
+  const receiverNode = node.child(0);
+  const member = node.namedChildren.find((c) => c.type === "member_name");
+  if (!receiverNode || !member) return null;
+  if (receiverNode.type === "type_literal") {
+    const recvType = psTypeName(receiverNode);
+    return recvType ? { name: member.text, viaMember: true, recvType } : null;
+  }
+  return { name: member.text, viaMember: true, receiver: receiverNode.text };
+}
+
+/** The static command name text for a `command` node's `command_name` field, or
+ * null when it's absent or names dynamic/string content. Plain commands
+ * (`Get-Helper`) type the field `command_name` directly; the call operator (`&`)
+ * and dot-source (`.`) both wrap it in `command_name_expr` instead — a static
+ * bareword through `&` shows up one level deeper as `path_command_name` →
+ * `path_command_name_token` (a qualified/dotted name like `script:Get-Helper`
+ * types straight to `command_name` even there). A `variable`/`string_literal`/
+ * `script_block_expression`/`parenthesized_expression` child means dynamic or
+ * non-command content — never treated as static. A `path_command_name` can
+ * ALSO carry a `variable` sibling of its `path_command_name_token` (`&
+ * $dir\Get-Helper`) — the trailing token's text alone still reads as a plain
+ * name, so that variable prefix must be checked explicitly rather than
+ * inferred from the token shape. */
+function psStaticCommandName(command: Parser.SyntaxNode | null): string | null {
+  if (!command) return null;
+  if (command.type === "command_name") return command.text;
+  if (command.type !== "command_name_expr") return null;
+  const inner = command.namedChildren[0];
+  if (inner?.type === "command_name") return inner.text;
+  if (inner?.type === "path_command_name") {
+    if (inner.descendantsOfType("variable").length > 0) return null;
+    return inner.namedChildren.find((c) => c.type === "path_command_name_token")?.text ?? null;
   }
   return null;
 }
@@ -645,7 +986,25 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "powershell") return psImportKind(node) !== null;
+  if (lang === "rust") {
+    return node.type === "use_declaration" || (node.type === "mod_item" && !node.childForFieldName("body"));
+  }
   return node.type === "import_statement" || node.type === "import_from_statement";
+}
+
+function rustImportSpecifiers(node: Parser.SyntaxNode, scope: string[]): string[] {
+  if (node.type === "mod_item") {
+    if (hasRustAttribute(node, "path")) return [];
+    const name = node.childForFieldName("name")?.text;
+    return name ? [`self::${[...scope, name].join("::")}`] : [];
+  }
+  const argument = node.childForFieldName("argument");
+  if (!argument) return [];
+  const depth = rustInlineModDepth(node);
+  return rustUseLeaves(argument)
+    .map((leaf) => rustConsumeInlineModPrefix(leaf.specifier, depth))
+    .filter((specifier): specifier is string => specifier !== null);
 }
 
 function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null {
@@ -660,10 +1019,176 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
   }
+  if (lang === "powershell") return psImportSpecifier(node);
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;
   const frag = str.namedChildren.find((c) => c.type === "string_fragment");
   return frag?.text ?? str.text.replace(/^['"]|['"]$/g, "");
+}
+
+type PsImportKind = "dotsource" | "import-module" | "using-module";
+
+/** PowerShell's grammar represents all imports as commands (there is no
+ * using_statement). `$PSScriptRoot` interpolation, Join-Path, wildcard/dynamic
+ * Import-Module, manifest RootModule/NestedModules, and `using namespace`
+ * intentionally remain raw or absent rather than erroring. */
+function psImportKind(node: Parser.SyntaxNode): PsImportKind | null {
+  if (node.type !== "command") return null;
+  const operator = node.namedChildren.find((c) => c.type === "command_invokation_operator");
+  if (operator?.text === ".") return "dotsource";
+  const command = node.childForFieldName("command_name")?.text.toLowerCase();
+  if (command === "import-module") return "import-module";
+  if (command !== "using") return null;
+  const tokens = psCommandElements(node).filter((c) => c.type === "generic_token");
+  return tokens[0]?.text.toLowerCase() === "module" && tokens[1] ? "using-module" : null;
+}
+
+function psCommandElements(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  return node.childForFieldName("command_elements")?.namedChildren ?? [];
+}
+
+function psImportSpecifier(node: Parser.SyntaxNode): string | null {
+  const kind = psImportKind(node);
+  let raw: string | undefined;
+  if (kind === "dotsource") {
+    const commandNameField = node.childForFieldName("command_name") ?? null;
+    // A dot-sourced script block (`. { … }`) or subexpression (`. ( … )`) has no
+    // path at all — classify by the field's NODE TYPE rather than guessing from
+    // its text, so a quoted path that merely starts with `(` (e.g.
+    // `. "(helpers).ps1"`) is never mistaken for one (see psDotSourcePathShaped).
+    if (!psDotSourcePathShaped(commandNameField)) return null;
+    raw = commandNameField?.text;
+  } else if (kind === "import-module") {
+    raw = psImportModuleSpecifier(node) ?? undefined;
+  } else if (kind === "using-module") {
+    raw = psCommandElements(node).filter((c) => c.type === "generic_token")[1]?.text;
+  }
+  if (!raw) return null;
+  return raw.replace(/^['"]|['"]$/g, "").replace(/\\/g, "/");
+}
+
+/** Import-Module's module specifier, parameter-aware: a `-Name` parameter's
+ * value always wins, wherever it falls among the command's elements — in
+ * `-Force -ErrorAction stop`, `-ErrorAction`'s own value ("stop") must never be
+ * mistaken for the module target just because it's the first non-parameter
+ * element left. Without an explicit `-Name`, the specifier is the first element
+ * that is neither a parameter NOR immediately preceded by one (that element
+ * belongs to the preceding parameter, not the module) — this also keeps a
+ * positional specifier before a trailing switch working
+ * (`Import-Module ./Mod.psm1 -Force`). No qualifying candidate → null (no
+ * edge), never a guess. Mirrors bindings.ts's psNewObjectType, which solves the
+ * same parameter-vs-positional ambiguity for `New-Object`. */
+function psImportModuleSpecifier(node: Parser.SyntaxNode): string | null {
+  const elements = psCommandElements(node).filter((c) => c.type !== "command_argument_sep");
+  const nameIdx = elements.findIndex((c) => c.type === "command_parameter" && /^-Name$/i.test(c.text));
+  if (nameIdx !== -1) {
+    const value = elements[nameIdx + 1];
+    return value && value.type !== "command_parameter" ? value.text : null;
+  }
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    if (el.type === "command_parameter") continue;
+    if (elements[i - 1]?.type === "command_parameter") continue; // that param's own value
+    return el.text;
+  }
+  return null;
+}
+
+/** Whether a dot-sourced command's `command_name` field names a real path
+ * rather than a script block or subexpression. A plain bareword path types
+ * this field `command_name` directly. The call operator's `command_name_expr`
+ * wrapper (also used here for `.`) is drilled one level: a qualified/dotted
+ * bareword still types `command_name`, a variable-rooted path (`$dir\Foo.ps1`)
+ * types `path_command_name` — accepted only when its trailing token actually
+ * starts with a path separator, so a property-access-like suffix
+ * (`$obj.Method`, token ".Method") is never mistaken for a path — and a
+ * quoted path types `string_literal` (its surrounding quotes are stripped by
+ * the caller). A POSIX-separator variable-rooted path (`$PSScriptRoot/Foo.ps1`)
+ * parses as `member_access` instead (with a grammar-level ERROR node from the
+ * bare `/`) — accepted only when its text is a bare `$Var/…` shape,
+ * mirroring the backslash form's specifier so `$PSScriptRoot` resolution
+ * sees the same raw text either way. `script_block_expression` (`. { … }`) and
+ * `parenthesized_expression` (`. ( … )`) carry no path at all and are rejected
+ * outright. */
+function psDotSourcePathShaped(commandNameField: Parser.SyntaxNode | null): boolean {
+  if (!commandNameField) return false;
+  if (commandNameField.type === "command_name") return true;
+  if (commandNameField.type !== "command_name_expr") return false;
+  const inner = commandNameField.namedChildren[0];
+  if (inner?.type === "command_name" || inner?.type === "string_literal") return true;
+  if (inner?.type === "path_command_name") {
+    const token = inner.namedChildren.find((c) => c.type === "path_command_name_token")?.text ?? "";
+    return /^[\\/]/.test(token);
+  }
+  if (inner?.type === "member_access") return /^\$[A-Za-z_]\w*\//.test(inner.text);
+  return false;
+}
+
+function psSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
+  if (lang !== "powershell" || node.type !== "command") return false;
+  // psImportKind already returns non-null for every dot-sourced command (whatever
+  // it dot-sources), so this alone keeps `.` out of the call graph. `&` is
+  // deliberately NOT blanket-skipped here — psCalleeName decides per-callee
+  // whether a call-operator target is static (a real call) or dynamic (none).
+  if (psImportKind(node)) return true;
+  return node.childForFieldName("command_name")?.text.toLowerCase() === "using";
+}
+
+const RUST_BUILTIN_MACROS = new Set([
+  "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "vec", "panic",
+  "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "todo",
+  "unimplemented", "unreachable", "matches", "dbg", "include", "include_str", "include_bytes", "concat",
+  "stringify", "env", "option_env", "cfg", "line", "file", "column", "compile_error", "module_path",
+  "thread_local", "macro_rules",
+]);
+
+function rustSkipsCall(node: Parser.SyntaxNode, lang: Language): boolean {
+  if (lang !== "rust" || node.type !== "macro_invocation") return false;
+  const macro = node.childForFieldName("macro");
+  const name = macro ? rustPathLastName(macro) : null;
+  return name !== null && RUST_BUILTIN_MACROS.has(name);
+}
+
+function hasRustAttribute(node: Parser.SyntaxNode, name: string, argument?: string): boolean {
+  let sibling = node.previousNamedSibling;
+  while (sibling?.type === "attribute_item") {
+    const attribute = sibling.namedChildren.find((child) => child.type === "attribute");
+    const identifiers = attribute?.descendantsOfType("identifier") ?? [];
+    const tokenTree = attribute?.namedChildren.find((child) => child.type === "token_tree");
+    const argumentMatches = !argument || tokenTree?.text.replace(/\s+/g, "") === `(${argument})`;
+    if (identifiers[0]?.text === name && argumentMatches) {
+      return true;
+    }
+    sibling = sibling.previousNamedSibling;
+  }
+  return false;
+}
+
+function rustExported(node: Parser.SyntaxNode, ctx: WalkCtx): boolean {
+  if (ctx.rustCfgTest) return false;
+  if (node.type === "macro_definition") return hasRustAttribute(node, "macro_export");
+  if (ctx.enclosingKind === "function" || ctx.enclosingKind === "method") return false;
+  if (ctx.rustInImpl && ctx.rustTraitImpl) return true;
+  if (ctx.enclosingKind === "interface") {
+    let parent = node.parent;
+    while (parent && parent.type !== "trait_item") parent = parent.parent;
+    return parent ? rustHasPublicVisibility(parent) : false;
+  }
+  return rustHasPublicVisibility(node);
+}
+
+function rustHasPublicVisibility(node: Parser.SyntaxNode): boolean {
+  const visibility = node.namedChildren.find((child) => child.type === "visibility_modifier");
+  return visibility !== undefined && !visibility.namedChildren.some((child) => child.type === "self");
+}
+
+/** PowerShell has no file-local syntactic export marker. Export-ModuleMember and
+ * `.psd1` FunctionsToExport need cross-file/manifest context extractFile cannot
+ * see (and the common unquoted Export-ModuleMember list does not parse). Class
+ * members and top-level definitions are public; a function nested inside another
+ * function OR a class method body is local. */
+function psExported(node: Parser.SyntaxNode, ctx: WalkCtx): boolean {
+  return node.type !== "function_statement" || (ctx.enclosingKind !== "function" && ctx.enclosingKind !== "method");
 }
 
 /** Signature = the definition header, whitespace-collapsed, trailing punctuation stripped. */

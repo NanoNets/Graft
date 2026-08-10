@@ -15,7 +15,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { ask, formatAsk, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
 
 test("isTestPath: de-ranks test files, not real source", () => {
-  for (const p of ["server/download_test.go", "packages/x/tests/foo.test.tsx", "a/__tests__/b.ts", "src/api.spec.ts", "pkg/foo/bar_test.go"])
+  for (const p of ["server/download_test.go", "packages/x/tests/foo.test.tsx", "a/__tests__/b.ts", "src/api.spec.ts", "pkg/foo/bar_test.go", "scripts/Foo.Tests.ps1"])
     assert.ok(isTestPath(p), `${p} should be a test path`);
   for (const p of ["server/download.go", "packages/element/src/selection.ts", "src/api.ts", "cmd/root.go"])
     assert.ok(!isTestPath(p), `${p} should NOT be a test path`);
