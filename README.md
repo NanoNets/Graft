@@ -215,7 +215,7 @@ flowchart LR
 
 Every pass is cached by content hash — the LLM ones and the tree-sitter parse alike. Re-running only touches the files that changed, so the second build is fast and cheap (on this repo, 124 files: 0.74s cold, 0.18s after one edited file, 0.18s with nothing changed). `graft build --no-reuse` forces a cold re-parse.
 
-That cheapness is what lets **every query refresh the graph before it answers**. A retrieval call stats the tree against the last build's fingerprint (~3ms), and rebuilds only if something moved — so `ask`/`grep`/`callers`/`skeleton`/`map` describe the code as it is right now, including edits that are unsaved to git: uncommitted, unstaged, or staged all look the same to graft, which never reads git at all. The refresh is structural and `$0`; it never calls the LLM. Turn it off per-command with `--no-refresh`, or everywhere with `GRAFT_NO_REFRESH=1`.
+That cheapness is what lets **every query refresh the graph before it answers**. A retrieval call stats the tree against the last build's fingerprint (~3ms), and rebuilds only if something moved — so `ask`/`grep`/`callers`/`skeleton`/`map` describe the code as it is right now, including edits that are unsaved to git: uncommitted, unstaged, or staged all look the same to graft. Git determines the visible file set; freshness compares the working-tree bytes rather than commit or index state. The refresh is structural and `$0`; it never calls the LLM. Turn it off per-command with `--no-refresh`, or everywhere with `GRAFT_NO_REFRESH=1`.
 
 Alongside the markdown graph, `graft build` builds `graft/.graph/wiring.json` — a per-symbol code graph — plus a per-file wiring card mirroring your source tree. Tier 1 is pure tree-sitter (every function, class, and call edge; deterministic, no model, no network), which is why plain `graft build` needs no key. The `--deep` pass adds a one-line summary and a crux excerpt per symbol, cached by body hash.
 
@@ -419,9 +419,9 @@ scripts/            2 files · 0 symbols
 hotspots: contextDirFor · function · src/context/node-file.ts:L100-L103 · 21←  wiringPath · function · src/graph/write.ts:L20-L22 · 14←  buildGraph · function · src/graph/build.ts:L104-L218 · 11←  ...
 ```
 
-## Monorepos & multi-repo folders
+## Monorepos, submodules & multi-repo folders
 
-Graft handles two shapes without any config:
+Graft handles these layouts without any config:
 
 - **A monorepo with one `.git`** (a `pnpm-workspace.yaml`/`package.json`
   `workspaces`, or per-package `go.mod`/`pyproject.toml`/`Cargo.toml`) —
@@ -429,13 +429,18 @@ Graft handles two shapes without any config:
   rank every scope on its own terms and fuse the results, so the biggest
   sub-project can't drown a small one; hits carry `[scope/]` labels, and
   `graft map` groups its directory clusters by scope first.
+- **A Git superproject with initialized submodules** — `graft build` follows
+  initialized gitlinks into one graph, prefixing child paths (for example,
+  `deps/parser/src/index.ts`) while honoring each submodule's own Git ignore
+  rules. Visible untracked files are included too; uninitialized submodules
+  remain absent until `git submodule update --init` checks them out.
 - **A folder of separate git repos** (no `.git` at the top) — `graft build`
   auto-splits: each child gets its own (git-ignored) `graft/`, and the parent
   gets a `graft/workspace.json` index. Queries from the parent federate across
   every child, always labeled `<child>/`. Run `graft build` inside a child to
   work on just that repo.
 
-Either way, narrow to one sub-project with `graft ask "<task>" --in <scope>/`
+In every layout, narrow to one sub-project with `graft ask "<task>" --in <scope>/`
 once you know where you're working.
 
 ## Visualize it (`graft viz`)
