@@ -43,6 +43,34 @@ test("ts: new-expression + type annotation + this", () => {
   assert.equal(edges.find((e) => e.name === "use")?.recvType, "Router");
 });
 
+test("ts: constructor parameter property binds this.field (DI idiom)", () => {
+  const src =
+    "class ViaParam {\n  constructor(private readonly widgets: WidgetService) {}\n  run() { return this.widgets.build('a'); }\n}\n";
+  const edges = callEdges(src, "typescript");
+  assert.equal(edges.find((e) => e.name === "build")?.recvType, "WidgetService");
+});
+
+test("ts: parameter property variants (public/protected/readonly/optional) all bind", () => {
+  const src =
+    "class A {\n  constructor(public a: Svc, protected b: Svc, readonly c: Svc, private d?: Svc) {}\n  go() { this.a.one(); this.b.two(); this.c.three(); this.d.four(); }\n}\n";
+  const edges = callEdges(src, "typescript");
+  for (const name of ["one", "two", "three", "four"]) {
+    assert.equal(edges.find((e) => e.name === name)?.recvType, "Svc", `this.* call ${name}`);
+  }
+});
+
+test("ts: plain constructor parameter does NOT create a this.field binding", () => {
+  const src = "class A {\n  constructor(w: Svc) {}\n  go() { this.w.build(); }\n}\n";
+  const edges = callEdges(src, "typescript");
+  assert.equal(edges.find((e) => e.name === "build")?.recvType, undefined);
+});
+
+test("ts: parameter property still binds its bare name inside the constructor", () => {
+  const src = "class A {\n  constructor(private w: Svc) { w.init(); }\n}\n";
+  const edges = callEdges(src, "typescript");
+  assert.equal(edges.find((e) => e.name === "init")?.recvType, "Svc");
+});
+
 test("go: composite literal, var decl, NewX convention, receiver var", () => {
   const src = "package m\nfunc f() {\n  u := User{}\n  var d *DB\n  s := NewServer()\n  u.Save()\n  d.Query()\n  s.Start()\n}\nfunc (w *Worker) run() { w.stop() }\n";
   const edges = callEdges(src, "go", "x.go");

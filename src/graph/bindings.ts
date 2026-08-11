@@ -276,12 +276,32 @@ function handleTs(
       tsAnnotationTypeName(node.childForFieldName("type"), aliases) ??
       tsNewTypeName(node.childForFieldName("value"), aliases);
     if (typeName) bindings.set(classScope ?? scopePath, `this.${name.text}`, typeName);
-  } else if (node.type === "required_parameter") {
+  } else if (node.type === "required_parameter" || node.type === "optional_parameter") {
     const pattern = node.childForFieldName("pattern");
     if (pattern?.type !== "identifier") return;
     const typeName = tsAnnotationTypeName(node.childForFieldName("type"), aliases);
-    if (typeName) bindings.set(scopePath, pattern.text, typeName);
+    if (!typeName) return;
+    bindings.set(scopePath, pattern.text, typeName);
+    // A parameter property (`constructor(private readonly svc: Svc) {}`) is both a
+    // parameter and a class field, so it also needs the `this.`-keyed binding the
+    // `public_field_definition` branch emits — without it every `this.svc.method()`
+    // call site resolves with no recvType and the edge is dropped.
+    if (isTsParameterProperty(node)) {
+      bindings.set(classScope ?? scopePath, `this.${pattern.text}`, typeName);
+    }
   }
+}
+
+const PARAM_PROPERTY_MODIFIERS = new Set(["accessibility_modifier", "override_modifier", "readonly"]);
+
+/** True for the TS shorthand that declares a field from a constructor parameter —
+ * marked by an accessibility modifier (`private`/`public`/`protected`),
+ * `override`, or `readonly`. */
+function isTsParameterProperty(node: Parser.SyntaxNode): boolean {
+  for (const child of node.children) {
+    if (PARAM_PROPERTY_MODIFIERS.has(child.type)) return true;
+  }
+  return false;
 }
 
 function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {
