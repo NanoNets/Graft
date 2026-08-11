@@ -39,8 +39,12 @@ function addLocalSubmodule(parent: string, source: string, path: string): void {
   ]);
 }
 
-function walked(root: string, includes?: ReadonlySet<string>): string[] {
-  return walkDir(root, includes)
+function walked(
+  root: string,
+  includes?: ReadonlySet<string>,
+  followSubmodules = false,
+): string[] {
+  return walkDir(root, includes, { followSubmodules })
     .map((path) => relative(root, path).replace(/\\/g, "/"))
     .sort();
 }
@@ -82,7 +86,7 @@ test("walkDir keeps tracked files that match an ignore rule and untracked visibl
   }
 });
 
-test("walkDir recursively includes initialized submodules with their own Git visibility (#74)", () => {
+test("walkDir follows initialized submodules only when enabled, with their own Git visibility (#74)", () => {
   const parent = fixture("submodule-parent");
   const child = fixture("submodule-child");
   const nested = fixture("submodule-nested");
@@ -117,7 +121,13 @@ test("walkDir recursively includes initialized submodules with their own Git vis
     write(nestedCheckout, "src/nested-untracked.ts");
     write(nestedCheckout, "src/nested-untracked.generated.ts");
 
-    assert.deepEqual(walked(parent), [
+    assert.deepEqual(
+      walked(parent),
+      ["src/root.ts"],
+      "the backwards-compatible default stops at superproject gitlinks",
+    );
+
+    assert.deepEqual(walked(parent, undefined, true), [
       "deps/child module/components/nested module/src/nested-untracked.ts",
       "deps/child module/components/nested module/src/nested.ts",
       "deps/child module/src/forced.generated.ts",
@@ -126,12 +136,12 @@ test("walkDir recursively includes initialized submodules with their own Git vis
       "src/root.ts",
     ]);
 
-    const withVendor = walked(parent, new Set(["vendor"]));
+    const withVendor = walked(parent, new Set(["vendor"]), true);
     assert.ok(withVendor.includes("vendor/skipped child/src/tracked.ts"), "an initialized gitlink is included when its mount's built-in skip is lifted");
     assert.ok(!withVendor.includes("vendor/skipped child/build/handwritten.ts"), "the child's own build/ directory remains skipped");
     assert.ok(!withVendor.some((path) => path.endsWith("untracked.generated.ts")), "--include-dir never overrides a child's Git ignore rules");
 
-    const withVendorAndBuild = walked(parent, new Set(["vendor", "build"]));
+    const withVendorAndBuild = walked(parent, new Set(["vendor", "build"]), true);
     assert.ok(withVendorAndBuild.includes("vendor/skipped child/build/handwritten.ts"));
 
     const childGitFile = join(childCheckout, ".git");
@@ -139,14 +149,18 @@ test("walkDir recursively includes initialized submodules with their own Git vis
     renameSync(childGitFile, childGitBackup);
     writeFileSync(childGitFile, "gitdir: missing-gitdir\n");
     assert.ok(
-      walked(parent).includes("deps/child module/src/tracked.ts"),
+      walked(parent, undefined, true).includes("deps/child module/src/tracked.ts"),
       "a child Git failure falls back locally instead of producing a healthy but incomplete graph",
     );
     rmSync(childGitFile, { force: true });
     renameSync(childGitBackup, childGitFile);
 
     runGit(parent, ["submodule", "deinit", "-f", "--all"]);
-    assert.deepEqual(walked(parent), ["src/root.ts"], "deinitialized gitlinks must not resolve upward and duplicate the parent");
+    assert.deepEqual(
+      walked(parent, undefined, true),
+      ["src/root.ts"],
+      "deinitialized gitlinks must not resolve upward and duplicate the parent",
+    );
   } finally {
     rmSync(parent, { recursive: true, force: true });
     rmSync(child, { recursive: true, force: true });

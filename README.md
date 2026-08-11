@@ -336,6 +336,8 @@ graft build [dir]                    # build graft/ from the code at [dir]: wiri
 graft build --deep                   # add the LLM layer: concept nodes + per-symbol summary/crux (cached)
 graft build --extensions .ts .py     # only include these code extensions
 graft build --no-reuse               # re-parse every file instead of replaying unchanged ones from cache
+graft build --follow-submodules      # include initialized submodules; persist the choice for builds + MCP refresh
+graft build --no-follow-submodules   # exclude submodules again and persist that choice (the default)
 
 graft ask "<task>" [dir]             # query the graph — ranked nodes + exact file:line (no LLM, no key)
 graft ask "<task>" --json            # machine-readable result
@@ -421,7 +423,7 @@ hotspots: contextDirFor · function · src/context/node-file.ts:L100-L103 · 21�
 
 ## Monorepos, submodules & multi-repo folders
 
-Graft handles these layouts without any config:
+Graft supports these layouts:
 
 - **A monorepo with one `.git`** (a `pnpm-workspace.yaml`/`package.json`
   `workspaces`, or per-package `go.mod`/`pyproject.toml`/`Cargo.toml`) —
@@ -429,11 +431,15 @@ Graft handles these layouts without any config:
   rank every scope on its own terms and fuse the results, so the biggest
   sub-project can't drown a small one; hits carry `[scope/]` labels, and
   `graft map` groups its directory clusters by scope first.
-- **A Git superproject with initialized submodules** — `graft build` follows
-  initialized gitlinks into one graph, prefixing child paths (for example,
+- **A Git superproject with initialized submodules** — submodules stay excluded
+  by default. Run `graft build --follow-submodules` to fold initialized gitlinks
+  into one graph, prefixing child paths (for example,
   `deps/parser/src/index.ts`) while honoring each submodule's own Git ignore
   rules. Visible untracked files are included too; uninitialized submodules
-  remain absent until `git submodule update --init` checks them out.
+  remain absent until `git submodule update --init` checks them out. The choice
+  is saved in `.graft/config.json`, so later no-flag builds and MCP automatic
+  refreshes behave the same way. Run `graft build --no-follow-submodules` to
+  restore and persist the default boundary.
 - **A folder of separate git repos** (no `.git` at the top) — `graft build`
   auto-splits: each child gets its own (git-ignored) `graft/`, and the parent
   gets a `graft/workspace.json` index. Queries from the parent federate across

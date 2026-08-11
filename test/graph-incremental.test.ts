@@ -17,6 +17,7 @@ import { readAskIndex } from "../src/ask/index-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1 } from "../src/graph/types.js";
 import { chmodDenialUnavailable } from "./helpers.js";
+import { writeBuildConfig } from "../src/util/state.js";
 
 const MATH = [
   "export function add(a: number, b: number): number {",
@@ -215,6 +216,12 @@ test("initialized submodule files share the graph and freshness fingerprint (#74
     writeFileSync(join(checkout, "visible.ts"), "export const visible = 1;\n");
     writeFileSync(join(checkout, "ignored.generated.ts"), "export const ignored = 1;\n");
 
+    const defaultBuild = await buildGraph(parent);
+    assert.equal(defaultBuild.files, 2, "submodules stay outside the graph by default");
+    const defaultGraph = readGraph(wiringPath(outOf(parent))) as GraphV1;
+    assert.ok(!defaultGraph.nodes.some((n) => n.path.startsWith("modules/child/")));
+
+    writeBuildConfig(parent, { followSubmodules: true });
     const first = await buildGraph(parent);
     assert.equal(first.files, 4);
     const graph = readGraph(wiringPath(outOf(parent))) as GraphV1;
