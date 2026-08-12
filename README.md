@@ -438,6 +438,15 @@ Graft handles two shapes without any config:
 Either way, narrow to one sub-project with `graft ask "<task>" --in <scope>/`
 once you know where you're working.
 
+`graft init` at the parent of a multi-repo folder wires **every child repo too**,
+not just the parent — an agent session opens at a repo root and reads its
+instruction files from there, so each child needs its own. A session started in
+the parent gets the federated view; one started in a child sees that repo alone.
+
+Commands also find the graph from a subdirectory: with no `[dir]` argument they
+walk up to the nearest `graft/`, so `graft ask` works from `src/deep/inside/`
+without a `cd` to the repo root.
+
 ## Visualize it (`graft viz`)
 
 `graft viz` opens a local, interactive view of both graphs — no install, no dev
