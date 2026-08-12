@@ -13,12 +13,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runCli, tmpRepo, homeEnv } from "./helpers.js";
 
 const CLI = resolve(process.cwd(), "src/cli.ts");
 // Absolute: these runs have a scratch dir as their cwd, so a bare `--import tsx`
-// would resolve against the temp dir and find no such package.
-const TSX = createRequire(join(process.cwd(), "x.js")).resolve("tsx");
+// would resolve against the temp dir and find no such package. As a file:// URL
+// because `--import` goes through the ESM loader, and a bare Windows absolute
+// path parses as the URL scheme `d:` (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+const TSX = pathToFileURL(createRequire(join(process.cwd(), "x.js")).resolve("tsx")).href;
 
 /** A parent holding two git-repo children — the shape `isWorkspaceBuildRoot` detects. */
 function workspace(tag: string): string {
