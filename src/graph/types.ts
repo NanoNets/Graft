@@ -2,8 +2,8 @@
  * `graph.json` — the code graph schema (v1).
  *
  * One node per definition (file, class, function, method, interface, type, enum),
- * wired by edges (contains, imports, calls, ...). Field names follow the LSP /
- * SCIP vocabulary (`name`, `kind`, ...) rather than any one tool's conventions.
+ * wired by edges (contains, imports, calls, ...). Field names follow the LSP
+ * vocabulary (`name`, `kind`, ...) rather than any one tool's conventions.
  *
  * Two tiers of data live on a node:
  *   - Tier-1 (deterministic, $0): everything from the AST. Rebuilt on every run.
@@ -11,7 +11,7 @@
  * M1 populates Tier-1 only; Tier-2 fields ship as `pending`/null.
  */
 
-/** What a node represents. LSP SymbolKind, narrowed to what TS + Python + Go produce. */
+/** What a node represents. LSP SymbolKind, narrowed to what our extractors produce. */
 export type Kind =
   | "file"
   | "class"
@@ -20,10 +20,23 @@ export type Kind =
   | "interface" // TS + Go
   | "type" // TS + Go (type alias / named type)
   | "enum" // TS only
-  | "struct"; // Go only
+  | "struct" // Go only
+  // The generic (tags.scm) breadth tier also emits these — every tree-sitter
+  // grammar's tags.scm uses the tree-sitter tags @definition.<X> vocabulary, and
+  // module/constant/variable are common across the long tail (Ruby modules,
+  // Rust consts, top-level lets, …). Kept distinct rather than coerced so the
+  // breadth tier's kinds read truthfully in cards/skeleton.
+  | "module"
+  | "constant"
+  | "variable";
 
-/** How confident we are an edge is true. */
-export type Confidence = "extracted" | "inferred";
+/** How confident we are an edge is true, best-first. The hand-written AST
+ * resolver assigns `extracted`/`inferred`; the opt-in LSP enrichment pass
+ * (`graft build --lsp`) can promote an edge to compiler-grade `lsp_resolved`
+ * (an exact server-confirmed target) or `lsp_dispatch` (an interface/virtual
+ * candidate). Order matters: consumers that rank by provenance treat earlier
+ * values as stronger. */
+export type Confidence = "lsp_resolved" | "lsp_dispatch" | "extracted" | "inferred";
 
 /** Whether the LLM meaning-layer has been computed for a node. */
 export type SummaryState = "pending" | "ready" | "stale";
@@ -51,7 +64,10 @@ export interface NodeV1 {
   span: string; // whole definition: "L165-L222"
   signature: string | null; // "get(k: string): number" — null for kind:"file"
   exported: boolean;
-  origin: "ast";
+  // How the node was extracted. "ast" = a first-class hand-written extractor
+  // (TS/JS/Python/Go, full-fidelity). "generic" = the tags.scm breadth tier
+  // (signature-only; symbols + bare edges, no scope-aware binding).
+  origin: "ast" | "generic";
   body_hash: string; // sha256 of the definition text; the Tier-2 re-run trigger
   chars?: number; // byte length of the WHOLE file (file nodes only); the baseline
   //                 `ask` uses to estimate tokens saved vs reading the file whole

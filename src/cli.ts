@@ -6,7 +6,7 @@
  */
 import "dotenv/config";
 import { Command } from "commander";
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
 import { resolveConfig, type EngineConfig } from "./ai/providers.js";
@@ -20,6 +20,8 @@ import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
 import { isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
+import { nearestGraftRoot } from "./graph/root.js";
+import { discoverWorkspaceChildren } from "./graph/scopes.js";
 import {
   runWorkspaceAsk,
   runWorkspaceBuild,
@@ -69,6 +71,22 @@ function cliConfig(): EngineConfig {
 }
 
 const engineFrom = (): Graft => new Graft(cliConfig());
+
+/** Text for the omitted-`[dir]` case, shared by every query command's help. */
+const DIR_ARG = ["[dir]", "repository root (default: nearest ancestor with a graft/ index)"] as const;
+
+/**
+ * The root a query runs against: the dir the user named, else the nearest
+ * ancestor holding a graft index (`graph/root.ts`) so a shell or agent session
+ * in a subdirectory still finds the graph. The walk is announced on stderr —
+ * answering from an ancestor's graph must never be silent.
+ */
+function queryRoot(dir?: string): string {
+  if (dir !== undefined) return resolve(dir);
+  const { root, levels } = nearestGraftRoot(process.cwd(), program.opts<GlobalOpts>().dir);
+  if (levels > 0) console.error(`[graft] no graft/ here — answering from ${root}/graft`);
+  return root;
+}
 
 /**
  * Bring the graph up to date with the working tree before a query answers from it
@@ -120,6 +138,7 @@ program
   .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py")')
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
+  .option("--lsp", "add compiler-grade call edges via a language server if one is installed (opt-in, slower; e.g. rust-analyzer, clangd)")
   .option(
     "--follow-submodules",
     "include initialized Git submodules recursively; persisted for later builds and automatic refreshes",
@@ -142,6 +161,7 @@ program
       extensions?: string[];
       concurrency?: string;
       reuse?: boolean;
+      lsp?: boolean;
       includeDir?: string[];
       followSubmodules?: boolean;
     },
@@ -242,6 +262,7 @@ program
       llm: deep,
       concurrency,
       reuse: opts.reuse,
+      lsp: opts.lsp,
       onProgress: ({ phase, index, total, file }) =>
         process.stderr.write(
           `\r${phase === "enrich" ? "summarizing" : "parsing"} ${index + 1}/${total}: ${file.slice(0, 50).padEnd(50)}`,
@@ -267,18 +288,20 @@ program
   .command("ask")
   .description("Query the graft/ graph — returns ranked nodes + exact file:line, routed to prose or wiring ($0, no key)")
   .argument("<query>", "what you want to understand, in plain words")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("-n, --limit <n>", "max results", "8")
   .option("--source", "inline the source at each file:line hit (retriever mode — the pack IS the answer, no need to re-open files)")
   .option("--full", "with --source: inline whole definition spans instead of the default ≤8-line crux excerpts")
   .option("--in <path>", "narrow to nodes under this path prefix, filtered before scoring (segment-aware, like scopeOf)")
   .option("--json", "output the result as JSON")
+  .option("--no-graph-rank", "rank by lexical relevance only, without the graph-connectivity re-rank (ablation/eval)")
   .option(...NO_REFRESH_FLAG)
-  .action(async (query: string, dir: string, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean; refresh?: boolean }) => {
+  .action(async (query: string, dirArg: string | undefined, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean; refresh?: boolean; graphRank?: boolean }) => {
+    const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const askGlobalDir = program.opts<GlobalOpts>().dir;
-    if (readWorkspace(resolve(dir), askGlobalDir)) {
-      runWorkspaceAsk(resolve(dir), askGlobalDir, query, {
+    if (readWorkspace(dir, askGlobalDir)) {
+      runWorkspaceAsk(dir, askGlobalDir, query, {
         limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, json: opts.json,
       });
       return;
@@ -286,7 +309,7 @@ program
     const engine = engineFrom();
     let r;
     try {
-      r = engine.ask(dir, query, { limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in });
+      r = engine.ask(dir, query, { limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, graphRank: opts.graphRank });
     } catch (err) {
       console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -304,10 +327,11 @@ program
   .command("skeleton")
   .description("Signatures-only view of one file from the wiring graph — the cheapest way to see a file's API surface")
   .argument("<file>", "repo-relative path (or unique basename) of the file")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("--json", "output the result as JSON")
   .option(...NO_REFRESH_FLAG)
-  .action(async (file: string, dir: string, opts: { json?: boolean; refresh?: boolean }) => {
+  .action(async (file: string, dirArg: string | undefined, opts: { json?: boolean; refresh?: boolean }) => {
+    const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const { skeleton, formatSkeleton } = await import("./ask/ask.js");
     const globalOpts = program.opts<{ dir?: string }>();
@@ -319,18 +343,19 @@ program
 program
   .command("check")
   .description("Fail if graft/ is stale relative to the code (for CI)")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("-e, --extensions <exts...>", "code extensions to include")
   .option("--json", "output the drift as JSON")
-  .action((dir: string, opts: { extensions?: string[]; json?: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { extensions?: string[]; json?: boolean }) => {
+    const dir = queryRoot(dirArg);
     const checkGlobalDir = program.opts<GlobalOpts>().dir;
-    if (readWorkspace(resolve(dir), checkGlobalDir)) {
-      runWorkspaceCheck(resolve(dir), checkGlobalDir);
+    if (readWorkspace(dir, checkGlobalDir)) {
+      await runWorkspaceCheck(dir, checkGlobalDir);
       return;
     }
     const engine = engineFrom();
     const r = engine.check(dir, { extensions: opts.extensions });
-    const g = engine.checkGraph(dir); // graph.json is only judged when it exists
+    const g = await engine.checkGraph(dir); // graph.json is only judged when it exists
 
     // A layer that IS present must be in sync; a never-built layer (keyless
     // build skips the markdown layer) is informational, not a failure.
@@ -359,10 +384,11 @@ program
 program
   .command("viz")
   .description("Serve an interactive visualization of the context graph (and graph.json when present)")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("-p, --port <port>", "port to serve on", "4400")
   .option("--no-open", "don't open the browser")
-  .action(async (dir: string, opts: { port: string; open: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { port: string; open: boolean }) => {
+    const dir = queryRoot(dirArg);
     const { existsSync } = await import("node:fs");
     const { resolve, basename } = await import("node:path");
     const { spawn } = await import("node:child_process");
@@ -394,12 +420,12 @@ program
 program
   .command("mcp")
   .description("Serve the graph over MCP (stdio) — exposes graft_find_code, graft_trace_calls, graft_find_all, graft_file_api, graft_repo_map and graft_check_freshness as tools")
-  .argument("[dir]", "repository root", ".")
-  .action(async (dir: string) => {
-    const { resolve } = await import("node:path");
+  .argument(...DIR_ARG)
+  .action(async (dirArg: string | undefined) => {
+    const dir = queryRoot(dirArg);
     const { startMcpServer } = await import("./mcp/server.js");
     const globalOpts = program.opts<{ dir?: string }>();
-    startMcpServer(resolve(dir), globalOpts.dir, currentVersion);
+    startMcpServer(dir, globalOpts.dir, currentVersion);
   });
 
 program
@@ -408,7 +434,7 @@ program
     "Who calls/references a symbol ($0, no LLM). --direction out gives callees (what it calls); --depth N (or all) walks transitively for full blast radius",
   )
   .argument("<symbol>", "bare name, qualified (Class.method), or package-qualified (pkg.Fn)")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("--direction <in|out>", 'edge direction: "in" = callers (default), "out" = callees')
   .option("-d, --depth <n>", 'walk transitively up to N hops for blast radius, or "all" for the full connected closure (default 1)')
   .option("--in <path>", "narrow matches to nodes at or under this path prefix")
@@ -417,13 +443,14 @@ program
   .action(
     async (
       symbol: string,
-      dir: string,
+      dirArg: string | undefined,
       opts: { direction?: string; depth?: string; in?: string; json?: boolean; refresh?: boolean },
     ) => {
+      const dir = queryRoot(dirArg);
       await refreshBefore(dir, opts);
       const globalOpts = program.opts<{ dir?: string }>();
-      if (!opts.json && readWorkspace(resolve(dir), globalOpts.dir)) {
-        runWorkspaceCallers(resolve(dir), globalOpts.dir, symbol, {
+      if (!opts.json && readWorkspace(dir, globalOpts.dir)) {
+        runWorkspaceCallers(dir, globalOpts.dir, symbol, {
           direction: opts.direction === "out" ? "out" : "in",
           depth: opts.depth
             ? (/^(all|full|max)$/i.test(opts.depth) ? Number.POSITIVE_INFINITY : Number(opts.depth))
@@ -447,7 +474,7 @@ program
   .command("grep")
   .description("Regex search over indexed files, hits grouped by enclosing symbol and ranked by coupling ($0, no LLM)")
   .argument("<pattern>", "regex pattern (or literal string with --fixed)")
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("-i, --ignore-case", "case-insensitive match")
   .option("--fixed", "treat pattern as a literal string, not a regex")
   .option("--in <path>", "narrow to files at or under this path prefix")
@@ -456,13 +483,14 @@ program
   .action(
     async (
       pattern: string,
-      dir: string,
+      dirArg: string | undefined,
       opts: { ignoreCase?: boolean; fixed?: boolean; in?: string; json?: boolean; refresh?: boolean },
     ) => {
+      const dir = queryRoot(dirArg);
       await refreshBefore(dir, opts);
       const globalOpts = program.opts<{ dir?: string }>();
-      if (readWorkspace(resolve(dir), globalOpts.dir)) {
-        runWorkspaceGrep(resolve(dir), globalOpts.dir, pattern, {
+      if (readWorkspace(dir, globalOpts.dir)) {
+        runWorkspaceGrep(dir, globalOpts.dir, pattern, {
           ignoreCase: opts.ignoreCase, fixed: opts.fixed, json: opts.json,
         });
         return;
@@ -483,11 +511,12 @@ program
   .description(
     "Token-budgeted repo orientation — directory clusters, per-directory hubs, and global hotspots from the wiring graph ($0, no LLM)",
   )
-  .argument("[dir]", "repository root", ".")
+  .argument(...DIR_ARG)
   .option("--max-dirs <n>", "max directory entries shown, rest counted into dropped (default 16)")
   .option("--json", "output as JSON")
   .option(...NO_REFRESH_FLAG)
-  .action(async (dir: string, opts: { json?: boolean; maxDirs?: string; refresh?: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { json?: boolean; maxDirs?: string; refresh?: boolean }) => {
+    const dir = queryRoot(dirArg);
     const root = resolve(dir);
     const globalOpts = program.opts<{ dir?: string }>();
     let maxDirsW: number | undefined;
@@ -578,8 +607,21 @@ program
       return;
     }
 
+    // Workspace parent: every child repo gets its OWN wiring too. A session
+    // opens at a repo root, not at the parent, and reads `.claude/` from there —
+    // wiring only the parent leaves each child with no skill, hooks, or MCP.
+    // The parent's own wiring stays (queries there federate across children).
+    const children = isWorkspaceBuildRoot(repo, program.opts<GlobalOpts>().dir)
+      ? discoverWorkspaceChildren(repo)
+      : [];
+    // Parent FIRST: its build is the workspace build, which builds every child's
+    // graph, so each child's own `buildGraphIfMissing` then finds one and no-ops.
+    const targets = [repo, ...children.map((c) => join(repo, c))];
+
     if (opts.dryRun) {
       console.error(formatPlan(plan, ids, repo, home));
+      for (const child of children)
+        console.error(`\n— ${child}/ (workspace child)\n` + formatPlan(planInit(join(repo, child), { home }), ids, join(repo, child), home));
       return;
     }
     if (ids.length === 0) {
@@ -589,6 +631,44 @@ program
 
     const wantClaude = ids.includes("claude");
     const cliPath = fileURLToPath(import.meta.url);
+
+    if (children.length)
+      console.error(`· workspace: wiring ${repo} and ${children.length} child repo(s) — ${children.join(", ")}`);
+
+    for (const target of targets) {
+      if (target !== repo) console.error(`\n— ${relative(repo, target)}/`);
+      wireTarget(target, ids, { home, cliPath, plan, opts, wantClaude });
+    }
+
+    // One epilogue for the whole run. A workspace parent holds no nodes of its
+    // own, so the totals come from the children — the graph the user actually got.
+    const globalDir = program.opts<GlobalOpts>().dir;
+    const graphs = (children.length ? children.map((c) => join(repo, c)) : [repo])
+      .map((d) => loadGraphCached(contextDirFor(d, children.length ? undefined : globalDir)))
+      .filter((g): g is NonNullable<typeof g> => g !== null);
+    console.error(
+      "\n" +
+        formatInitEpilogue({
+          graphBuilt: graphs.length > 0,
+          nodes: graphs.reduce((n, g) => n + g.meta.nodeCount, 0),
+          edges: graphs.reduce((n, g) => n + g.meta.edgeCount, 0),
+        }),
+    );
+  });
+
+/** One repo's worth of `init` writes — the parent, then each workspace child. */
+function wireTarget(
+  repo: string,
+  ids: string[],
+  ctx: {
+    home: string;
+    cliPath: string;
+    plan: ReturnType<typeof planInit>;
+    wantClaude: boolean;
+    opts: { build?: boolean; mcp?: boolean; hooks?: boolean; global?: boolean };
+  },
+): void {
+    const { home, cliPath, plan, wantClaude, opts } = ctx;
 
     if (wantClaude) {
       const res = runInit(repo, { build: opts.build, cliPath });
@@ -634,18 +714,7 @@ program
       );
     }
 
-    const globalOpts = program.opts<{ dir?: string }>();
-    const outDir = contextDirFor(repo, globalOpts.dir);
-    const graph = loadGraphCached(outDir);
-    console.error(
-      "\n" +
-        formatInitEpilogue({
-          graphBuilt: graph !== null,
-          nodes: graph?.meta.nodeCount,
-          edges: graph?.meta.edgeCount,
-        }),
-    );
-  });
+}
 
 program.parseAsync().catch((err) => {
   console.error(err instanceof Error ? err.message : err);

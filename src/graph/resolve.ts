@@ -2,7 +2,7 @@
  * Resolve {@link RawEdge} intents into concrete {@link EdgeV1} edges by matching
  * names/specifiers against the whole-repo node index.
  *
- * Confidence mirrors the SCIP/Graphify model:
+ * Confidence is a two-tier provenance model:
  *   - `extracted`: the target is certain — a match within the same file, an
  *     import specifier, or a structural containment.
  *   - `inferred`: a bare function target was resolved by a unique name match
@@ -117,10 +117,20 @@ export function resolveEdges(
         if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
         if (hit) add(e.source, hit.id, "calls", hit.confidence);
         // No owner-qualified match means the call is unresolved. A unique bare
-        // method name is not evidence that this receiver has that method.
+        // method name is not evidence that this receiver has that method — a
+        // name-fallback here was measured to HALVE call-edge precision (73%→37%
+        // vs a compiler-grade oracle) for a 3x count inflation, i.e. noise. See #35.
         continue;
       }
-      const hit = resolveName(e.name!, e.file, ["function"], perFileName, globalName);
+      // Depth-tier bare calls are function calls (method calls arrive as viaMember
+      // with a receiver type). The generic breadth tier can't type receivers, so its
+      // tags.scm @reference.call/@reference.send capture ALL calls as bare names —
+      // in method-heavy languages (Java, Ruby, C#) those target methods. Widen the
+      // candidate kinds to methods ONLY for generic-origin sources, so depth-tier
+      // precision is untouched (an ambiguous function-vs-method name still drops).
+      const srcOrigin = byId.get(e.source)?.origin;
+      const callKinds: Kind[] = srcOrigin === "generic" ? ["function", "method"] : ["function"];
+      const hit = resolveName(e.name!, e.file, callKinds, perFileName, globalName);
       if (hit) add(e.source, hit.id, "calls", hit.confidence); // drop unresolved calls (too noisy)
     }
   }

@@ -37,7 +37,7 @@ import { ask, type AskHit, type AskResult } from "../ask/ask.js";
 import { fuseScopes, STRONG_FLOOR, HIGH_FLOOR, type ScopedDoc } from "../ask/fuse.js";
 import { grepGraph, type GrepGroup, type GrepResult } from "../search/grep.js";
 import { formatGrepResult, zeroHitNote } from "../search/grep-cli.js";
-import { savingsFooter, type Savings } from "../context/savings.js";
+import { withSavings, type Savings } from "../context/savings.js";
 
 /** The parent index written to `<parent>/graft/workspace.json`. Nodes/edges
  * never live at the parent — they live in each child's own `graft/`. */
@@ -375,15 +375,15 @@ export function federateMap(
 
 /** Per-child drift status. `ok` is false when any BUILT child is stale — an
  * unbuilt child is surfaced (coverage), never a failure. */
-export function federateCheck(
+export async function federateCheck(
   root: string,
   override?: string,
-): { text: string; ok: boolean } {
+): Promise<{ text: string; ok: boolean }> {
   const wg = loadWorkspaceGraphs(root, override);
   const lines = [`workspace check — ${wg.loaded.length + wg.missing.length} repo(s)`, ""];
   let ok = true;
   for (const { child } of wg.loaded) {
-    const g = checkGraph(join(root, child));
+    const g = await checkGraph(join(root, child));
     if (g.ok) {
       lines.push(`${child}/: OK`);
     } else {
@@ -429,7 +429,7 @@ export function federateCallers(
       else for (const h of hits) lines.push(hitLine(direction, h, showDepth));
     }
     const body = lines.join("\n");
-    blocks.push(body + savingsFooter(body, callersSavings(graph, results)));
+    blocks.push(withSavings(body, callersSavings(graph, results)));
   }
 
   const cov = coverageNote(wg);

@@ -118,8 +118,8 @@ export function runWorkspaceMap(
   process.stdout.write(federateMap(root, override, { maxDirs: opts.maxDirs }));
 }
 
-export function runWorkspaceCheck(root: string, override?: string): void {
-  const { text, ok } = federateCheck(root, override);
+export async function runWorkspaceCheck(root: string, override?: string): Promise<void> {
+  const { text, ok } = await federateCheck(root, override);
   process.stdout.write(text);
   if (!ok) process.exit(1);
 }

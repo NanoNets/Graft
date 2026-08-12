@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 import { relPosix } from "../util/paths.js";
 import { contextDirFor } from "../context/node-file.js";
 import { extractFile, languageOf } from "./extract.js";
+import { extractGeneric, genericLangOf, warmGenericGrammars } from "./generic.js";
 import { listSourceFiles } from "./build.js";
 import { readGraph, wiringPath } from "./write.js";
 import { readSourceFile } from "../util/source.js";
@@ -41,7 +42,14 @@ export interface GraphCheckOptions {
   contextDir?: string;
 }
 
-export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphCheckResult {
+// async: the breadth tier's WASM grammars load asynchronously and must be warmed
+// before the (synchronous) re-extraction below, exactly as buildGraph does — else
+// breadth-tier files (.rs, …) would re-extract as empty here and read as `removed`
+// against a graph that built them, so `graft check` would never report OK.
+export async function checkGraph(
+  dir: string,
+  opts: GraphCheckOptions = {},
+): Promise<GraphCheckResult> {
   const root = resolve(dir);
   const outDir = contextDirFor(root, opts.contextDir);
 
@@ -62,9 +70,14 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
   }
 
   // Freshly extract Tier-1 nodes from the code on disk (same file set as build).
+  const sourceFiles = listSourceFiles(root, outDir);
+  await warmGenericGrammars(
+    new Set(sourceFiles.map((f) => genericLangOf(f)?.name).filter((n): n is string => !!n)),
+  );
   const current = new Map<string, string>(); // id → body_hash
-  for (const file of listSourceFiles(root, outDir)) {
-    const lang = languageOf(file)!;
+  for (const file of sourceFiles) {
+    const lang = languageOf(file);
+    const generic = lang ? null : genericLangOf(file);
     let source: string | null;
     try {
       source = readSourceFile(file);
@@ -73,7 +86,9 @@ export function checkGraph(dir: string, opts: GraphCheckOptions = {}): GraphChec
     }
     if (source === null) continue; // unsupported encoding (e.g. UTF-16BE)
     try {
-      const { nodes } = extractFile(relPosix(root, file), source, lang);
+      const { nodes } = lang
+        ? extractFile(relPosix(root, file), source, lang)
+        : extractGeneric(relPosix(root, file), source, generic!.name);
       for (const n of nodes) current.set(n.id, n.body_hash);
     } catch {
       // parse failure → skip; the committed nodes for this file become `removed`.

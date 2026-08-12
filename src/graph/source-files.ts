@@ -12,6 +12,7 @@ import { walkDir } from "../ingest/fs.js";
 import { relPosix } from "../util/paths.js";
 import { readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import { languageOf } from "./extract.js";
+import { genericLangOf } from "./generic.js";
 
 /**
  * The source files a graph build parses: supported languages, minus the
@@ -28,7 +29,12 @@ export function listSourceFiles(
     followSubmodules: readFollowSubmodules(resolve(root)),
   }),
 ): string[] {
-  return repoFiles.filter((f) => !f.startsWith(outDir) && languageOf(f) !== null);
+  // A file is a source file if a depth-tier grammar (languageOf) OR a breadth-tier
+  // grammar (genericLangOf) claims its extension. Both must agree here or `build`
+  // and `check` would enumerate different sets.
+  return repoFiles.filter(
+    (f) => !f.startsWith(outDir) && (languageOf(f) !== null || genericLangOf(f) !== null),
+  );
 }
 
 export interface SourceStat {
