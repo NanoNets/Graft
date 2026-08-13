@@ -56,8 +56,10 @@ export interface GrepResult {
   groups: GrepGroup[];
   /** Dropped counts — never silent. `files`: indexed file nodes that
    * couldn't be read from disk. `hits`: matches found beyond `maxHits`,
-   * counted but not collected. */
-  truncated: { files: number; hits: number };
+   * counted but not collected. `timeout`: the scan hit its wall-clock budget
+   * and stopped early, so the remaining indexed files were never searched —
+   * a zero-hit answer under this flag means "gave up", not "not there". */
+  truncated: { files: number; hits: number; timeout?: boolean };
   /** Tokens-saved baseline: the files that had hits, read whole. Undefined
    * when there were no hits or the graph predates file sizing. */
   saved?: Savings;
@@ -73,9 +75,36 @@ export interface GrepOptions {
   /** Stop collecting hits after this many; the rest are tallied into
    * `truncated.hits`. Default 300. */
   maxHits?: number;
+  /** Wall-clock ceiling for the whole scan, in ms. Default
+   * {@link DEFAULT_BUDGET_MS}. Exposed mainly so tests can pick a budget
+   * small enough to observe without burning seconds. */
+  budgetMs?: number;
 }
 
-const DEFAULT_MAX_HITS = 300;
+/** Exported because workspace federation has to spend this ONE budget across the
+ * children rather than give each its own — see `graph/workspace.ts#federateGrep`. */
+export const DEFAULT_MAX_HITS = 300;
+
+/**
+ * Wall-clock ceiling for a single `grepGraph` call.
+ *
+ * The pattern is attacker-controlled in practice: it arrives raw from
+ * `graft_find_all`, i.e. from whatever the model decided to type, and the MCP
+ * server reads its JSON-RPC lines synchronously on the one event loop. A
+ * classic catastrophic-backtracking pattern (`(a+)+$` against a line of a's)
+ * takes exponential time per line, so without a ceiling one tool call wedges
+ * the whole server for minutes — and `notifications/cancelled` is a no-op,
+ * there is nothing to cancel with.
+ *
+ * This bounds the AGGREGATE scan, checked between lines. It cannot interrupt a
+ * single `RegExp.test` already inside the engine — JS has no regex timeout and
+ * `grepGraph` is synchronous by contract (both the CLI and the MCP tool call it
+ * inline) — so one pathological line can still overshoot. What it does buy is
+ * that the cost stops scaling with the repo: the damage is one line's
+ * backtracking instead of one line's backtracking times every line of every
+ * indexed file.
+ */
+export const DEFAULT_BUDGET_MS = 5_000;
 const MAX_HIT_TEXT = 160;
 const SPAN_RE = /^L(\d+)-L(\d+)$/;
 
@@ -95,17 +124,29 @@ interface SymbolSpan {
   end: number;
 }
 
-/** The file's symbol nodes, sorted ascending by span start — the order
- * `enclosingSymbol` scans in to find the innermost containing span. */
-function symbolsOf(graph: GraphV1, path: string): SymbolSpan[] {
-  const out: SymbolSpan[] = [];
+/**
+ * Every file's symbol nodes, bucketed by path and sorted ascending by span
+ * start — the order `enclosingSymbol` scans in to find the innermost
+ * containing span.
+ *
+ * Built ONCE per call rather than re-scanned per file. The per-file version
+ * walked all of `graph.nodes` for each file node, so grouping alone cost
+ * O(files x nodes) — 33k nodes over 3k files (the scale this repo's own ask
+ * index cites) burned ~0.5s of CPU before a single byte was read from disk,
+ * and doubling the repo quadrupled it. Every `graft_find_all` call paid that.
+ */
+function symbolsByPath(graph: GraphV1): Map<string, SymbolSpan[]> {
+  const byPath = new Map<string, SymbolSpan[]>();
   for (const n of graph.nodes) {
-    if (n.kind === "file" || n.path !== path) continue;
+    if (n.kind === "file") continue;
     const b = spanBounds(n.span);
-    if (b) out.push({ node: n, start: b.start, end: b.end });
+    if (!b) continue;
+    let bucket = byPath.get(n.path);
+    if (!bucket) byPath.set(n.path, (bucket = []));
+    bucket.push({ node: n, start: b.start, end: b.end });
   }
-  out.sort((a, b) => a.start - b.start);
-  return out;
+  for (const bucket of byPath.values()) bucket.sort((a, b) => a.start - b.start);
+  return byPath;
 }
 
 /** Innermost symbol containing `line`: among spans that contain it, the one
@@ -152,12 +193,25 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
     (n) => n.kind === "file" && (inPrefix === undefined || pathUnderPrefix(n.path, inPrefix)),
   );
 
+  const symbolIndex = symbolsByPath(graph);
   const groups = new Map<string, GrepGroup>();
   let collected = 0;
   let truncatedHits = 0;
   let truncatedFiles = 0;
+  const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
+  let timedOut = false;
+
+  // Counted as we go rather than taken from `fileNodes.length`: on a timeout
+  // the remaining files were never opened, and reporting them as "searched"
+  // would make the give-up look like a complete pass.
+  let filesSearched = 0;
 
   for (const file of fileNodes) {
+    if (Date.now() > deadline) {
+      timedOut = true;
+      break;
+    }
+    filesSearched++;
     let text: string;
     try {
       const decoded = readSourceFile(join(repoRoot, file.path));
@@ -171,10 +225,20 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
       continue;
     }
 
-    const symbols = symbolsOf(graph, file.path);
-    const lines = text.split("\n");
+    const symbols = symbolIndex.get(file.path) ?? [];
+    // `\r?` matters: with git's Windows default (core.autocrlf=true) the whole
+    // working tree is CRLF on disk, and splitting on "\n" alone leaves a
+    // trailing \r on every line. Any end-anchored pattern — `foo$`, `;\s*$`,
+    // `=>\s*{$` — then matches nothing at all, silently, on the platform where
+    // most of the tree looks like that. readSourceFile hands back the bytes
+    // untouched, so the normalization has to happen here.
+    const lines = text.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
+      if (Date.now() > deadline) {
+        timedOut = true;
+        break;
+      }
       const raw = lines[i];
       if (!regex.test(raw)) continue;
 
@@ -206,10 +270,12 @@ export function grepGraph(graph: GraphV1, repoRoot: string, pattern: string, opt
 
   return {
     pattern,
-    filesSearched: fileNodes.length,
+    filesSearched,
     totalHits: collected,
     groups: sortedGroups,
-    truncated: { files: truncatedFiles, hits: truncatedHits },
+    truncated: timedOut
+      ? { files: truncatedFiles, hits: truncatedHits, timeout: true }
+      : { files: truncatedFiles, hits: truncatedHits },
     saved: savingsFor(graph, sortedGroups.map((g) => g.path)),
   };
 }

@@ -18,6 +18,7 @@ import { readGraph, wiringPath } from "../src/graph/write.js";
 import { contextDirFor } from "../src/context/node-file.js";
 import { checkGraphInvariants } from "../src/graph/invariants.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 // A recursion-free fixture spanning both tiers: main→helper (TS, depth),
 // load→parse (Rust, breadth), Circle implements Shape (PHP, breadth → a
@@ -73,7 +74,7 @@ test("Tier-0: a built multi-tier graph satisfies every structural invariant", as
     assert.deepEqual(problems, [], `no invariant violations (got: ${problems.slice(0, 5).join("; ")})`);
     assert.equal(selfLoopCalls, 0, "a recursion-free fixture has no self-loop calls");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -122,7 +123,7 @@ test("Tier-0: the build is deterministic — two cold builds produce the identic
       assert.ok(g, "graph built");
       return g!;
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmDir(dir);
     }
   };
   // Two separate cold builds of byte-identical source (relative ids, so paths match).

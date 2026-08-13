@@ -7,10 +7,10 @@
  * {@link listSourceFiles} so its existing importers are unaffected.
  */
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { relPosix } from "../util/paths.js";
-import { readIncludeDirs } from "../util/state.js";
+import { readExtensions, readIncludeDirs } from "../util/state.js";
 import { languageOf, depthExtensions } from "./extract.js";
 import { genericLangOf, genericExtensions } from "./generic.js";
 
@@ -43,17 +43,51 @@ export function unsupportedExtensions(exts: string[]): string[] {
  * so every caller that enumerates through here (the fingerprint probe, the
  * hooks/refresh path, none of which ever see a CLI flag) behaves identically
  * to the `graft build --include-dir` invocation that set it.
+ *
+ * `extensions` is `graft build -e`. It reaches here because this is the ONE
+ * enumeration the wiring graph is built from: applied anywhere else, `-e .ts`
+ * narrowed the concept pass while the wiring graph kept indexing every language
+ * graft has a grammar for — the flag said "only include these code extensions"
+ * and the graph the user actually queries ignored it.
+ *
+ * When the caller passes none, the repo's PERSISTED `-e` is read from state here,
+ * exactly as `--include-dir` is above and for a sharper reason: the freshness probe
+ * (`fingerprint.ts`) and the pre-query refresh never see a CLI flag, so an
+ * unpersisted narrowing meant every excluded file counted as new on the next query
+ * and the refresh rebuilt the graph wide again — `-e` would have lasted until the
+ * first `graft ask`. It also makes `graft check` agree with the build that wrote
+ * the graph without anyone having to repeat the flag.
  */
 export function listSourceFiles(
   root: string,
   outDir: string,
   repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root))),
+  extensions?: string[],
 ): string[] {
+  // Excluding the output dir needs a SEGMENT boundary, not a string prefix: with the
+  // default outDir `<root>/graft`, a bare `startsWith` also swallows the sibling
+  // `graft-tools/` or `graftlib/`, which then never gets indexed and never says why.
+  // This repo already documents the class of bug in `util/paths.ts#pathUnderPrefix`
+  // ("a plain startsWith would let 'frontend' match 'frontend-utils'"); it just never
+  // reached here. `resolve` too, because a relative `--dir` reaches us verbatim and
+  // would otherwise never match the absolute paths the walk produces — making the
+  // output directory itself part of the source set.
+  const out = resolve(outDir);
+  const outPrefix = out + sep;
+  // Empty is treated as absent, not as "index nothing": commander hands `[]` for a
+  // variadic option that was never given, and a build that silently produced an
+  // empty graph would be the worst possible reading of a missing flag.
+  const asked = extensions?.length ? extensions : readExtensions(resolve(root));
+  const wanted = asked?.length ? asked.map(normExt) : undefined;
   // A file is a source file if a depth-tier grammar (languageOf) OR a breadth-tier
   // grammar (genericLangOf) claims its extension. Both must agree here or `build`
   // and `check` would enumerate different sets.
   return repoFiles.filter(
-    (f) => !f.startsWith(outDir) && (languageOf(f) !== null || genericLangOf(f) !== null),
+    (f) =>
+      !(f === out || f.startsWith(outPrefix)) &&
+      (languageOf(f) !== null || genericLangOf(f) !== null) &&
+      // `endsWith`, not `extname`, to match how both registries claim a file.
+      (wanted === undefined || wanted.some((e) => f.toLowerCase().endsWith(e))),
   );
 }
 
@@ -73,9 +107,14 @@ export interface SourceStat {
  * both the freshness probe and the extraction cache. Files that vanish between
  * the walk and the stat are dropped (same fail-soft posture as `walkDir`).
  */
-export function listSourceStats(root: string, outDir: string, repoFiles?: string[]): SourceStat[] {
+export function listSourceStats(
+  root: string,
+  outDir: string,
+  repoFiles?: string[],
+  extensions?: string[],
+): SourceStat[] {
   const out: SourceStat[] = [];
-  for (const abs of listSourceFiles(root, outDir, repoFiles)) {
+  for (const abs of listSourceFiles(root, outDir, repoFiles, extensions)) {
     let s: { size: number; mtimeMs: number };
     try {
       s = statSync(abs);

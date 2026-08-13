@@ -15,6 +15,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { writeGraph, readGraph, wiringPath } from "../src/graph/write.js";
 import { contextDirFor } from "../src/context/node-file.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 function makeNode(overrides: Partial<NodeV1> = {}): NodeV1 {
   return {
@@ -71,7 +72,7 @@ test("writeGraph strips body_text from the serialized node but keeps every other
     assert.equal(reread!.nodes[0].body_text, undefined);
     assertUniqueIds(graph.nodes);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -89,7 +90,7 @@ test("writeGraph does not mutate the in-memory node — build.ts's sidecar pass 
     assert.equal(graph.nodes[0].body_text, "untouched body text", "graph.nodes must still reference the live object");
     assertUniqueIds(graph.nodes);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -108,7 +109,7 @@ test("a node with no body_text (e.g. a file node) round-trips unchanged", () => 
     assert.equal(raw.nodes[0].kind, "file");
     assertUniqueIds(graph.nodes);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -139,7 +140,7 @@ test("buildGraph: the serialized wiring.json has no body_text key on ANY node", 
     }
     assertUniqueIds(parsed.nodes);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -158,6 +159,6 @@ test("A3 PERMANENT gate: duplicate-named definitions still produce unique node i
     const ids = graph!.nodes.map((n) => n.id);
     assert.ok(ids.includes("dup.ts#helper") && ids.includes("dup.ts#helper~2"), "sanity: the dup actually minted an ordinal id");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

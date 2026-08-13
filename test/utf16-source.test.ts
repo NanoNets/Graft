@@ -29,7 +29,7 @@ import { grepGraph } from "../src/search/grep.js";
 import { ask } from "../src/ask/ask.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { contextDirFor } from "../src/context/node-file.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, rmDir } from "./helpers.js";
 
 /** BOM + UTF-16LE bytes — the shape Windows tooling in general actually writes. */
 function utf16le(text: string): Buffer {
@@ -53,7 +53,45 @@ test("readSourceFile: decodes a UTF-16LE BOM, returns null for UTF-16BE, and rea
     assert.equal(readSourceFile(join(dir, "be.ts")), null);
     assert.equal(readSourceFile(join(dir, "plain.ts")), "export const x = 1;\n");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
+  }
+});
+
+/** BOM + UTF-8 bytes — what Visual Studio writes for .cs by default and what
+ * PowerShell 5.1's `Out-File -Encoding utf8` writes for anything at all. */
+function utf8bom(text: string): Buffer {
+  return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, "utf8")]);
+}
+
+test("readSourceFile: strips a UTF-8 BOM instead of handing U+FEFF to the grammar", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-utf8bom-unit-"));
+  try {
+    writeFileSync(join(dir, "bom.ts"), utf8bom("export const x = 1;\n"));
+    const got = readSourceFile(join(dir, "bom.ts"));
+    assert.equal(got, "export const x = 1;\n");
+    assert.ok(!got!.startsWith("﻿"), "U+FEFF is category Cf, not whitespace — it becomes an ERROR node at offset 0");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("a BOM-prefixed source file is indexed like any other", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-utf8bom-build-"));
+  try {
+    // Go's grammar lists only /\s/ in its `extras`, so a leading U+FEFF is what
+    // actually breaks — it starts the parse in error recovery.
+    writeFileSync(join(dir, "main.go"), utf8bom("package main\n\nfunc FromBom() int {\n\treturn 1\n}\n"));
+    writeFileSync(join(dir, "app.ts"), utf8bom("export function fromBomTs(): void {}\n"));
+    const r = await buildGraph(dir, { reuse: false });
+    assert.deepEqual(r.errors, []);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    assert.ok(graph.nodes.some((n) => n.id === "main.go#FromBom"), "the BOM'd Go function must be extracted");
+    assert.ok(graph.nodes.some((n) => n.id === "app.ts#fromBomTs"), "…and the BOM'd TS one");
+    // hash-what-you-parse: the stripped text is what is hashed, so check must agree.
+    const check = await checkGraph(dir);
+    assert.equal(check.ok, true, "build and check must decode the BOM the same way");
+  } finally {
+    rmDir(dir);
   }
 });
 
@@ -66,7 +104,7 @@ test("A1 graph/build.ts: a UTF-16LE .ts file is decoded at graph ingest, not moj
     const graph = readGraph(wiringPath(join(dir, "graft")))!;
     assert.ok(graph.nodes.some((n) => n.id === "legacy.ts#fromLegacy"), "the UTF-16LE file's function must be extracted");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -79,7 +117,7 @@ test("A1 graph/build.ts: a UTF-16BE file is an empty entry, not a build error (n
     const graph = readGraph(wiringPath(join(dir, "graft")))!;
     assert.ok(!graph.nodes.some((n) => n.path === "legacy.ts"), "no nodes minted for the undecodable file");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -98,7 +136,7 @@ test("A1 hash-what-you-parse consistency: build/check/fingerprint agree on a UTF
     const drift = probeDrift(join(dir), join(dir, "graft"));
     assert.deepEqual(drift, { changed: [], added: [], removed: [] }, "fingerprint's probe must agree too — no drift");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -128,7 +166,7 @@ test("A1 fingerprint reports drift when indexed UTF-16LE becomes unsupported UTF
   } finally {
     if (previousRefresh === undefined) delete process.env.GRAFT_REFRESH;
     else process.env.GRAFT_REFRESH = previousRefresh;
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -150,7 +188,7 @@ test("A1 context/build.ts + check.ts: a UTF-16LE file's summarizer input decodes
     assert.equal(check.ok, true, "content hash must agree between build and check for the same UTF-16LE file");
     assert.deepEqual(check.contentDrift, []);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -169,7 +207,7 @@ test("A1 search/grep.ts: finds a pattern inside a UTF-16LE file", async () => {
     assert.equal(r.totalHits, 1, "grep must find the pattern in the UTF-16LE file's decoded text");
     assert.match(r.groups[0]!.hits[0]!.text, /NEEDLE hit/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -189,6 +227,6 @@ test("A1 ask.ts --source: inlines clean (non-garbled) source sliced from a UTF-1
     assert.match(hit!.code!, /return 42/, "the sliced span must decode cleanly, not as mojibake");
     assert.ok(!hit!.code!.includes("\u0000"), "no stray NUL bytes from a mis-decoded UTF-16LE read");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

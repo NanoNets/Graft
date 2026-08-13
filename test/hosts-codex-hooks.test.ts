@@ -72,6 +72,47 @@ test('foreign hook entries are preserved; stale graft entries replaced', () => {
   assert.ok(!JSON.stringify(entries).includes('/old/'), 'stale graft entry removed');
 });
 
+test('onlyIfPresent: an unsolicited refresh updates an existing entry and creates nothing', () => {
+  // The mode an auto-refresh runs in when this machine has no record that anyone
+  // ever ran `graft init` for the repo (fresh clone of committed wiring). ~/.codex
+  // is machine-wide — shared by every project — so installing there uninvited is
+  // graft granting itself config; re-pointing an entry that already names graft is
+  // maintenance, and nothing else in the product ever does it.
+  const home = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+
+  const none = installCodexHooks(home, { onlyIfPresent: true });
+  assert.deepEqual(none.map((w) => w.action), ['skipped-absent']);
+  assert.equal(existsSync(join(home, '.codex', 'hooks.json')), false, 'no config created');
+  // Not even the shim: with no entry pointing at it, it is an orphan file left in
+  // someone's home directory.
+  assert.equal(existsSync(join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs')), false);
+
+  // A foreign hooks.json is still not ours to add to.
+  writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify({
+    hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'other-tool' }] }] },
+  }));
+  const foreign = installCodexHooks(home, { onlyIfPresent: true });
+  assert.deepEqual(foreign.map((w) => w.action), ['skipped-absent']);
+  assert.ok(!readFileSync(join(home, '.codex', 'hooks.json'), 'utf8').includes('graft'));
+
+  // But an entry that names graft — written by an init this machine has forgotten,
+  // or one that predates the stamp entirely — is brought up to date.
+  writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify({
+    hooks: { PostToolUse: [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'other-tool' }] },
+      { matcher: 'Write', hooks: [{ type: 'command', command: 'node /old/graft-hooks.cjs post-edit' }] },
+    ] },
+  }));
+  const present = installCodexHooks(home, { onlyIfPresent: true });
+  assert.deepEqual(present.map((w) => w.action), ['created', 'updated']);
+  assertRunnableShim(join(home, '.codex', 'hooks', 'graft', 'graft-hooks.cjs'), 'the shim it points at');
+  const after = JSON.parse(readFileSync(join(home, '.codex', 'hooks.json'), 'utf8'));
+  assert.ok(!JSON.stringify(after).includes('/old/'), 'the stale path is gone');
+  assert.ok(after.hooks.PostToolUse.some((e: any) => e.hooks[0].command === 'other-tool'), 'foreign kept');
+  assert.equal(after.hooks.Stop.length, 1, 'and the rest of the set is completed');
+});
+
 test('editedFilePath reads the touched file from BOTH host edit-tool shapes', () => {
   const dir = '/repo';
   // Claude Code: Write/Edit state the absolute path directly

@@ -40,6 +40,12 @@ export interface GraphCheckResult {
 
 export interface GraphCheckOptions {
   contextDir?: string;
+  /** The same `-e` narrowing the build ran under. It has to be passed here too:
+   * a graph built from `-e .ts` holds no Python nodes, so a check that enumerated
+   * every language would re-extract the .py files, find their ids missing from the
+   * committed graph, and report them as `added` — permanent phantom drift that
+   * `graft build` (run without the flag) would then "fix" by widening the graph. */
+  extensions?: string[];
 }
 
 // async: the breadth tier's WASM grammars load asynchronously and must be warmed
@@ -70,9 +76,20 @@ export async function checkGraph(
   }
 
   // Freshly extract Tier-1 nodes from the code on disk (same file set as build).
-  const sourceFiles = listSourceFiles(root, outDir);
+  const sourceFiles = listSourceFiles(root, outDir, undefined, opts.extensions);
+  // Same `languageOf(...) === null` filter buildGraph warms behind, and it has to be
+  // the same one: `.java` is claimed by both registries and the loop below always
+  // gives the file to the depth tier (`lang ? null : genericLangOf(...)`), so warming
+  // its breadth grammar loaded a multi-MB wasm and compiled queries/java.scm on every
+  // `graft check` of every Java repo for a code path that can never run — and `check`
+  // runs in CI, on the hook path, and before every stale-graph query.
   await warmGenericGrammars(
-    new Set(sourceFiles.map((f) => genericLangOf(f)?.name).filter((n): n is string => !!n)),
+    new Set(
+      sourceFiles
+        .filter((f) => languageOf(f) === null)
+        .map((f) => genericLangOf(f)?.name)
+        .filter((n): n is string => !!n),
+    ),
   );
   const current = new Map<string, string>(); // id → body_hash
   for (const file of sourceFiles) {

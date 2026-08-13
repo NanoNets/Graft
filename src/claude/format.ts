@@ -5,6 +5,7 @@ import type { GraphV1, EdgeV1 } from '../graph/types.js';
 // "did we hit a real name, or match broadly enough to trust anyway" is the same
 // question in both places, and one set of calibrated numbers beats two.
 import { HIGH_FLOOR, STRONG_FLOOR } from '../ask/fuse.js';
+import { formatCount } from "../util/num.js";
 
 const C = {
   indigo: (s: string) => `\x1b[38;2;84;111;255m${s}\x1b[0m`,
@@ -32,7 +33,7 @@ export function renderStatusline(
   const top = [C.muted('◤ ') + C.indigo('graft'), C.text(`${stats.nodeCount} nodes / ${stats.edgeCount} edges`)];
   top.push(freshnessSegment(stats));
   const saved = session?.savedTokens ?? 0;
-  if (saved > 0) top.push(C.indigo(`~${saved.toLocaleString()} tok saved`));
+  if (saved > 0) top.push(C.indigo(`~${formatCount(saved)} tok saved`));
 
   const bottom: string[] = [];
   if (typeof ctx.ctxPct === 'number') bottom.push(C.text(`ctx ${ctx.ctxPct}%`));
@@ -125,9 +126,9 @@ export function formatRetrieval(ask: AskJson, cap = 5): string | null {
   const base = tokensOf(ask.saved!.baselineChars);
   const pct = Math.round((saved / base) * 100);
   return (
-    `${body}\n[graft] tokens saved ≈ ${saved.toLocaleString()} (${pct}%); this pack ≈ ` +
-    `${tokensOf(body.length).toLocaleString()} tok vs reading the ${ask.saved!.files} file(s) whole ≈ ` +
-    `${base.toLocaleString()} tok (estimate).`
+    `${body}\n[graft] tokens saved ≈ ${formatCount(saved)} (${pct}%); this pack ≈ ` +
+    `${formatCount(tokensOf(body.length))} tok vs reading the ${ask.saved!.files} file(s) whole ≈ ` +
+    `${formatCount(base)} tok (estimate).`
   );
 }
 

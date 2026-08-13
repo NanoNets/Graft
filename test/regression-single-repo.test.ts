@@ -22,6 +22,7 @@ import { buildRepoMap, formatRepoMap } from "../src/graph/map.js";
 import { grepGraph } from "../src/search/grep.js";
 import { resolveSymbol, callersOf } from "../src/graph/traverse.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 /** Materialize a fixture repo from a path→content map. */
 function fx(layout: Record<string, string>): string {
@@ -128,7 +129,7 @@ for (const [name, layout] of Object.entries(FIXTURES)) {
       const callers = callersOf(graph, targets[0]);
       assert.ok(callers.length > 0, `${name}/callers: "${calleeName}" should have >=1 caller`);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmDir(dir);
     }
   });
 }

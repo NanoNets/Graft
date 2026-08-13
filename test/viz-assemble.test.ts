@@ -8,6 +8,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assembleContextGraph, normalizeRelation } from "../src/viz/assemble.js";
+import { rmDir } from "./helpers.js";
 
 function makeContextDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "graftviz-"));
@@ -87,7 +88,7 @@ test("assembleContextGraph builds nodes and edges from frontmatter", () => {
     assert.equal(g.meta.droppedEdges, 1);
     assert.equal(g.meta.skippedFiles, 1);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 

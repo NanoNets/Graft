@@ -13,6 +13,7 @@
  * map — routes through {@link savingsFor} + {@link withSavings} here.
  */
 import type { GraphV1 } from '../graph/types.js';
+import { formatCount } from "../util/num.js";
 
 export interface Savings {
   /** How many source files the baseline covers. */
@@ -74,9 +75,9 @@ export function savingsLine(body: string, saved: Savings | undefined): string {
   const delta = base - pack;
   const pct = Math.round((delta / base) * 100);
   return (
-    `[graft] tokens saved ≈ ${delta.toLocaleString()} (${pct}%) — this output ≈ ` +
-    `${pack.toLocaleString()} tok vs reading the ${saved.files} file(s) it covers whole ≈ ` +
-    `${base.toLocaleString()} tok (estimate).` +
+    `[graft] tokens saved ≈ ${formatCount(delta)} (${pct}%) — this output ≈ ` +
+    `${formatCount(pack)} tok vs reading the ${saved.files} file(s) it covers whole ≈ ` +
+    `${formatCount(base)} tok (estimate).` +
     SAVINGS_TURN_NUDGE
   );
 }

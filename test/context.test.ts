@@ -12,7 +12,7 @@ import { buildContext } from "../src/context/build.js";
 import { checkContext, indexFreshness, staleBanner } from "../src/context/check.js";
 import { contextDirFor, ensureGitignored, ensureSearchable } from "../src/context/node-file.js";
 import { writeBuildConfig } from "../src/util/state.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, rmDir } from "./helpers.js";
 
 // CLI-spawn helper (same pattern as test/graph-traverse-cli.test.ts) — these tests
 // exercise the real process boundary (exit codes), which a unit-level call into
@@ -74,7 +74,7 @@ test("init builds one markdown node per entity, with links and a manifest", asyn
     assert.equal(manifest.files.length, 2);
     assert.equal(manifest.nodes.length, 3);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -86,7 +86,7 @@ test("check passes immediately after init", async () => {
     assert.equal(r.ok, true);
     assert.equal(r.missing, false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -97,7 +97,7 @@ test("check reports NO GRAPH when init never ran", () => {
     assert.equal(r.missing, true);
     assert.equal(r.ok, false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -111,7 +111,7 @@ test("check detects content drift when a source file changes", async () => {
     assert.equal(r.contentDrift.length, 1);
     assert.equal(r.contentDrift[0].path, "auth.ts");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -131,7 +131,7 @@ test("indexFreshness/staleBanner: recorded files gone from disk (the branch-swit
     assert.match(banner ?? "", /ahead of your working tree/, "banner fires when stale");
     assert.match(banner ?? "", /graft grep/, "banner steers to graft grep, not raw grep");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -141,7 +141,7 @@ test("indexFreshness returns null when there is no graph", () => {
     assert.equal(indexFreshness(dir), null);
     assert.equal(staleBanner(null), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -154,7 +154,7 @@ test("check detects a new file not yet in the graph (coverage drift)", async () 
     assert.equal(r.ok, false);
     assert.deepEqual(r.coverage, ["new.ts"]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -190,7 +190,7 @@ test("A5: a persisted --include-dir override reaches context/build.ts's file lis
     assert.deepEqual(check.removed, [], "build/ must not be reported removed — check.ts must see it too");
     assert.deepEqual(check.coverage, [], "build/ must not be reported as new/uncovered — it's already in the manifest");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -208,7 +208,7 @@ test("re-running init clears drift", async () => {
     await buildContext(dir, buildOpts());
     assert.equal(checkContext(dir).ok, true);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -222,7 +222,7 @@ test("human notes below the generated block survive regeneration", async () => {
     await buildContext(dir, buildOpts());
     assert.match(readFileSync(path, "utf8"), /Hand-written note: watch out for retries\./);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -243,7 +243,7 @@ test("graft check: keyless build (no --deep) exits 0 — wiring graph present, m
     assert.match(r.stdout, /wiring graph is the source of truth/);
     assert.match(r.stdout, /graph check: OK/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -255,7 +255,7 @@ test("graft check: neither layer ever built exits 1", () => {
     assert.match(r.stdout, /NO GRAPH/);
     assert.match(r.stdout, /graft build/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -280,7 +280,7 @@ test("graft check: keyless build then code changes (wiring stale) exits 1", () =
     assert.equal(r.status, 1, `expected exit 1, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.match(r.stdout, /graph check: STALE/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -293,7 +293,7 @@ test("ensureGitignored: creates .gitignore with the graft/ entry when none exist
     assert.match(gi, /^graft\/$/m);
     assert.match(gi, /regenerable, not committed/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -307,7 +307,7 @@ test("ensureGitignored: appends to an existing .gitignore without clobbering it"
     assert.match(gi, /dist\//);
     assert.match(gi, /^graft\/$/m);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -321,7 +321,7 @@ test("ensureGitignored: idempotent — a second build adds nothing", () => {
     assert.equal(once, twice);
     assert.equal((twice.match(/^graft\/$/gm) ?? []).length, 1);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -332,7 +332,7 @@ test("ensureGitignored: recognizes a pre-existing bare `graft` entry (no slash) 
     ensureGitignored(dir, contextDirFor(dir));
     assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), "graft\n");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -342,7 +342,7 @@ test("ensureGitignored: no-op when the graph dir is outside the repo root", () =
     ensureGitignored(dir, join(tmpdir(), "somewhere-else-graft"));
     assert.equal(existsSync(join(dir, ".gitignore")), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -359,7 +359,7 @@ test("ensureSearchable: re-admits the card tree while excluding the caches", () 
     assert.match(ig, /^graft\/\.graph\/$/m, "and not wiring.json");
     assert.match(ig, /ripgrep reads/, "carries the why, for whoever finds this file");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -375,7 +375,7 @@ test("ensureSearchable: appends to an existing .ignore, and is idempotent", () =
     assert.equal(once, twice);
     assert.equal((twice.match(/^!graft\/$/gm) ?? []).length, 1);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -387,7 +387,7 @@ test("ensureSearchable: leaves a hand-written negation alone", () => {
     ensureSearchable(dir, contextDirFor(dir));
     assert.equal(readFileSync(join(dir, ".ignore"), "utf8"), "# mine\n!graft/\n");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -397,6 +397,6 @@ test("ensureSearchable: no-op when the graph dir is outside the repo root", () =
     ensureSearchable(dir, join(tmpdir(), "somewhere-else-graft"));
     assert.equal(existsSync(join(dir, ".ignore")), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

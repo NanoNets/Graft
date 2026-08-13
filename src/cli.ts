@@ -9,7 +9,7 @@ import { Command } from "commander";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
-import { resolveConfig, type EngineConfig } from "./ai/providers.js";
+import { credentialProblem, resolveConfig, type EngineConfig } from "./ai/providers.js";
 import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
@@ -47,9 +47,13 @@ program
   .description("Build a repo's context graph as linked markdown, and keep it in sync with the code.")
   .version(currentVersion, "-v, --version")
   .option("--dir <path>", "context graph directory (default: <repo>/graft)")
-  .option("--provider <name>", "LLM wire format: openai | anthropic (env GRAFT_PROVIDER)")
+  .option(
+    "--provider <name>",
+    "LLM wire format: openai | anthropic | claude-cli (env GRAFT_PROVIDER). " +
+      "claude-cli drives your signed-in Claude Code CLI — a subscription, no API key",
+  )
   .option("--model <id>", "model id for the LLM pass (env GRAFT_MODEL)")
-  .option("--api-key <key>", "provider API key (env GRAFT_API_KEY)")
+  .option("--api-key <key>", "provider API key (env GRAFT_API_KEY); not used by claude-cli")
   .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)");
 
 interface GlobalOpts {
@@ -226,15 +230,20 @@ program
         .map(([k, n]) => `${n} ${k}`)
         .join(", ");
 
-    // --deep needs a key; without one, degrade to the $0 structural build.
+    // --deep needs a reachable model; without one, degrade to the $0 structural build.
     let deep = opts.deep;
     const resolved = resolveConfig(cliConfig());
-    if (deep && !resolved.apiKey) {
+    const problem = deep ? credentialProblem(resolved) : undefined;
+    if (problem) {
       deep = false;
+      console.error(`⚠ falling back to the structural build (no LLM summaries).\n  ${problem}`);
+    }
+    // Say so out loud: the run costs subscription usage, not API credits, and the
+    // user never asked for this provider — they just had the CLI installed.
+    if (deep && resolved.autoDetectedProvider) {
       console.error(
-        "⚠ no API key set — falling back to the structural build (no LLM summaries).\n" +
-          "  Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL for your\n" +
-          "  provider) and re-run `graft build --deep` to add concept nodes and summaries.",
+        `→ no API key found; using your signed-in Claude Code CLI (${resolved.model}).\n` +
+          "  Set GRAFT_API_KEY to use a metered provider instead.",
       );
     }
     if (deep && resolved.usedLegacyEnv) {
