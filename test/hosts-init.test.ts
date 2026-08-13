@@ -171,16 +171,19 @@ test('global: false keeps the instruction file but skips every ~ write', () => {
  * `HOME`, so on Windows the child read the *runner's* profile and reported
  * whichever agents it happened to have installed instead of the fixture's.
  */
-function cliStderr(repo: string, home: string, extra: string[] = []): string {
+function cliStderr(repo: string, home: string, extra: string[] = [], status = 0): string {
   const res = runCli(['init', repo, '--no-build', ...extra], { home });
-  assert.equal(res.status, 0, res.describe());
+  assert.equal(res.status, status, res.describe());
   return res.stderr ?? '';
 }
 
 test('CLI: no flags and no TTY writes nothing and names the detected agents', () => {
   const home = fresh(); const repo = fresh();
   mkdirSync(join(home, '.cursor'));
-  const out = cliStderr(repo, home);
+  // Exit 1, because nothing was written: `graft init && <next step>` has to stop
+  // rather than proceed as though the repo were wired. The guidance below is what
+  // makes that recoverable, and 0 made it easy to scroll past in automation.
+  const out = cliStderr(repo, home, [], 1);
   assert.match(out, /nothing written/);
   assert.match(out, /detected: claude, cursor/);
   assert.match(out, /graft init --agents claude cursor/);

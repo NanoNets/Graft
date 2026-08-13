@@ -3,10 +3,7 @@
  * as a collapsible tree with kind dots and per-file symbol counts.
  */
 import { type VizGraph, colorToken, cvar } from "./data.js";
-
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-}
+import { escapeHtml as esc } from "./escape.js";
 
 export function renderOutline(
   host: HTMLElement,

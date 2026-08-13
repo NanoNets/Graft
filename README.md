@@ -236,6 +236,7 @@ _Summary, sources, links, and notes ship today in markdown nodes. The crux ships
 ## What runs where
 
 - **On your machine, no key, no network:** the structural code graph. `graft build` (wiring graph + per-file cards), `graft check`, and `graft ask` are deterministic tree-sitter — they never call a model.
+- **On your Claude subscription, no key:** if the [Claude Code](https://claude.com/claude-code) CLI is installed and signed in, `graft build --deep` just works — graft drives it in headless mode and the run bills against your existing subscription instead of metered API credits. This is the default whenever no API key is configured; force it with `GRAFT_PROVIDER=claude-cli` (`GRAFT_MODEL=sonnet|opus|haiku`). The CLI is invoked with every tool disabled and your own settings, hooks, MCP servers and `CLAUDE.md` excluded, so it is a pure summarization call that cannot touch your repo.
 - **Through your provider key:** the LLM-written parts — `graft build --deep` adds the concept nodes (file summaries + node synthesis) and the per-symbol summaries and cruxes. graft is vendor-neutral: set `GRAFT_PROVIDER` (`openai` for any OpenAI-compatible endpoint, or `anthropic` for the native API), your `GRAFT_API_KEY`, `GRAFT_MODEL`, and — for the `openai` wire format — `GRAFT_BASE_URL` to point at OpenRouter, Fireworks, Groq, a LiteLLM proxy, a local server, or OpenAI itself. Or pass `--provider/--model/--api-key/--base-url` on the command line. (`OPENROUTER_API_KEY` still works as a deprecated fallback.)
 - **No telemetry** and no analytics — the only network calls are the LLM requests you configured.
 
@@ -320,7 +321,7 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
   <br/><sub>edit a file → blast radius appears inline → graph auto-resyncs → confirmed in <code>graft viz</code></sub>
 </p>
 
-`graft init` is idempotent and never clobbers your existing `.claude/settings.json` — it merges its blocks and leaves the rest alone. Want the LLM summaries too? Run `graft build --deep` (with a key) whenever you like; auto-sync will never do it for you.
+`graft init` is idempotent and never clobbers your existing `.claude/settings.json` — it merges its blocks and leaves the rest alone. Want the LLM summaries too? Run `graft build --deep` (with a key, or on your Claude subscription) whenever you like; auto-sync will never do it for you.
 
 ---
 
@@ -329,6 +330,7 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
 ```bash
 graft build [dir]                    # build graft/ from the code at [dir]: wiring graph + per-file cards (no LLM, no key)
 graft build --deep                   # add the LLM layer: concept nodes + per-symbol summary/crux (cached)
+                                     # uses your signed-in Claude Code CLI when no API key is set
 graft build --extensions .ts .py     # only include these code extensions
 graft build --no-reuse               # re-parse every file instead of replaying unchanged ones from cache
 

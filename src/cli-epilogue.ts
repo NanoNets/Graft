@@ -4,6 +4,7 @@
  * so the exact text — spacing is hand-aligned, not incidental — can be
  * unit-tested without spawning the CLI.
  */
+import { formatCount } from "./util/num.js";
 
 // The widest line (index 4, tied with index 2 at 26 chars) gets the live
 // node/edge stats appended, when a graph exists.
@@ -47,7 +48,7 @@ export function formatInitEpilogue(opts: InitEpilogueOptions): string {
 
   const wordmark = WORDMARK_LINES.map((l) => (tty ? indigo(l) : l));
   if (graphBuilt && nodes !== undefined && edges !== undefined) {
-    const stats = `  ${nodes.toLocaleString("en-US")} nodes · ${edges.toLocaleString("en-US")} edges`;
+    const stats = `  ${formatCount(nodes)} nodes · ${formatCount(edges)} edges`;
     wordmark[STATS_LINE_INDEX] += tty ? muted(stats) : stats;
   }
 

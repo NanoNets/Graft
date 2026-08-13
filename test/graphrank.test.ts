@@ -17,6 +17,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { ask } from "../src/ask/ask.js";
 import { personalizedPageRank } from "../src/ask/graphrank.js";
 import type { GraphV1, NodeV1, EdgeV1, Relation } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 // ── Unit: personalizedPageRank ───────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ test("ask (graphRank off): pure lexical does not favour the connected hit", asyn
       "without graph-rank the connected hit gets no ranking advantage",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -223,7 +224,7 @@ test("ask (graphRank on): connected hit outranks the isolated collision", async 
     assert.ok(iHandler >= 0 && iWidget >= 0, "both same-word hits still present");
     assert.ok(iHandler < iWidget, "the graph-connected fooHandler ranks above isolated fooWidget");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -239,7 +240,7 @@ test("ask (graphRank on): a strongly-connected neighbour is rescued in", async (
       "a helper the query never named is rescued via connectivity",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -251,6 +252,6 @@ test("ask: graph-rank is on by default (same as graphRank:true)", async () => {
     const on = ask(dir, "foo", { graphRank: true }).hits.map((h) => h.title);
     assert.deepEqual(def, on, "default ordering equals explicit graphRank:true");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
