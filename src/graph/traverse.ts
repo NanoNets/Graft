@@ -15,7 +15,7 @@
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "./types.js";
 import { WALK_RELATIONS } from "./relations.js";
 import { assertPrefixIndexed, pathUnderPrefix } from "./scopes.js";
-import { normalizePathPrefix } from "../util/paths.js";
+import { normalizePathPrefix, toPosixPath } from "../util/paths.js";
 
 /** Which way to walk the wiring graph: `in` = incoming edges (who points at
  * the symbol — callers / blast radius), `out` = outgoing edges (what the symbol
@@ -68,12 +68,19 @@ export function resolveSymbol(graph: GraphV1, query: string, opts: ResolveSymbol
   }
 
   if (matches.length === 0 && looksLikeFilename) {
+    // Every `node.path` in the graph is posix, and this branch compares against
+    // paths, not names — so a native `src\graph\build.ts` (what a Windows shell's
+    // tab-completion produces, and what `graft_trace_calls` invites when its schema
+    // says "a file path also works") equalled no path at all and fell out as "symbol
+    // not found". Same normalization `--in` and `skeleton` already do; see the
+    // header of src/util/paths.ts for why it is keyed to the platform separator.
+    const lowerPath = toPosixPath(query).toLowerCase();
     matches = graph.nodes.filter(
       (n) =>
         n.kind === "file" &&
         (n.name.toLowerCase() === lowerQuery ||
-          n.path.toLowerCase() === lowerQuery ||
-          n.path.toLowerCase().endsWith("/" + lowerQuery)),
+          n.path.toLowerCase() === lowerPath ||
+          n.path.toLowerCase().endsWith("/" + lowerPath)),
     );
   }
 

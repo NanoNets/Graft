@@ -116,7 +116,12 @@ function ambiguousRepo(): string {
   writeFileSync(join(d, 'src', 'b.ts'), 'export function shared(): number {\n  return 2;\n}\n');
   // A cross-file call to the ambiguous name — resolve.ts drops it rather than
   // guessing which `shared` it means, so NEITHER definition gets a caller edge.
-  writeFileSync(join(d, 'src', 'user.ts'), 'import { shared } from "./a.js";\nexport function use(): number {\n  return shared();\n}\n');
+  //
+  // Deliberately NO import statement. A named import states which module the callee
+  // came from, and resolve.ts now resolves inside that file alone — which makes the
+  // call unambiguous and defeats the very fixture this test needs. An unimported bare
+  // call is the case that genuinely has nothing to go on but the name.
+  writeFileSync(join(d, 'src', 'user.ts'), 'declare function shared(): number;\nexport function use(): number {\n  return shared();\n}\n');
   execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d], { stdio: 'pipe' });
   return d;
 }

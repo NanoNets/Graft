@@ -34,6 +34,7 @@ import { rankScopesAndFuse } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
+import { formatCount } from "../util/num.js";
 
 export interface AskHit {
   kind: "concept" | "symbol" | "caller" | "callee";
@@ -995,9 +996,9 @@ function askSavingsLine(r: AskResult, body: string): string {
   const saved = base - pack;
   const pct = Math.round((saved / base) * 100);
   return (
-    `[graft] tokens saved ≈ ${saved.toLocaleString()} (${pct}%) — this pack ≈ ` +
-    `${pack.toLocaleString()} tok vs reading the ${r.saved.files} source file(s) whole ≈ ` +
-    `${base.toLocaleString()} tok. Estimate (baseline = those files read in full).` +
+    `[graft] tokens saved ≈ ${formatCount(saved)} (${pct}%) — this pack ≈ ` +
+    `${formatCount(pack)} tok vs reading the ${r.saved.files} source file(s) whole ≈ ` +
+    `${formatCount(base)} tok. Estimate (baseline = those files read in full).` +
     SAVINGS_TURN_NUDGE
   );
 }

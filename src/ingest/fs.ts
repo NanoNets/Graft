@@ -59,7 +59,38 @@ export function shouldSkipDir(name: string, includes?: ReadonlySet<string>): boo
  * index it, the same contract as tracked-but-ignored files).
  */
 export function walkDir(dir: string, includes?: ReadonlySet<string>): string[] {
+  assertRepoDir(dir);
   return gitVisibleFiles(dir, includes) ?? walkFilesystem(dir, includes);
+}
+
+/**
+ * Fail on a bad `[dir]` here, where the argument is still named, rather than four
+ * frames down in `readdirSync`.
+ *
+ * `graft build ./typo` used to reach the user as `ENOENT: no such file or directory,
+ * scandir 'C:\...'` — cli.ts's top-level handler prints `err.message` and nothing else,
+ * so the message never mentioned `graft build` or which argument was wrong. Every
+ * command that takes a repo root funnels through this walk, so validating once here
+ * covers `build`, `init` and `check` without each of them remembering to.
+ *
+ * Note the git path can't do this check for us: `gitVisibleFiles` spawns with
+ * `cwd: root`, and a spawn into a nonexistent cwd merely returns an error, which the
+ * walker fail-softs into the filesystem fallback.
+ *
+ * Exported because the walk is not always the FIRST thing a command does with the
+ * argument: `graft build ./typo --include-dir x` persisted a config file first, and
+ * `writeJsonAtomic` mkdir's recursively — so a typo silently created the directory
+ * it was complaining about. cli.ts calls this up front for exactly that reason; the
+ * check stays here so both callers can never disagree on the wording.
+ */
+export function assertRepoDir(dir: string): void {
+  let stat;
+  try {
+    stat = statSync(dir);
+  } catch {
+    throw new Error(`✗ ${dir}: no such directory — pass a repository root`);
+  }
+  if (!stat.isDirectory()) throw new Error(`✗ ${dir}: not a directory — pass a repository root`);
 }
 
 /** Git's canonical working-tree file set, relative to `dir`. Tracked files are
@@ -80,8 +111,19 @@ function gitVisibleFiles(dir: string, includes?: ReadonlySet<string>): string[] 
   if (result.status !== 0 || result.error || typeof result.stdout !== "string") return null;
 
   const out: string[] = [];
+  // `ls-files` prints one line PER INDEX STAGE, so during a merge conflict every
+  // unmerged path arrives three times (stages 1/2/3). Nothing downstream deduplicates:
+  // `listSourceStats` yields three SourceStats with the same `rel`, and build.ts's loop
+  // re-parses and re-pushes the same nodes three times, minting three nodes per id.
+  // `checkGraphInvariants` then reports `duplicate node id`, meta.nodeCount is inflated,
+  // and `ask` scores the same body 3×. The Claude Code `Stop` hook runs a build at the
+  // end of every turn, so this fires on its own in the middle of a conflicted merge.
+  // A Set rather than git's `--deduplicate` flag: that flag needs git >= 2.31 and this
+  // has to hold on whatever git the user has.
+  const seen = new Set<string>();
   for (const rel of result.stdout.split("\0")) {
-    if (!rel || skippedPath(rel, includes)) continue;
+    if (!rel || seen.has(rel) || skippedPath(rel, includes)) continue;
+    seen.add(rel);
     const abs = resolve(root, rel);
     try {
       const stat = lstatSync(abs);
