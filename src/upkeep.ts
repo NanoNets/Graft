@@ -26,7 +26,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readJson, writeJsonAtomic, cacheDir } from './util/state.js';
 import { HOSTS } from './hosts/registry.js';
@@ -163,8 +164,14 @@ export function formatUpdateNudge(current: string, latest: string | null | undef
  * all true, which is what plain `graft init` does.
  */
 export interface WiringOpts {
-  /** false → never write outside the repo (`--no-global`). */
-  global: boolean;
+  /**
+   * Out-of-repo writes (`~/.codex/hooks.json`, `~/.codex/config.toml`):
+   *   true          write them (a plain `graft init`)
+   *   false         never (`graft init --no-global`)
+   *   'if-present'  UPDATE graft's own entries where they already exist, never
+   *                 create them — see {@link refreshOpts}.
+   */
+  global: boolean | 'if-present';
   /** false → skip MCP server registration (`--no-mcp`). */
   mcp: boolean;
   /** false → skip hook installation (`--no-hooks`). */
@@ -186,11 +193,19 @@ export interface WiringStamp {
   hosts: string[];
   /** The init flags to replay — see {@link WiringOpts}. */
   opts?: Partial<WiringOpts>;
+  /** The `.claude/settings.json` allow entries a previous init PROPOSED here.
+   * One of them missing from the file now means it was removed on purpose, so the
+   * next init leaves it out — see `claude/settings-merge.ts#mergeGraftSettings`.
+   * Absent (an older stamp, or a machine that never ran init here) means "no
+   * record", and every entry is offered as before. */
+  offeredAllow?: string[];
   at: string;
 }
 
 /** Under `graft/.cache/`, beside the other derived state: git-ignored, per-clone,
- * and cheap to lose — a missing stamp just means one idempotent refresh. */
+ * and cheap to lose — a missing stamp just means one idempotent refresh. What must
+ * NOT be lost with it is the user's flags; those are mirrored to
+ * {@link wiringMemoPath}, outside the repo. */
 export function stampPath(repo: string): string {
   return join(cacheDir(repo), 'wiring-stamp.json');
 }
@@ -199,21 +214,84 @@ export function readStamp(repo: string): WiringStamp | null {
   return readJson<WiringStamp>(stampPath(repo));
 }
 
+/**
+ * The same flags, kept a second time OUTSIDE the repo.
+ *
+ * The stamp lives under `graft/.cache/`, which graft adds to `.gitignore` — so it
+ * is absent from every fresh clone and from any repo where someone deleted
+ * `graft/`. With only the stamp, `--no-global` evaporated exactly there: no stamp
+ * meant `DEFAULT_WIRING_OPTS`, and the first session in that clone rewrote
+ * `~/.codex/hooks.json` and `~/.codex/config.toml` — machine-wide files, shared by
+ * every project — for a user who had explicitly said "keep out of ~/.codex".
+ *
+ * Keyed by the repo's absolute path, hashed: the path itself would leak a directory
+ * layout into a filename, and on Windows the same repo reaches us with different
+ * casing and separators from different callers.
+ */
+export function wiringMemoPath(repo: string, home: string = homedir()): string {
+  const key = resolve(repo).replace(/[\\/]+$/, '');
+  const norm = process.platform === 'win32' ? key.toLowerCase().replace(/\\/g, '/') : key;
+  return join(home, '.graft', 'wiring', `${createHash('sha256').update(norm).digest('hex').slice(0, 16)}.json`);
+}
+
+interface WiringMemo {
+  /** Absolute repo path, for a human reading `~/.graft/wiring/` — never matched on. */
+  repo: string;
+  opts: Partial<WiringOpts>;
+  /** Mirrored from the stamp for the same reason the flags are: `graft/` is
+   * git-ignored, so the stamp is gone from every fresh clone and every repo where
+   * someone deleted the graph — and a forgotten offer is a re-added permission. */
+  offeredAllow?: string[];
+  at: string;
+}
+
+export function readWiringMemo(repo: string, home?: string): WiringMemo | null {
+  return readJson<WiringMemo>(wiringMemoPath(repo, home));
+}
+
+/**
+ * The allow entries a previous init already proposed for this repo, or undefined
+ * when nothing here remembers one.
+ *
+ * The distinction undefined vs `[]` matters: `[]` would say "a previous init
+ * offered nothing", which suppresses nothing; undefined says "no record", and the
+ * merge then offers the full set exactly as it did before this existed.
+ */
+export function priorAllowOffers(repo: string, home?: string): string[] | undefined {
+  return readStamp(repo)?.offeredAllow ?? readWiringMemo(repo, home)?.offeredAllow;
+}
+
 export function writeStamp(
   repo: string,
   version: string,
   hosts: string[],
   opts: Partial<WiringOpts> = {},
   at = new Date().toISOString(),
+  home?: string,
+  offeredAllow?: string[],
 ): void {
+  const full = { ...DEFAULT_WIRING_OPTS, ...opts };
+  // Carried over when this run has nothing to say (Claude Code wasn't in `hosts`,
+  // or its settings.json was unparseable so nothing was proposed): dropping the
+  // record would re-offer, on the next init, every permission the user removed.
+  const offered = offeredAllow ?? priorAllowOffers(repo, home);
   try {
     writeJsonAtomic(stampPath(repo), {
       version,
       hosts: [...hosts].sort(),
-      opts: { ...DEFAULT_WIRING_OPTS, ...opts },
+      opts: full,
+      ...(offered ? { offeredAllow: offered } : {}),
       at,
     } satisfies WiringStamp);
   } catch { /* unwritable graft/ — a refresh will just be retried next session */ }
+  try {
+    writeJsonAtomic(wiringMemoPath(repo, home), {
+      repo: resolve(repo),
+      opts: full,
+      ...(offered ? { offeredAllow: offered } : {}),
+      at,
+    } satisfies WiringMemo);
+  } catch { /* unwritable home — the stamp alone still covers the common case */ }
 }
 
 /**
@@ -242,9 +320,10 @@ export interface WiringRefresh {
   from: string;
   to: string;
   hosts: string[];
-  /** True when the refresh included writes outside the repo (`~/.codex/`), so the
-   * caller can say so — a session changing machine-wide config should be visible. */
-  global: boolean;
+  /** Whether the refresh could write outside the repo (`~/.codex/`), so the caller
+   * can say so — a session changing machine-wide config should be visible.
+   * `'if-present'` means it only refreshed entries that were already there. */
+  global: boolean | 'if-present';
 }
 
 /**
@@ -255,12 +334,42 @@ export interface WiringRefresh {
  * rebuild there would stall the agent's first turn), and no-ops when the repo has
  * no graft wiring at all.
  */
+/**
+ * The flags a refresh replays, and how sure we are of them.
+ *
+ * The distinction that matters is "did anyone ever run `graft init` on THIS
+ * machine for this repo". A stamp or a memo says yes — replay what they chose. Both
+ * missing says no: someone cloned a repo whose wiring was committed (the epilogue
+ * tells them to commit it) and opened a session. Rewriting the repo's own files
+ * there is maintenance; CREATING config in `~/.codex` there is graft granting
+ * itself machine-wide config on behalf of a user who never asked for it.
+ *
+ * Hence `'if-present'` rather than a flat `false`. A flat `false` also abandoned the
+ * `~/.codex` entries of every install that predates the stamp: those users DID run
+ * `graft init`, there is simply no record of it on this machine, and nothing else
+ * ever refreshes those files (no skill, rule file or MCP instruction tells an agent
+ * to re-run init) — so an upgrade would leave them pointing at an old shim forever.
+ * Updating an entry that is already there cannot be graft helping itself to
+ * anything: the entry is the user's own earlier "yes", and it names graft.
+ */
+export function refreshOpts(stamp: WiringStamp | null, memo: WiringMemo | null): WiringOpts {
+  if (stamp) return wiringOpts(stamp); // includes a pre-flags stamp: init ran here, wiring everything
+  if (memo) return { ...DEFAULT_WIRING_OPTS, ...memo.opts };
+  return { ...DEFAULT_WIRING_OPTS, global: 'if-present' };
+}
+
 export function reconcileWiring(
   repo: string,
   current: string,
   deps: {
     wired?: (repo: string) => string[];
-    rewrite: (repo: string, hosts: string[], opts: WiringOpts) => void;
+    /** Returns what the rewrite proposed, so the stamp written below records it.
+     * The two used to be independent — this function wrote the stamp AFTER the
+     * rewrite and would have clobbered anything the rewrite tried to record on its
+     * own, so the offer list had to come back through the return value. */
+    rewrite: (repo: string, hosts: string[], opts: WiringOpts) => { offeredAllow?: string[] } | void;
+    /** Overridable so a test never reads or writes the real `~/.graft`. */
+    home?: string;
   },
 ): WiringRefresh | null {
   try {
@@ -274,9 +383,9 @@ export function reconcileWiring(
     const onDisk = (deps.wired ?? wiredHostIds)(repo);
     const hosts = [...new Set([...(stamp?.hosts ?? []), ...onDisk])].sort();
     if (hosts.length === 0) return null; // never wired here — not our business
-    const opts = wiringOpts(stamp);
-    deps.rewrite(repo, hosts, opts);
-    writeStamp(repo, current, hosts, opts);
+    const opts = refreshOpts(stamp, stamp ? null : readWiringMemo(repo, deps.home));
+    const done = deps.rewrite(repo, hosts, opts);
+    writeStamp(repo, current, hosts, opts, undefined, deps.home, done?.offeredAllow);
     return { from: stamp?.version ?? 'unwired', to: current, hosts, global: opts.global };
   } catch {
     return null; // a refresh is an optimization; never fail the caller over it
@@ -286,7 +395,15 @@ export function reconcileWiring(
 export function formatWiringRefresh(r: WiringRefresh | null): string | null {
   if (!r) return null;
   // Name the out-of-repo writes explicitly: those are machine-wide and shared by
-  // every repo, so a user seeing this line should not have to guess what moved.
-  const scope = r.global && r.hosts.includes('agents') ? " (including this machine's ~/.codex config)" : '';
+  // every repo, so a user seeing this line should not have to guess what moved. The
+  // 'if-present' wording is the honest one for an unsolicited refresh — it may have
+  // touched nothing out there at all, and claiming otherwise would be alarming.
+  const codex = r.hosts.includes('agents');
+  const scope =
+    !codex || r.global === false
+      ? ''
+      : r.global === 'if-present'
+        ? " (refreshing this machine's ~/.codex entries where graft was already registered)"
+        : " (including this machine's ~/.codex config)";
   return `· graft refreshed this repo's agent wiring${scope} (written by ${r.from}, now ${r.to}): ${r.hosts.join(', ')}.`;
 }

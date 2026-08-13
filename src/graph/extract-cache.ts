@@ -25,6 +25,7 @@
  */
 import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { CACHE_DIR } from "../context/node-file.js";
@@ -147,7 +148,8 @@ function computeStamp(): string | null {
     // `.js` when running from `dist/`, `.ts` under tsx — take the extension from
     // our own filename rather than guessing which layout we're in.
     const dir = dirname(self);
-    const hashed = stampDir(dir, extname(self), packageVersion(dir) ?? "");
+    const version = `${packageVersion(dir) ?? ""}|${grammarVersions()}`;
+    const hashed = stampDir(dir, extname(self), version);
     if (hashed) return hashed;
     // Couldn't read the modules (bundled into one file, say). The version alone is
     // a weaker identity — it can't see a local edit — but it still turns over on
@@ -157,6 +159,64 @@ function computeStamp(): string | null {
   } catch {
     return null;
   }
+}
+
+/** The grammars whose version changes what a parse produces — the depth tier's four
+ * native ones, the wasm bundle the breadth tier loads, and the runtime that loads it. */
+const GRAMMAR_PKGS = [
+  "tree-sitter",
+  "tree-sitter-typescript",
+  "tree-sitter-python",
+  "tree-sitter-go",
+  "tree-sitter-java",
+  "tree-sitter-wasms",
+  "web-tree-sitter",
+] as const;
+
+/**
+ * The RESOLVED versions of the tree-sitter grammars, folded into the extractor identity.
+ *
+ * The docblock above says graft's own package version covers a grammar upgrade. It does
+ * not: every grammar dependency is declared as a `^` range, so a plain `npm i` can pull
+ * `tree-sitter-typescript@0.23.9` under an unchanged graft version — and from that moment
+ * every replayed cache entry is a parse no current build would produce, with nothing to
+ * notice it. Reading each installed package's own `version` is the only thing that tracks
+ * what is actually loaded. Unreadable ones become a stable `absent` marker rather than
+ * churning the stamp on every process.
+ */
+function grammarVersions(): string {
+  const req = createRequire(import.meta.url);
+  return GRAMMAR_PKGS.map((p) => `${p}@${depVersion(req, p)}`).join(",");
+}
+
+function depVersion(req: NodeJS.Require, pkg: string): string {
+  const read = (path: string): string | null => {
+    try {
+      const j = JSON.parse(readFileSync(path, "utf8")) as { name?: string; version?: string };
+      return j.name === pkg ? (j.version ?? null) : null;
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const direct = read(req.resolve(`${pkg}/package.json`));
+    if (direct) return direct;
+  } catch {
+    /* the package's `exports` map may not expose ./package.json — climb from its entry */
+  }
+  try {
+    let dir = dirname(req.resolve(pkg));
+    for (let i = 0; i < 6; i++) {
+      const v = read(join(dir, "package.json"));
+      if (v) return v;
+      const up = dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+  } catch {
+    /* not installed in this environment */
+  }
+  return "absent";
 }
 
 /**
@@ -174,7 +234,26 @@ export function stampDir(dir: string, ext: string, version = ""): string | null 
     h.update(f); // a rename is a change, even at identical content
     h.update(readFileSync(join(dir, f)));
   }
+  // The breadth tier's extraction is DEFINED by `queries/<lang>.scm`, which the module
+  // sweep above cannot see: it's a subdirectory, and .scm is not the module extension.
+  // So fixing queries/c.scm changes every C node in every graph while leaving every file
+  // this function hashed byte-identical — the stamp held, `readExtractCache` accepted the
+  // pre-fix entries, and no build ever re-parsed. Missing (a bundle shipped without the
+  // query dir) folds in nothing and leaves the stamp exactly where it was.
+  for (const q of readQueryDir(join(dir, "queries"))) {
+    h.update(q);
+    h.update(readFileSync(join(dir, "queries", q)));
+  }
   return h.digest("hex").slice(0, 16);
+}
+
+/** The `.scm` files in a queries directory, sorted; empty when there is no such dir. */
+function readQueryDir(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((f) => f.endsWith(".scm")).sort();
+  } catch {
+    return [];
+  }
 }
 
 /** graft's own version, or null when it can't be read. */

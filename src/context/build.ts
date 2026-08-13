@@ -47,6 +47,9 @@ export const CODE_EXTENSIONS = [
 /** Char budget of summary text per synthesis call (keeps each call in-context). */
 const BATCH_CHAR_BUDGET = 48_000;
 
+/** Files summarized at once. Matches graph/enrich.ts, so one `-j` means one thing. */
+const DEFAULT_CONCURRENCY = 5;
+
 export interface BuildProgress {
   phase: "summarize" | "synthesize" | "write";
   index: number;
@@ -61,6 +64,13 @@ export interface BuildOptions {
   extensions?: string[];
   /** Human label for the model, recorded in the manifest (e.g. "openrouter:openai/gpt-4o-mini"). */
   model: string;
+  /**
+   * Files summarized in parallel (one LLM call each). Default
+   * {@link DEFAULT_CONCURRENCY}. This is the knob `-j` is documented to turn: a
+   * user who sets `-j 1` is usually working around a rate limit or, with the
+   * `claude-cli` provider, avoiding N simultaneous Claude Code processes.
+   */
+  concurrency?: number;
   summarizer: Summarizer;
   synthesizer: Synthesizer;
   onProgress?: (info: BuildProgress) => void;
@@ -123,7 +133,8 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
   };
 
   // Phase 1: summarize each file, concurrent, content-hash cached.
-  const work = await mapWithConcurrency(files, 8, async (file, i): Promise<FileWork | undefined> => {
+  const limit = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
+  const work = await mapWithConcurrency(files, limit, async (file, i): Promise<FileWork | undefined> => {
     const rel = relPosix(root, file);
     opts.onProgress?.({ phase: "summarize", index: i, total: files.length, file: rel });
     let code: string;
@@ -142,7 +153,16 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
       return { rel, hash, summary: hit.summary };
     }
     try {
-      const summary = await opts.summarizer.summarize(code, { path: rel });
+      const summary = (await opts.summarizer.summarize(code, { path: rel })).trim();
+      // An empty summary is a failure wearing a success's clothes — a truncated
+      // turn, a refusal, a model that answered with whitespace. Caching it makes
+      // it PERMANENT (the next run hits `hit.hash === hash` and replays the
+      // empty string) and phase 2 filters the file out of synthesis forever,
+      // with no error and no counter to show it happened.
+      if (!summary) {
+        result.errors.push(`${rel}: model returned an empty summary`);
+        return { rel, hash };
+      }
       cache.summaries[rel] = { hash, summary };
       result.summarized++;
       return { rel, hash, summary };
@@ -164,20 +184,39 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
   const batches = batchBySize(summarized, BATCH_CHAR_BUDGET);
   result.batches = batches.length;
 
+  // Phase 1 is already paid for — thousands of calls on a large repo — and until
+  // now it lived only in memory until AFTER synthesis. One 429 on batch 3 of 40
+  // threw the whole thing away and the next run repaid every summarize call.
+  saveCache(outDir, cache);
+
   const synthNodes: SynthNode[] = [];
+  let synthFailures = 0;
   for (let b = 0; b < batches.length; b++) {
     opts.onProgress?.({ phase: "synthesize", index: b, total: batches.length, file: `batch ${b + 1}` });
     const key = batchKey(batches[b], hashByPath);
     let nodes = cache.synth[key];
     if (!nodes) {
-      nodes = await opts.synthesizer.synthesize(batches[b]);
+      try {
+        nodes = await opts.synthesizer.synthesize(batches[b]);
+      } catch (err) {
+        // Record and keep going: the batches that DO succeed are cached below,
+        // so a retry only repays the ones that failed.
+        result.errors.push(`synthesis batch ${b + 1}/${batches.length}: ${errMsg(err)}`);
+        synthFailures++;
+        continue;
+      }
       cache.synth[key] = nodes;
     }
     synthNodes.push(...nodes);
   }
   // Drop cache entries for batches we no longer produce, so it can't grow forever.
+  // A batch that FAILED has no entry, and must not be given an empty one: `[]` is
+  // a legitimate cached answer ("this batch yields no nodes"), so writing it here
+  // would turn a transient 429 into a permanent cache hit that never retries.
   cache.synth = Object.fromEntries(
-    batches.map((batch) => [batchKey(batch, hashByPath), cache.synth[batchKey(batch, hashByPath)] ?? []]),
+    batches
+      .map((batch) => [batchKey(batch, hashByPath), cache.synth[batchKey(batch, hashByPath)]] as const)
+      .filter((entry): entry is readonly [string, SynthNode[]] => entry[1] !== undefined),
   );
   saveCache(outDir, cache);
 
@@ -239,6 +278,32 @@ export async function buildContext(dir: string, opts: BuildOptions): Promise<Bui
     };
   });
   nodes.sort((a, b) => a.slug.localeCompare(b.slug));
+
+  // Phase 5 is all-or-nothing on disk, and this is the gate.
+  //
+  // The write below is a RECONCILIATION: every existing `graft/*.md` whose slug
+  // isn't in `nodes` is deleted, and the manifest is replaced with this run's
+  // roster. That is only correct when `nodes` is a complete picture of the repo.
+  // It is not, in two cases that cost nothing to hit — an expired key, a wrong
+  // model id, a 429 storm — and both used to end with an empty `nodes`:
+  //   - every summarize call failed, so phase 2 had nothing to synthesize;
+  //   - a synthesis batch failed, so part of the repo is missing from the roster.
+  // The old code deleted the whole concept layer and still exited 0. graft/ is
+  // git-ignored (there is no `git checkout` back), and node-file.ts promises that
+  // whatever a human writes under `## Notes` survives regeneration — so the loss
+  // is permanent and includes hand-written text. Bail before touching anything;
+  // the summaries are already cached, so the retry is cheap.
+  //
+  // An empty repo is NOT this case: no files means zero errors, and pruning
+  // everything is the right answer there.
+  const phase1Wiped = processed.length > 0 && summarized.length === 0;
+  if (phase1Wiped || synthFailures > 0) {
+    result.errors.push(
+      `concept layer left untouched: ${phase1Wiped ? "no file was summarized" : `${synthFailures} synthesis batch(es) failed`}` +
+        " — existing graft/*.md and their notes were kept as-is",
+    );
+    return result;
+  }
 
   const liveSlugs = new Set(nodes.map((n) => n.slug));
   for (const slug of existingNodeSlugs(outDir)) {

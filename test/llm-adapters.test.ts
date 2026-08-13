@@ -266,6 +266,52 @@ test("anthropic: reconstructed assistant tool_use carries the object input", asy
   assert.deepEqual(asst.content[0].input, { k: 1 });
 });
 
+test("anthropic: thinking is forwarded when asked, and left absent when not", async () => {
+  // Absent ≠ off. With no `thinking` field, current Claude models run ADAPTIVE
+  // thinking out of the caller's max_tokens, so the ops that need every token for
+  // the answer have to say "disabled" out loud — and the adapter has to send it.
+  const { client, box } = fakeAnthropic(anthropicResp());
+  const m = new AnthropicChatModel({ apiKey: "x", model: "claude-x", client });
+
+  await m.create({ messages: [{ role: "user", content: "hi" }] });
+  assert.equal("thinking" in box.params, false, "unset means 'whatever the model does by default'");
+
+  await m.create({ messages: [{ role: "user", content: "hi" }], thinking: { kind: "disabled" } });
+  assert.deepEqual(box.params.thinking, { type: "disabled" });
+
+  await m.create({ messages: [{ role: "user", content: "hi" }], thinking: { kind: "enabled", budgetTokens: 4096 } });
+  assert.deepEqual(box.params.thinking, { type: "enabled", budget_tokens: 4096 });
+});
+
+// `_options` is the SDK's own record of what it was constructed with. Reading it
+// is the only network-free way to prove the adapter passed something through to a
+// client it builds itself (the `client` injection seam skips construction).
+function sdkOptions(model: unknown): Record<string, unknown> {
+  return (model as { client: { _options: Record<string, unknown> } }).client._options;
+}
+
+test("anthropic: headers and timeout reach the SDK client — a Messages-API gateway needs both", async () => {
+  // ChatModelConfig has always accepted `headers` for every provider; this adapter
+  // was the one that dropped them, so a gateway that speaks the Messages API and
+  // requires its own routing header answered 401 with nothing to point at.
+  const m = new AnthropicChatModel({
+    apiKey: "x",
+    model: "claude-x",
+    baseUrl: "https://gateway.internal/v1",
+    headers: { "X-Tenant": "graft" },
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(sdkOptions(m).defaultHeaders, { "X-Tenant": "graft" });
+  assert.equal(sdkOptions(m).timeout, 30_000, "the SDK default is 10 minutes — a stalled host would pin a worker that long");
+});
+
+test("openai: timeout reaches the SDK client, and is left to the SDK when unset", async () => {
+  const withTimeout = new OpenAIChatModel({ apiKey: "x", model: "gpt-x", timeoutMs: 45_000 });
+  assert.equal(sdkOptions(withTimeout).timeout, 45_000);
+  const without = new OpenAIChatModel({ apiKey: "x", model: "gpt-x" });
+  assert.equal(sdkOptions(without).timeout, undefined, "no opinion configured → don't invent one");
+});
+
 test("anthropic: json mode forces emit_json and returns serialized text", async () => {
   const resp = anthropicResp({
     content: [{ type: "tool_use", id: "j1", name: "emit_json", input: { correct: true } }],

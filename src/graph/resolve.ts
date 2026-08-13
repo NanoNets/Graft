@@ -20,6 +20,15 @@ import type { RawEdge } from "./extract.js";
 const IMPORT_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"];
 /** C/C++ source + header extensions, for resolving `#include` targets. */
 const C_EXT = /\.(c|h|cc|cpp|cxx|hpp|hh|hxx|inl|ipp|c\+\+|h\+\+)$/i;
+/** Python source/stub extensions — a different import spelling entirely (see
+ * {@link resolvePythonImport}), so it gets its own resolver rather than the JS one. */
+const PY_EXT = /\.pyi?$/i;
+/** Languages whose bare call syntax can name a TYPE as well as a function: Python's
+ * `Repo()` IS the constructor call, and TS/JS `new Repo()` reaches here with the type as
+ * the callee name. Resolving those against a function-only index dropped every
+ * object-construction edge — the commonest coupling there is between two modules. The
+ * ambiguity rule in {@link resolveName} still refuses to guess between same-named types. */
+const TYPE_CALL_EXT = /\.(py|pyi|ts|tsx|mts|cts|js|jsx|mjs|cjs)$/i;
 
 /** A Go module discovered in the repo: its `module` path from `go.mod` and the repo
  * directory that `go.mod` lives in (posix, `.` for the repo root). A monorepo may hold
@@ -66,6 +75,11 @@ export function resolveEdges(
   // node ids. A `use App\Models\User` names a PSR-4 class whose file mirrors the namespace
   // tail under some (unknown) source root, so the suffix is the portable key.
   const phpFilesBySuffix = new Map<string, string[]>();
+  // Python module resolution: a file's path-suffix (`app/services/mailer.py`,
+  // `services/mailer.py`, …) → its file node ids. An absolute Python import names a
+  // module relative to a sys.path root graft cannot know, so — as with Java and PHP —
+  // the suffix is the portable key.
+  const pyFilesBySuffix = new Map<string, string[]>();
   const hasGoModules = !!opts.goModules?.length;
   for (const n of nodes) {
     if (n.kind === "file") {
@@ -88,6 +102,10 @@ export function resolveEdges(
         const parts = toPosixPath(n.path).split("/");
         for (let i = 0; i < parts.length; i++) push(phpFilesBySuffix, parts.slice(i).join("/"), n.id);
       }
+      if (PY_EXT.test(n.path)) {
+        const parts = toPosixPath(n.path).split("/");
+        for (let i = 0; i < parts.length; i++) push(pyFilesBySuffix, parts.slice(i).join("/"), n.id);
+      }
       {
         const p = toPosixPath(n.path);
         if (p === "lib.rs" || p === "main.rs") rustCrateRoots.push("");
@@ -104,18 +122,21 @@ export function resolveEdges(
     }
   }
 
-  // classParents: class/interface name → its declared base-class names, from raw
-  // `extends` edges (source id's own name → the base name). Used to walk up an
-  // inheritance chain when a receiver's own type has no matching method.
+  // classParents: class/interface NODE ID → its declared base-class names, from raw
+  // `extends` edges. Used to walk up an inheritance chain when a receiver's own type has
+  // no matching method.
+  //
+  // Keyed by node id, not by bare name. Keyed by name, `a/Base.java` (`class Base extends
+  // Foo`) and `b/Base.java` (`class Base extends Bar`) FUSE into
+  // `Base → [Foo, Bar]`, and a `base.handle()` in package `a` climbs into package b's
+  // `Bar.handle` and emits it as an `inferred` call edge. `Base`, `Client`, `Config`,
+  // `Handler` repeated across modules is ordinary, and silently crossing between them
+  // is exactly the guess the rest of this file exists to refuse.
   const classParents = new Map<string, string[]>();
   for (const e of rawEdges) {
     if (e.relation !== "extends" || !e.name) continue;
-    // The declaring class's own bare name — read from its node (keyed by n.name, set
-    // once at mint time) rather than re-derived by slicing e.source, which breaks once
-    // ids can carry a dedup ordinal (A3's `Cache~2`).
-    const ownName = byId.get(e.source)?.name;
-    if (!ownName) continue;
-    push(classParents, ownName, e.name);
+    if (!byId.has(e.source)) continue;
+    push(classParents, e.source, e.name);
   }
 
   const out: EdgeV1[] = [];
@@ -136,13 +157,15 @@ export function resolveEdges(
           ? resolveGoImport(e.specifier, opts.goModules!, goFilesByDir)
           : e.file.endsWith(".java")
             ? resolveJavaImport(e.specifier, javaFilesBySuffix)
-            : C_EXT.test(e.file)
-              ? resolveCInclude(e.specifier, e.file, byId, cFilesBySuffix)
-              : e.file.endsWith(".rs")
-                ? resolveRustUse(e.specifier, e.file, byId, rustCrateRoots)
-                : e.file.endsWith(".php")
-                  ? resolvePhpUse(e.specifier, phpFilesBySuffix)
-                  : resolveImport(e.specifier, e.file, byId);
+            : PY_EXT.test(e.file)
+              ? resolvePythonImport(e.specifier, e.file, byId, pyFilesBySuffix)
+              : C_EXT.test(e.file)
+                ? resolveCInclude(e.specifier, e.file, byId, cFilesBySuffix)
+                : e.file.endsWith(".rs")
+                  ? resolveRustUse(e.specifier, e.file, byId, rustCrateRoots)
+                  : e.file.endsWith(".php")
+                    ? resolvePhpUse(e.specifier, phpFilesBySuffix)
+                    : resolveImport(e.specifier, e.file, byId);
       add(e.source, target, "imports", "extracted");
     } else if (e.relation === "extends" || e.relation === "implements") {
       const kinds: Kind[] = e.relation === "implements" ? ["interface"] : ["class", "interface"];
@@ -171,7 +194,9 @@ export function resolveEdges(
     } else if (e.relation === "calls") {
       if (e.viaMember) {
         if (!e.recvType) continue;
-        const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents, e.argCount);
+        const hit = resolveTypedMember(
+          e.recvType, e.name!, e.file, ownerMethod, classParents, perFileName, globalName, e.argCount,
+        );
         if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
         if (hit) add(e.source, hit.id, "calls", hit.confidence);
         // No owner-qualified match means the call is unresolved. A unique bare
@@ -180,7 +205,7 @@ export function resolveEdges(
         // vs a compiler-grade oracle) for a 3x count inflation, i.e. noise. See #35.
         continue;
       }
-      // Three cases, because "a bare call" means something different per tier:
+      // Four cases, because "a bare call" means something different per tier and language:
       //
       //  - generic (breadth tier): tags.scm captures ALL calls as bare names, since it
       //    cannot type a receiver. In method-heavy languages those target methods, so
@@ -189,14 +214,35 @@ export function resolveEdges(
       //  - Java (depth tier): an implicit-`this` call is spelled as a member call in
       //    extract.ts, so the only bare call reaching here is `new Foo()`, whose target
       //    is a TYPE. Against the function index every constructor edge would drop.
-      //  - everything else: functions, exactly as before.
+      //  - Python / TS-JS: a bare call can name a type too — `Repo()` IS Python's
+      //    constructor call, and `new Repo()` arrives here with the type as the callee.
+      //    Function-only kinds dropped every object construction in both languages, i.e.
+      //    the single commonest way two modules couple.
+      //  - everything else (Go): functions, exactly as before.
       const srcOrigin = byId.get(e.source)?.origin;
       const callKinds: Kind[] =
         srcOrigin === "generic"
           ? ["function", "method"]
           : e.file.endsWith(".java")
             ? ["class", "struct", "enum", "interface"]
-            : ["function"];
+            : TYPE_CALL_EXT.test(e.file)
+              ? ["function", "class", "struct", "enum"]
+              : ["function"];
+      if (e.specifier) {
+        // The callee is a named import, so the source already states both halves of the
+        // answer — which module, and which exported name. Resolve inside that file and
+        // stop: a globally ambiguous name is NOT ambiguous here, and bare-name resolution
+        // would have dropped it. Anything the import doesn't settle (an external package,
+        // a barrel re-export) falls through to the bare-name path below, unchanged.
+        const targetFile = resolveImport(e.specifier, e.file, byId);
+        const candidates = byId.has(targetFile)
+          ? (perFileName.get(targetFile)?.get(e.name!) ?? []).filter((n) => callKinds.includes(n.kind))
+          : [];
+        if (candidates.length === 1) {
+          add(e.source, candidates[0].id, "calls", "extracted");
+          continue;
+        }
+      }
       const hit = resolveName(e.name!, e.file, callKinds, perFileName, globalName);
       if (hit) add(e.source, hit.id, "calls", hit.confidence); // drop unresolved calls (too noisy)
     }
@@ -221,12 +267,28 @@ function resolveName(
   perFileName: Map<string, Map<string, NodeV1[]>>,
   globalName: Map<string, NodeV1[]>,
 ): { id: string; confidence: EdgeV1["confidence"] } | null {
+  const hit = resolveNamedNode(name, file, kinds, perFileName, globalName);
+  return hit ? { id: hit.node.id, confidence: hit.confidence } : null;
+}
+
+/** {@link resolveName}, returning the NODE rather than just its id — the inheritance
+ * walk needs the declaring file to keep looking a supertype up in its own scope. */
+function resolveNamedNode(
+  name: string,
+  file: string,
+  kinds: Kind[],
+  perFileName: Map<string, Map<string, NodeV1[]>>,
+  globalName: Map<string, NodeV1[]>,
+): { node: NodeV1; confidence: EdgeV1["confidence"] } | null {
   const local = (perFileName.get(file)?.get(name) ?? []).filter((n) => kinds.includes(n.kind));
-  if (local.length) return { id: local[0].id, confidence: "extracted" };
+  if (local.length) return { node: local[0], confidence: "extracted" };
   const global = (globalName.get(name) ?? []).filter((n) => kinds.includes(n.kind));
-  if (global.length === 1) return { id: global[0].id, confidence: "inferred" };
+  if (global.length === 1) return { node: global[0], confidence: "inferred" };
   return null;
 }
+
+/** The kinds an `extends`/`implements` name can land on, when climbing a hierarchy. */
+const TYPE_KINDS: Kind[] = ["class", "interface", "struct", "enum"];
 
 /**
  * Resolve a typed member call (`recvType.name`) against the owner-qualified method
@@ -270,30 +332,48 @@ function resolveTypedMember(
   file: string,
   ownerMethod: Map<string, NodeV1[]>,
   classParents: Map<string, string[]>,
+  perFileName: Map<string, Map<string, NodeV1[]>>,
+  globalName: Map<string, NodeV1[]>,
   argCount?: number,
 ): { id: string; confidence: EdgeV1["confidence"] } | "ambiguous" | null {
   const MAX_DEPTH = 3;
-  const visited = new Set<string>([recvType]);
-  let frontier = [recvType];
+  // A frontier entry is a type name PLUS the file whose scope named it, because
+  // `classParents` is keyed by node id: to climb from `Base` we first have to know WHICH
+  // `Base`, and the only honest answer is the one visible from the file that named it.
+  const visited = new Set<string>([`${file}\0${recvType}`]);
+  let frontier: Array<{ type: string; file: string }> = [{ type: recvType, file }];
   for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
-    for (const type of frontier) {
-      const all = ownerMethod.get(`${type}.${name}`);
+    for (const entry of frontier) {
+      const all = ownerMethod.get(`${entry.type}.${name}`);
       if (!all || all.length === 0) continue; // try next ancestor
       const candidates = narrowByArity(all, argCount);
       if (candidates.length === 1) {
         const c = candidates[0];
         return { id: c.id, confidence: c.path === file ? "extracted" : "inferred" };
       }
-      const sameFile = candidates.find((c) => c.path === file);
-      if (sameFile) return { id: sameFile.id, confidence: "extracted" };
-      return "ambiguous"; // several, none same-file — drop and stop
+      // Several classes share this type NAME. The tiebreak is the scope we reached this
+      // level FROM — at depth 0 that is the call site (as before), but on an ancestor it
+      // is the file that declared the supertype. Falling back to the call site's file up
+      // there would let a homonym next to the CALLER hijack a hierarchy declared
+      // somewhere else entirely.
+      const inScope = candidates.find((c) => c.path === entry.file);
+      if (inScope) return { id: inScope.id, confidence: inScope.path === file ? "extracted" : "inferred" };
+      return "ambiguous"; // several, none in scope — drop and stop
     }
-    const next: string[] = [];
-    for (const type of frontier) {
-      for (const parent of classParents.get(type) ?? []) {
-        if (visited.has(parent)) continue;
-        visited.add(parent);
-        next.push(parent);
+    const next: Array<{ type: string; file: string }> = [];
+    for (const entry of frontier) {
+      // Which declaration of `entry.type` this is decides which hierarchy we climb. When
+      // the name resolves to no single type node (unknown, or several homonyms with no
+      // same-file winner), the chain simply STOPS: drop rather than pick a hierarchy.
+      const decl = resolveNamedNode(entry.type, entry.file, TYPE_KINDS, perFileName, globalName);
+      if (!decl) continue;
+      for (const parent of classParents.get(decl.node.id) ?? []) {
+        // The supertype name is looked up from the DECLARING file, not the call site's:
+        // `a/Base.java`'s `extends Foo` means package a's Foo.
+        const key = `${decl.node.path}\0${parent}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        next.push({ type: parent, file: decl.node.path });
       }
     }
     frontier = next;
@@ -319,6 +399,68 @@ function resolveImport(spec: string, file: string, byId: Map<string, NodeV1>): s
   ];
   for (const c of candidates) if (byId.has(c)) return c;
   return spec;
+}
+
+/**
+ * Resolve a Python import to the in-repo module file it names, else the raw specifier.
+ *
+ * Python is spelled nothing like JS and was being run through the JS resolver, which
+ * made every Python import edge in every graph point at an external string. The
+ * extractor hands over the specifier verbatim — `.utils`, `..core.db`, `app.services` —
+ * and `posix.join(dir, ".utils")` is `"src/.utils"`: every candidate path it built was
+ * one that cannot exist, so resolution always fell through to `return spec`. Combined
+ * with `collectImportedSymbols` being TS-only (no `references` edges either), a Python
+ * repo's graph had containment and intra-file calls and NO wiring between files at all.
+ *
+ * Two spellings, both translated before any path exists:
+ *   - Relative: leading dots are the depth (`.` = this package, `..` = its parent), and
+ *     `.` inside the tail is the separator. So `..core.db` from `a/b/c.py` is `a/core/db`.
+ *   - Absolute: `app.services.mailer` names a module relative to a sys.path root graft
+ *     cannot know, so it is matched as a path SUFFIX, longest tail first — the same
+ *     root-agnostic strategy `resolveJavaImport`/`resolvePhpUse` already use.
+ *
+ * A module is `<path>.py` (or `.pyi`), a package is `<path>/__init__.py`. An ambiguous
+ * suffix and a climb past the repo root both stay the raw specifier, never a guess.
+ */
+function resolvePythonImport(
+  spec: string,
+  file: string,
+  byId: Map<string, NodeV1>,
+  bySuffix: Map<string, string[]>,
+): string {
+  const dots = /^\.*/.exec(spec)![0].length;
+  const tail = spec.slice(dots).replace(/\./g, "/");
+  if (dots > 0) {
+    let dir = posix.dirname(toPosixPath(file));
+    if (dir === ".") dir = "";
+    // One dot is the importing file's OWN package, so only the dots beyond the first climb.
+    for (let i = 1; i < dots; i++) {
+      if (dir === "") return spec; // climbed out of the repo — nothing in-repo to name
+      dir = posix.dirname(dir);
+      if (dir === ".") dir = "";
+    }
+    const base = [dir, tail].filter(Boolean).join("/");
+    if (base === "") return spec;
+    for (const c of pyModuleFiles(base)) if (byId.has(c)) return c;
+    return spec;
+  }
+  if (tail === "") return spec;
+  const parts = tail.split("/").filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    const sub = parts.slice(i).join("/");
+    for (const cand of pyModuleFiles(sub)) {
+      const hits = bySuffix.get(cand);
+      if (hits && hits.length === 1) return hits[0];
+      if (hits && hits.length > 1) return spec; // ambiguous at the most specific level
+    }
+  }
+  return spec;
+}
+
+/** The file paths a Python module path can name: a module, a stub, or a package's
+ * `__init__`. Order matters — a real module wins over a same-named package. */
+function pyModuleFiles(base: string): string[] {
+  return [`${base}.py`, `${base}/__init__.py`, `${base}.pyi`, `${base}/__init__.pyi`];
 }
 
 /**

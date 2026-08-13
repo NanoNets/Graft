@@ -12,7 +12,7 @@ import { contextDirFor } from '../context/node-file.js';
 import { resolveSymbol, edgeWalk, type Direction, type EdgeHit } from '../graph/traverse.js';
 import { callersSavings, headerOf, hitLine, looseNoteFor } from '../graph/traverse-cli.js';
 import { withSavings } from '../context/savings.js';
-import { grepGraph } from '../search/grep.js';
+import { grepGraph, type GrepResult } from '../search/grep.js';
 import { formatGrepResult, zeroHitNote } from '../search/grep-cli.js';
 import { buildRepoMap, formatRepoMap } from '../graph/map.js';
 import {
@@ -123,6 +123,35 @@ export const TOOLS: ToolDef[] = [
   },
 ];
 
+/**
+ * The `depth` arg, normalized the SAME way on both the single-graph and the
+ * workspace path.
+ *
+ * `depth: "all"` (or `"full"`) walks the full transitive closure — every
+ * connected source — terminating when no new node is reached. It used to be
+ * honoured only by the single-graph branch; the workspace branch tested
+ * `typeof depth === 'number'` first, so `"all"` fell through to `undefined` and
+ * the walk quietly ran at depth 1. A monorepo user following the tool's own
+ * "pass 'all' … every source that would be affected" got the direct callers
+ * only, and no indication anything was cut — exactly the wrong answer to give
+ * someone about to start a multi-file refactor. `Math.floor(Infinity)` is
+ * `Infinity`, so `federateCallers`' own clamp passes it straight through.
+ */
+export function parseDepth(depth: unknown): number {
+  if (depth === 'all' || depth === 'full') return Number.POSITIVE_INFINITY;
+  if (typeof depth === 'number' && Number.isFinite(depth) && depth >= 1) return Math.floor(depth);
+  return 1;
+}
+
+/** Loud note when a grep gave up on its wall-clock budget: the remaining
+ * indexed files were never searched, so "no hits" here means "gave up", not
+ * "not there". Silence would read as a complete answer. */
+function grepTimeoutNote(timedOut: boolean | undefined): string | null {
+  return timedOut
+    ? '(truncated: search hit its time budget — some indexed files were never searched; narrow with `in` or simplify the pattern)'
+    : null;
+}
+
 /** Render every resolved match's header + edge report (or the loud zero-edge
  * note), one block per match, joined with a blank line — the same grouping
  * `graft callers` uses for multi-match symbols. `showDepth` tags each hit with
@@ -168,7 +197,7 @@ async function callWorkspaceTool(
       if (!symbol) return { text: 'graft_trace_calls requires a symbol', isError: true };
       const { text, found } = federateCallers(root, dirOverride, symbol, {
         direction: args.direction === 'out' ? 'out' : 'in',
-        depth: typeof args.depth === 'number' && Number.isFinite(args.depth) ? args.depth : undefined,
+        depth: parseDepth(args.depth),
         in: typeof args.in === 'string' && args.in ? args.in : undefined,
       });
       return { text, isError: !found };
@@ -176,12 +205,27 @@ async function callWorkspaceTool(
     case 'graft_find_all': {
       const pattern = String(args.pattern ?? '');
       if (!pattern) return { text: 'graft_find_all requires a pattern', isError: true };
-      const { result, coverage } = federateGrep(root, dirOverride, pattern, {
-        ignoreCase: typeof args.ignore_case === 'boolean' ? args.ignore_case : undefined,
-        fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
-      });
-      const text = result.totalHits === 0 ? zeroHitNote(result) : formatGrepResult(result);
-      return { text: coverage ? `${text}\n${coverage}` : text, isError: false };
+      // `in` is applied for real now (`federateGrep` narrows to the named child and,
+      // past the first segment, to a path prefix inside it), so this no longer has
+      // to refuse it. It still must never be silently dropped: a caller that
+      // believes it scoped the search to one package and reads a result set drawn
+      // from all of them is the worst of the three outcomes. An unknown first
+      // segment throws, and the catch below renders that as the tool's error.
+      const inArg = typeof args.in === 'string' && args.in ? args.in : undefined;
+      let result: GrepResult;
+      let coverage: string;
+      try {
+        ({ result, coverage } = federateGrep(root, dirOverride, pattern, {
+          ignoreCase: typeof args.ignore_case === 'boolean' ? args.ignore_case : undefined,
+          fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
+          in: inArg,
+        }));
+      } catch (err) {
+        return { text: `graft_find_all: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+      }
+      const base = result.totalHits === 0 ? zeroHitNote(result) : formatGrepResult(result);
+      const text = [base, grepTimeoutNote(result.truncated.timeout), coverage].filter(Boolean).join('\n');
+      return { text, isError: false };
     }
     case 'graft_repo_map': {
       const maxDirs = typeof args.max_dirs === 'number' && Number.isFinite(args.max_dirs) && args.max_dirs > 0 ? args.max_dirs : undefined;
@@ -298,14 +342,7 @@ async function callSingleTool(
         const matches = resolveSymbol(w, symbol, inOpt);
         if (matches.length === 0) return { text: unknownSymbolText(symbol), isError: true };
         const direction: Direction = args.direction === 'out' ? 'out' : 'in';
-        // `depth: "all"` (or a huge number) walks the full transitive closure —
-        // every connected source — terminating when no new node is reached.
-        const depth =
-          args.depth === 'all' || args.depth === 'full'
-            ? Number.POSITIVE_INFINITY
-            : typeof args.depth === 'number' && Number.isFinite(args.depth) && args.depth >= 1
-              ? Math.floor(args.depth)
-              : 1;
+        const depth = parseDepth(args.depth);
         const results = matches.map((m) => ({ symbol: m, hits: edgeWalk(w, m, direction, depth) }));
         const byId = new Map(results.map((r) => [r.symbol.id, r.hits]));
         const body = renderMatches(direction, depth > 1, matches, (m) => byId.get(m.id) ?? []);
@@ -322,8 +359,9 @@ async function callSingleTool(
           fixed: typeof args.fixed === 'boolean' ? args.fixed : undefined,
           in: typeof args.in === 'string' && args.in ? args.in : undefined,
         });
-        if (result.totalHits === 0) return { text: zeroHitNote(result), isError: false };
-        return { text: formatGrepResult(result), isError: false };
+        const base = result.totalHits === 0 ? zeroHitNote(result) : formatGrepResult(result);
+        const timeout = grepTimeoutNote(result.truncated.timeout);
+        return { text: timeout ? `${base}\n${timeout}` : base, isError: false };
       }
       case 'graft_repo_map': {
         const w = loadGraphCached(contextDirFor(root, dirOverride));

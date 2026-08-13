@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { main } from '../src/claude/hooks.js';
 import { readStamp, runningVersion, updateCachePath } from '../src/upkeep.js';
@@ -73,6 +73,21 @@ test('session-start refreshes stale wiring and stamps it', async () => {
   assert.ok(existsSync(join(repo, '.claude', 'skills', 'graft', 'SKILL.md')));
   assert.equal(readStamp(repo)?.version, runningVersion());
   assert.deepEqual(readStamp(repo)?.hosts, ['claude']);
+});
+
+test('a settings.json the refresh cannot parse is kept, and the user is told', async () => {
+  // This path, not `graft init`, is how most repos get re-inited — so a warning
+  // only the CLI printed would never reach the one person who needs it. And the
+  // file itself: an unparseable settings.json used to be treated as an absent one
+  // and replaced outright, taking the user's model, env and permissions with it.
+  const repo = wiredRepo('hook-badsettings');
+  const settings = join(repo, '.claude', 'settings.json');
+  const original = '{\n  "model": "opus",\n  "permissions": { "allow": ["Bash(ls)"] },\n}\n'; // trailing comma
+  writeFileSync(settings, original);
+
+  const ctx = contextOf(await runHook('session-start', repo, homeWithCache('hook-badsettings-home', null)));
+  assert.match(ctx, /not valid JSON/);
+  assert.equal(readFileSync(settings, 'utf8'), original, 'and it is still their file');
 });
 
 test('session-start says nothing on a second run — the stamp now matches', async () => {

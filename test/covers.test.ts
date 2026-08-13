@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import matter from "gray-matter";
 import { buildContext } from "../src/context/build.js";
 import { buildGraph } from "../src/graph/build.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, rmDir } from "./helpers.js";
 
 function makeFixture(): string {
   const dir = mkdtempSync(join(tmpdir(), "graft-covers-"));
@@ -36,7 +36,7 @@ test("wiring build backfills covers: onto concept nodes", async () => {
     assert.equal(login.kind, "function");
     assert.match(login.at, /^auth\.ts:L\d+-L\d+$/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -57,7 +57,7 @@ test("patching covers preserves the node's body and other frontmatter", async ()
     assert.deepEqual(after.data.links, before.data.links);
     assert.ok("covers" in after.data && !("covers" in before.data));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -71,6 +71,6 @@ test("re-running the wiring build leaves covers byte-stable", async () => {
     const second = readFileSync(join(dir, "graft", "auth-service.md"), "utf8");
     assert.equal(second, first);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

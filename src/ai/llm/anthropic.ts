@@ -26,6 +26,23 @@ export interface AnthropicChatModelOptions {
   model: string;
   baseUrl?: string;
   label?: string;
+  /**
+   * Extra default headers. Not for api.anthropic.com — for the gateways that
+   * speak the Messages API and demand a header of their own to route or bill.
+   * `ChatModelConfig` has always accepted headers for every provider; this
+   * adapter used to be the one that silently dropped them.
+   */
+  headers?: Record<string, string>;
+  /**
+   * Per-request wall clock in ms. The SDK's own default is 10 MINUTES, which for
+   * a repo-wide `--deep` means one stalled endpoint can pin a worker for ten
+   * minutes per file — the run looks hung rather than failed.
+   */
+  timeoutMs?: number;
+  /** Retries after a failed request (SDK default 2). The SDK honours the
+   * endpoint's `Retry-After` between them, which is what makes raising this the
+   * right answer to a rate-limited key rather than a way to hammer it harder. */
+  maxRetries?: number;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: Anthropic;
 }
@@ -41,7 +58,15 @@ export class AnthropicChatModel implements ChatModel {
   constructor(opts: AnthropicChatModelOptions) {
     this.model = opts.model;
     this.label = opts.label ?? `${PROVIDER}:${opts.model}`;
-    this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseUrl });
+    this.client =
+      opts.client ??
+      new Anthropic({
+        apiKey: opts.apiKey,
+        baseURL: opts.baseUrl,
+        defaultHeaders: opts.headers,
+        ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+        ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+      });
   }
 
   async create(req: ChatRequest): Promise<ChatResponse> {
@@ -78,6 +103,7 @@ export class AnthropicChatModel implements ChatModel {
       max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages,
       ...(system.length ? { system } : {}),
+      ...(req.thinking ? { thinking: toThinkingConfig(req.thinking) } : {}),
     };
     // temperature is intentionally NOT forwarded — current models reject it.
 
@@ -138,6 +164,16 @@ export class AnthropicChatModel implements ChatModel {
       },
     };
   }
+}
+
+/**
+ * The neutral thinking flag → the Messages API's `thinking` block. Sending it at
+ * all is the point: with the field ABSENT, current Claude models default to
+ * adaptive thinking and spend `max_tokens` on reasoning before any text or
+ * tool_use appears, so a 2048-token summarize can come back empty.
+ */
+function toThinkingConfig(t: NonNullable<ChatRequest["thinking"]>): Anthropic.ThinkingConfigParam {
+  return t.kind === "enabled" ? { type: "enabled", budget_tokens: t.budgetTokens } : { type: "disabled" };
 }
 
 function toAnthropicTool(t: ToolSpec): Anthropic.Tool {

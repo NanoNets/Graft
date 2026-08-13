@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { probeDrift, isClean } from "../src/graph/fingerprint.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 function repoWithBuildDir(): string {
   const d = mkdtempSync(join(tmpdir(), "graft-include-dir-"));
@@ -87,14 +88,14 @@ test("A5: deleting the generated graft cache does not delete the persisted inclu
   const d = repoWithBuildDir();
   try {
     runCli(["build", d, "--include-dir", "build"]);
-    rmSync(join(d, "graft"), { recursive: true, force: true });
+    rmDir(join(d, "graft"));
 
     runCli(["build", d]);
     const rebuilt = graphOf(d);
     assert.ok(rebuilt?.nodes.some((n) => n.id === "build/util.ts#fromBuild"));
     assert.equal(existsSync(join(d, ".graft", "config.json")), true);
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -111,8 +112,8 @@ test("A5: custom --dir builds keep repository config outside both output directo
     assert.equal(existsSync(join(d, "graft", ".cache", "config.json")), false);
     assert.equal(existsSync(join(out, ".cache", "config.json")), false);
   } finally {
-    rmSync(d, { recursive: true, force: true });
-    rmSync(out, { recursive: true, force: true });
+    rmDir(d);
+    rmDir(out);
   }
 });
 
@@ -132,7 +133,7 @@ test("A5: --include-dir rejects a dot-prefixed name", () => {
     assert.match(r.stderr, /\.github/);
     assert.equal(existsSync(join(d, ".graft", "config.json")), false, "must not persist an invalid value");
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -145,7 +146,7 @@ test("A5: --include-dir rejects a value containing a path separator", () => {
     assert.match(r.stderr, /foo\/bar/);
     assert.equal(existsSync(join(d, ".graft", "config.json")), false, "must not persist an invalid value");
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -156,7 +157,7 @@ test("A5: --include-dir rejects a value containing a backslash", () => {
     assert.equal(r.status, 1, `expected exit 1, got ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.match(r.stderr, /--include-dir/);
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -167,6 +168,6 @@ test("A5: a later valid --include-dir still works (validation isn't over-eager)"
     const g = graphOf(d);
     assert.ok(g && g.nodes.some((n) => n.id === "build/util.ts#fromBuild"));
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });

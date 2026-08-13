@@ -16,3 +16,6 @@ graft/
 
 # Session transcripts and prompt traces — local analysis, not product.
 transcripts/
+
+# transient agent worktrees
+.claude/worktrees/

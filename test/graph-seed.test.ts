@@ -22,7 +22,7 @@ import { ensureFreshGraph, refreshNote } from "../src/graph/refresh.js";
 import { mainWorktreeRoot, seedGraph } from "../src/graph/seed.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { callTool } from "../src/mcp/tools.js";
-import { tmpRepo } from "./helpers.js";
+import { tmpRepo, rmDir } from "./helpers.js";
 
 const MATH = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
 const MUL = "export function mul(a: number, b: number): number {\n  return a * b;\n}\n";
@@ -212,8 +212,8 @@ test("a git worktree starts with no graph, and one query gives it a correct one"
   // Seeding reads the parent; it must never write to it.
   assert.equal(readFileSync(wiringPath(outOf(main)), "utf8"), parentGraph, "parent graph untouched");
 
-  rmSync(main, { recursive: true, force: true });
-  rmSync(wt, { recursive: true, force: true });
+  rmDir(main);
+  rmDir(wt);
 });
 
 test("a worktree nested inside the repo is seeded too, and isn't double-indexed", async () => {
@@ -238,7 +238,7 @@ test("a worktree nested inside the repo is seeded too, and isn't double-indexed"
     "the parent must not index the worktree's copy of its own files",
   );
 
-  rmSync(main, { recursive: true, force: true });
+  rmDir(main);
 });
 
 test("the MCP tool answers from a seeded worktree instead of refusing", async () => {
@@ -251,8 +251,8 @@ test("the MCP tool answers from a seeded worktree instead of refusing", async ()
   assert.doesNotMatch(res.text, /no graph found/);
   assert.match(res.text, /math\.ts/);
 
-  rmSync(main, { recursive: true, force: true });
-  rmSync(wt, { recursive: true, force: true });
+  rmDir(main);
+  rmDir(wt);
 });
 
 test("GRAFT_NO_SEED leaves the worktree exactly as it was", async () => {
@@ -275,8 +275,8 @@ test("GRAFT_NO_SEED leaves the worktree exactly as it was", async () => {
     delete process.env.GRAFT_NO_SEED;
   }
 
-  rmSync(main, { recursive: true, force: true });
-  rmSync(wt, { recursive: true, force: true });
+  rmDir(main);
+  rmDir(wt);
 });
 
 test("seedGraph declines a --dir override and a checkout that already has a graph", async () => {
@@ -311,8 +311,8 @@ test("seedGraph declines a --dir override and a checkout that already has a grap
   assert.ok(!landed.includes("stats.json"), `borrowed savings do not — ${why}`);
   assert.ok(!landed.includes("session"), `another session's transcripts do not — ${why}`);
 
-  rmSync(main, { recursive: true, force: true });
-  rmSync(wt, { recursive: true, force: true });
+  rmDir(main);
+  rmDir(wt);
 });
 
 test("a plain repo with no parent checkout is left to `graft build`", async () => {
@@ -320,7 +320,7 @@ test("a plain repo with no parent checkout is left to `graft build`", async () =
   const r = await ensureFreshGraph(solo);
   assert.equal(existsSync(wiringPath(outOf(solo))), false, "no surprise full build under a query");
   assert.equal(refreshNote(r), null);
-  rmSync(solo, { recursive: true, force: true });
+  rmDir(solo);
 });
 
 test("`graft build` in a worktree starts from the parent's graph, not from scratch", async () => {
@@ -336,6 +336,6 @@ test("`graft build` in a worktree starts from the parent's graph, not from scrat
   assert.equal(g.parsed, 1, "only the file this checkout changed was re-parsed");
   assert.ok(g.cards > 0, "and the passive surface is rebuilt for this checkout");
 
-  rmSync(main, { recursive: true, force: true });
-  rmSync(wt, { recursive: true, force: true });
+  rmDir(main);
+  rmDir(wt);
 });
