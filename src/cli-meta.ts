@@ -47,14 +47,38 @@ export interface NpmViewResult {
   version?: string;
 }
 
+/**
+ * True on Windows, where `npm` exists only as the `npm.cmd`/`npm.ps1` shim npm's
+ * own installer writes. `spawnSync` appends `.exe` and nothing else, so a bare
+ * `spawnSync("npm", …)` fails with ENOENT before it ever reaches the network —
+ * and every npm-shaped feature dies with it: `graft version` reported "unreachable
+ * (offline?)" on a perfectly online machine, `graft upgrade` exited 1 with
+ * `spawnSync npm ENOENT`, and `refreshUpdateCache` cached `latest: null` once a day
+ * forever, so the update nudge could never fire on the whole platform.
+ * `globalRoot` below already carried this flag; the other two call sites did not.
+ *
+ * Handing the shim's absolute path to `spawnSync` is NOT an alternative: since the
+ * CVE-2024-27980 patch, Node refuses to CreateProcess a `.cmd`/`.bat` directly
+ * (EINVAL). Going through `cmd.exe` is the supported route, which is what this is.
+ * Every argument we pass is a literal or a package name we control, never user
+ * input, so there is nothing here for `cmd.exe` to reinterpret.
+ */
+const NPM_NEEDS_SHELL = process.platform === "win32";
+
 /** `npm view <pkg> version`, offline-safe: any failure (no npm, no network,
- * timeout) resolves to `{ ok: false }` rather than throwing. */
-export function getNpmViewVersion(pkgName: string = PKG_NAME, timeoutMs = 2000): NpmViewResult {
+ * timeout) resolves to `{ ok: false }` rather than throwing.
+ *
+ * The 10s default is not generous, it is honest: a cold `npm view` measured 9.4s on
+ * a Windows dev box, and the old 2s cap turned "slow registry" into "offline" for
+ * everyone on it. The hot caller is the detached `_update-check` child, which
+ * nobody is waiting on, so the extra ceiling costs a user nothing. */
+export function getNpmViewVersion(pkgName: string = PKG_NAME, timeoutMs = 10000): NpmViewResult {
   try {
     const res = spawnSync("npm", ["view", pkgName, "version"], {
       encoding: "utf8",
       timeout: timeoutMs,
       windowsHide: true,
+      shell: NPM_NEEDS_SHELL,
     });
     if (res.error || res.signal || res.status !== 0) return { ok: false };
     const version = res.stdout?.trim();
@@ -140,9 +164,22 @@ export function runUpgrade(moduleUrl: string): UpgradeResult {
   if (isRunningViaNpx(moduleUrl)) {
     return { ran: false, ok: true, oldVersion };
   }
-  const res = spawnSync("npm", ["install", "-g", `${PKG_NAME}@latest`], { stdio: "inherit" });
+  // Same shim story as `getNpmViewVersion` — see NPM_NEEDS_SHELL. Without it this
+  // command could not succeed even once on Windows, which is the platform whose
+  // users are most likely to reach for `graft upgrade` instead of npm directly.
+  const res = spawnSync("npm", ["install", "-g", `${PKG_NAME}@latest`], {
+    stdio: "inherit",
+    shell: NPM_NEEDS_SHELL,
+  });
   if (res.error || (res.status ?? 1) !== 0) {
-    return { ran: true, ok: false, oldVersion, errorMessage: res.error?.message };
+    // Through a shell there is no `res.error` to quote — cmd.exe reports the
+    // failure itself and exits non-zero — so say what we actually know.
+    return {
+      ran: true,
+      ok: false,
+      oldVersion,
+      errorMessage: res.error?.message ?? `npm exited with status ${res.status ?? "unknown"}`,
+    };
   }
   const newVersion = readGlobalInstalledVersion(PKG_NAME) ?? getNpmViewVersion(PKG_NAME).version ?? oldVersion;
   return { ran: true, ok: true, oldVersion, newVersion };

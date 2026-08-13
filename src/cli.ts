@@ -5,10 +5,10 @@
  * workspace parent (≥2 git children) federates query commands across children.
  */
 import "dotenv/config";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Graft } from "./engine.js";
+import { CODE_EXTENSIONS, Graft } from "./engine.js";
 import { credentialProblem, resolveConfig, type EngineConfig } from "./ai/providers.js";
 import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
@@ -21,7 +21,7 @@ import { loadGraphCached } from "./graph/load.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
 import { isWorkspaceBuildRoot, readWorkspace } from "./graph/workspace.js";
 import { nearestGraftRoot } from "./graph/root.js";
-import { unsupportedExtensions, supportedExtensions } from "./graph/source-files.js";
+import { supportedExtensions } from "./graph/source-files.js";
 import { discoverWorkspaceChildren } from "./graph/scopes.js";
 import {
   runWorkspaceAsk,
@@ -36,7 +36,9 @@ import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
 import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
-import { writeBuildConfig } from "./util/state.js";
+import { assertRepoDir } from "./ingest/fs.js";
+import { readExtensions, readIncludeDirs, writeBuildConfig } from "./util/state.js";
+import { formatCount } from "./util/num.js";
 import { formatUpdateNudge, maybeRefreshInBackground, readUpdateCache, refreshUpdateCache, writeStamp } from "./upkeep.js";
 
 const program = new Command();
@@ -54,7 +56,13 @@ program
   )
   .option("--model <id>", "model id for the LLM pass (env GRAFT_MODEL)")
   .option("--api-key <key>", "provider API key (env GRAFT_API_KEY); not used by claude-cli")
-  .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)");
+  .option("--base-url <url>", "OpenAI-compatible endpoint URL (env GRAFT_BASE_URL)")
+  .option(
+    "--max-budget-usd <usd>",
+    "claude-cli only: per-call spend ceiling in USD, passed to the CLI as --max-budget-usd " +
+      "(env GRAFT_CLAUDE_MAX_BUDGET_USD). Notional on a subscription — a runaway-loop valve, not a bill",
+    budgetUsd,
+  );
 
 interface GlobalOpts {
   dir?: string;
@@ -62,6 +70,24 @@ interface GlobalOpts {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
+  maxBudgetUsd?: number;
+}
+
+/**
+ * `--max-budget-usd`, rejected AT THE FLAG rather than deep inside the provider.
+ *
+ * The value is spent per call, on a `--deep` run that makes one call per file, so
+ * the two ways to get it wrong are the two that matter: a non-number becomes `NaN`
+ * and silently disables the ceiling the user asked for, and `0` reads as "no
+ * budget" to the Claude CLI rather than "spend nothing". Both would surface as an
+ * unexplained bill or an unexplained failure, hours in.
+ */
+function budgetUsd(value: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new InvalidArgumentError(`expected a positive number of dollars, got "${value}"`);
+  }
+  return n;
 }
 
 /** Config drawn from the global CLI flags (env + defaults fill the rest). */
@@ -73,25 +99,43 @@ function cliConfig(): EngineConfig {
     model: o.model,
     apiKey: o.apiKey,
     baseUrl: o.baseUrl,
+    // The env var (GRAFT_CLAUDE_MAX_BUDGET_USD) was the only way to set this, which
+    // is the wrong shape for a per-run safety valve: it is decided per invocation,
+    // like -j, not per machine.
+    maxBudgetUsd: o.maxBudgetUsd,
   };
 }
 
 const engineFrom = (): Graft => new Graft(cliConfig());
 
 /**
- * Warn (never fail) when a user's `-e` extension has no parser, so it is never a silent
- * no-op — `graft build -e ".vue"` used to accept it, index nothing, and exit 0. The
- * supported set is listed so `-e` also answers "what is actually supported".
+ * Warn (never fail) when a user's `-e` extension will not be read, so it is never a
+ * silent no-op — `graft build -e ".vue"` used to accept it, index nothing, and exit 0.
+ *
+ * Two lists, because `-e` now narrows two layers that do not claim the same
+ * extensions: the wiring graph filters on `supportedExtensions()` (both parser
+ * tiers), the `--deep` concept pass on `CODE_EXTENSIONS` (`context/build.ts`).
+ * `.vue` is in neither — that build indexes nothing at all and is the loud case.
+ * `.zig` is in the first only — the wiring graph indexes it and the concept pass
+ * silently sees zero files, which is the quiet case this exists for: an extension
+ * used to be checked against one list and filtered by the other, so `graft build
+ * --deep -e ".zig"` passed validation and then produced no concepts, saying nothing.
  */
 function warnUnsupportedExtensions(exts?: string[]): void {
   if (!exts?.length) return;
-  const bad = unsupportedExtensions(exts);
-  if (bad.length === 0) return;
-  for (const e of bad) {
-    const shown = e.trim().startsWith(".") ? e.trim() : `.${e.trim()}`;
-    console.error(`⚠ -e "${shown}": no parser registered for this extension — ignoring it.`);
+  const norm = exts.map((e) => (e.trim().startsWith(".") ? e.trim() : `.${e.trim()}`).toLowerCase());
+  const indexed = new Set(supportedExtensions());
+  const read = new Set(CODE_EXTENSIONS);
+  const noParser = norm.filter((e) => !indexed.has(e));
+  const deepOnly = norm.filter((e) => indexed.has(e) && !read.has(e));
+  for (const e of noParser) {
+    console.error(`⚠ -e "${e}": graft has no parser for this extension — nothing will be indexed for it.`);
   }
-  console.error(`  supported: ${supportedExtensions().join(" ")}`);
+  for (const e of deepOnly) {
+    console.error(`⚠ -e "${e}": indexed in the wiring graph, but the --deep concept pass doesn't read it.`);
+  }
+  if (noParser.length) console.error(`  graft indexes: ${supportedExtensions().join(" ")}`);
+  if (deepOnly.length) console.error(`  the --deep pass reads: ${CODE_EXTENSIONS.join(" ")}`);
 }
 
 /** Text for the omitted-`[dir]` case, shared by every query command's help. */
@@ -184,7 +228,12 @@ program
   )
   .argument("[dir]", "repository root", ".")
   .option("--deep", "run the LLM pass: concept nodes (graft/*.md) + per-symbol summary/crux")
-  .option("-e, --extensions <exts...>", 'code extensions to include (e.g. ".ts" ".py"); an extension with no parser is ignored with a warning that lists the supported set')
+  .option(
+    "-e, --extensions <exts...>",
+    'index only these code extensions (e.g. ".ts" ".py") — narrows both the wiring graph and the --deep concept pass; ' +
+      "persisted, so later builds, `graft check` and the hooks/refresh path narrow identically without the flag",
+  )
+  .option("--no-extensions", "forget the persisted -e narrowing and go back to indexing every supported extension")
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
   .option("--lsp", "add compiler-grade call edges via a language server if one is installed (opt-in, slower; e.g. rust-analyzer, clangd)")
@@ -195,23 +244,46 @@ program
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean; lsp?: boolean; includeDir?: string[] }) => {
+  .option("--no-include-dir", "forget the persisted --include-dir override and go back to skipping every SKIP_DIRS name")
+  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[] | false; concurrency?: string; reuse?: boolean; lsp?: boolean; includeDir?: string[] | false }) => {
     const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
     if (opts.concurrency && !Number.isFinite(concurrency)) {
       console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
       process.exit(1);
     }
-    warnUnsupportedExtensions(opts.extensions);
+    // `false` is `--no-extensions` (clear the override), never a list to apply.
+    const exts = Array.isArray(opts.extensions) ? opts.extensions : undefined;
+    warnUnsupportedExtensions(exts);
     // Persisted BEFORE the build itself runs, so this invocation's walks (and
     // every later no-flag build / hooks refresh) see it identically — the
     // walkDir call sites read it from state, not from a threaded option.
-    if (opts.includeDir && opts.includeDir.length > 0) {
+    const buildDir = resolve(dir);
+    // …which is why the argument has to be checked HERE and not left to the walk:
+    // the persist below mkdir's recursively, so `graft build ./typo --include-dir x`
+    // created ./typo/.graft/config.json and only then reported that ./typo does not
+    // exist. Same wording as the walk's own check — one message, two entry points.
+    assertRepoDir(buildDir);
+    if (opts.includeDir === false) {
+      // The way back out. The override governs every future build in this repo and
+      // every hooks-driven refresh, but no invocation could ever write the empty
+      // list (the branch below is guarded on a non-empty one), so the only way to
+      // undo it was to hand-edit a `.graft/config.json` nothing had told the user
+      // existed. `--no-include-dir` is that command.
+      writeBuildConfig(buildDir, { includeDirs: [] });
+      console.error("· cleared this repo's persisted --include-dir override");
+    } else if (opts.includeDir && opts.includeDir.length > 0) {
       // --include-dir takes bare SKIP_DIRS-style directory NAMES (shouldSkipDir
       // compares a single path segment), never paths, and dot-dirs are never
       // overridable at all (see the option's own help text) — reject anything
       // else up front instead of silently persisting a value that can never
       // match a real directory name.
       for (const name of opts.includeDir) {
+        // An empty name passed both checks below and persisted `[""]`, which no
+        // path segment can equal: inert junk, in a file with no reader.
+        if (name.trim() === "") {
+          console.error("✗ --include-dir: expected a directory name, got an empty string");
+          process.exit(1);
+        }
         if (name.startsWith(".")) {
           console.error(`✗ --include-dir "${name}": dot-directories are never overridable`);
           process.exit(1);
@@ -221,7 +293,36 @@ program
           process.exit(1);
         }
       }
-      writeBuildConfig(resolve(dir), { includeDirs: opts.includeDir });
+      writeBuildConfig(buildDir, { includeDirs: opts.includeDir });
+    }
+    // `-e` is persisted for the same reason and one sharper: the freshness probe and
+    // the pre-query refresh never see a flag, so an unpersisted narrowing was undone
+    // by the first `graft ask` (every excluded file read as new → a wide rebuild).
+    if (opts.extensions === false) {
+      writeBuildConfig(buildDir, { extensions: [] });
+      console.error("· cleared this repo's persisted -e narrowing");
+    } else if (exts && exts.length > 0) {
+      writeBuildConfig(buildDir, { extensions: exts });
+    }
+    // Announced on every build, not only the one that set it: a persisted override
+    // changes what the whole repo indexes, survives indefinitely, and is otherwise
+    // completely invisible — the flag that wrote it may have been typed months ago
+    // by someone else.
+    const persistedDirs = readIncludeDirs(buildDir);
+    if (persistedDirs) {
+      console.error(
+        `· --include-dir override active: ${[...persistedDirs].join(", ")} ` +
+          "(clear it with `graft build --no-include-dir`)",
+      );
+    }
+    // Read back rather than reused from the flag: this is the value every layer of
+    // THIS build must agree on, whether it was typed now or months ago.
+    const persistedExts = readExtensions(buildDir);
+    if (persistedExts) {
+      console.error(
+        `· -e narrowing active: only ${persistedExts.join(" ")} is indexed ` +
+          "(clear it with `graft build --no-extensions`)",
+      );
     }
     const engine = engineFrom();
     const fmt = (o: Record<string, number>) =>
@@ -258,19 +359,34 @@ program
     if (isWorkspaceBuildRoot(buildRoot, buildGlobalDir)) {
       await runWorkspaceBuild(buildRoot, {
         deep: !!deep,
-        extensions: opts.extensions,
+        // The flag as typed, not the parent's persisted value: a workspace parent
+        // holds no sources of its own, so the narrowing belongs in each CHILD's
+        // state (where its own later rebuilds and refreshes will read it), exactly
+        // as `--include-dir` is forwarded below.
+        extensions: exts,
         concurrency,
         childConfig: cliConfig(),
         override: buildGlobalDir,
-        includeDirs: opts.includeDir,
+        // `false` is `--no-include-dir`, already applied to this repo's config
+        // above; there is nothing left to forward to the children.
+        includeDirs: opts.includeDir || undefined,
       });
       return;
     }
 
+    // Everything either phase reported as `✗`. Collected rather than counted on
+    // the spot because the concept pass lives in a branch and the exit code has to
+    // account for both.
+    const failures: string[] = [];
+
     // --deep: concept nodes first, then the wiring graph links cards up to them.
     if (deep) {
       const c = await engine.init(dir, {
-        extensions: opts.extensions,
+        extensions: persistedExts,
+        // The concept pass is where a --deep build spends most of its calls, so
+        // `-j 1` that stopped at the wiring graph's Tier-2 pass fixed nothing for
+        // the user who set it to survive a rate limit.
+        concurrency,
         onProgress: ({ phase, index, total, file }) =>
           process.stderr.write(
             `\r${phase === "summarize" ? "reading" : "writing"} concepts ${index + 1}/${total}: ${file.slice(0, 40).padEnd(40)}`,
@@ -281,11 +397,13 @@ program
         `✓ concepts: ${c.nodes} nodes, ${c.links} links from ${c.files} files (${c.summarized} read, ${c.cached} cached)`,
       );
       for (const e of c.errors) console.error(`✗ ${e}`);
+      failures.push(...c.errors);
     }
 
     // Wiring graph — always; LLM meaning only with --deep.
     const g = await engine.graph(dir, {
       llm: deep,
+      extensions: persistedExts,
       concurrency,
       reuse: opts.reuse,
       lsp: opts.lsp,
@@ -302,12 +420,38 @@ program
     if (deep) {
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
+      // What the run actually spent. Every adapter normalizes this and nothing used
+      // to report it, so the only way to find out what a repo-wide --deep cost was
+      // to go and read the provider's dashboard afterwards. Tokens, not dollars:
+      // see `Graft.usage()` for why a price would be a made-up number.
+      const u = engine.usage();
+      if (u.calls > 0) {
+        const cached = u.cacheRead + u.cacheCreate;
+        console.log(
+          `  llm: ${formatCount(u.calls)} calls, ${formatCount(u.input)} input + ${formatCount(u.output)} output tokens` +
+            (cached > 0 ? ` (${formatCount(cached)} cached)` : ""),
+        );
+      }
     }
     console.log(`  → ${g.contextDir}`);
     for (const e of g.errors) console.error(`✗ ${e}`);
+    failures.push(...g.errors);
 
     const rel = relative(process.cwd(), g.contextDir) || "graft";
     console.log(`  ${rel}/ is git-ignored (added automatically) — a local cache; teammates run \`graft build\` to get their own.`);
+
+    // A build that printed `✗` lines and then exited 0 read as a clean success to
+    // everything that judges by status and not by stderr: CI, `graft build && …`,
+    // the init path, the hooks. Those lines are files that never made it into the
+    // graph (unreadable, unparseable) or summaries the model never returned — a
+    // graph missing exactly what nobody was told to look for. The output is still
+    // written and still useful, so this is `exitCode`, not an abort: the partial
+    // graph stays, the run is just no longer reported as complete.
+    // `runWorkspaceBuild` already does the same for a failed child repo.
+    if (failures.length > 0) {
+      console.error(`✗ ${failures.length} error(s) — the graph above is incomplete`);
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -323,19 +467,31 @@ program
   .option("--no-graph-rank", "rank by lexical relevance only, without the graph-connectivity re-rank (ablation/eval)")
   .option(...NO_REFRESH_FLAG)
   .action(async (query: string, dirArg: string | undefined, opts: { limit: string; source?: boolean; full?: boolean; in?: string; json?: boolean; refresh?: boolean; graphRank?: boolean }) => {
+    // Validated here, in the same shape `--max-dirs` and `--depth` use, and BEFORE
+    // `refreshBefore` so a typo doesn't cost a rebuild. `ask` guards its limit with
+    // `?? 8`, which only covers null/undefined — a NaN from `Number("all")` sailed
+    // through into `slice(0, NaN)`, and an empty slice is reported as "no matching
+    // nodes — try different words", blaming the query for a bad flag. `-n 0` and
+    // `-n -1` produced the same lie.
+    const limit = parseInt(opts.limit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      console.error(`✗ -n/--limit must be a positive integer, got "${opts.limit}"`);
+      process.exit(1);
+      return;
+    }
     const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const askGlobalDir = program.opts<GlobalOpts>().dir;
     if (readWorkspace(dir, askGlobalDir)) {
       runWorkspaceAsk(dir, askGlobalDir, query, {
-        limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, json: opts.json,
+        limit, source: opts.source, full: opts.full, in: opts.in, json: opts.json,
       });
       return;
     }
     const engine = engineFrom();
     let r;
     try {
-      r = engine.ask(dir, query, { limit: Number(opts.limit), source: opts.source, full: opts.full, in: opts.in, graphRank: opts.graphRank });
+      r = engine.ask(dir, query, { limit, source: opts.source, full: opts.full, in: opts.in, graphRank: opts.graphRank });
     } catch (err) {
       console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -370,19 +526,25 @@ program
   .command("check")
   .description("Fail if graft/ is stale relative to the code (for CI)")
   .argument(...DIR_ARG)
-  .option("-e, --extensions <exts...>", "code extensions to include")
+  .option("-e, --extensions <exts...>", "code extensions to include (defaults to the repo's persisted `graft build -e` narrowing)")
   .option("--json", "output the drift as JSON")
   .action(async (dirArg: string | undefined, opts: { extensions?: string[]; json?: boolean }) => {
     warnUnsupportedExtensions(opts.extensions);
     const dir = queryRoot(dirArg);
+    assertRepoDir(dir); // a typo'd [dir] is a named argument, not an ENOENT four frames down
     const checkGlobalDir = program.opts<GlobalOpts>().dir;
     if (readWorkspace(dir, checkGlobalDir)) {
       await runWorkspaceCheck(dir, checkGlobalDir);
       return;
     }
     const engine = engineFrom();
-    const r = engine.check(dir, { extensions: opts.extensions });
-    const g = await engine.checkGraph(dir); // graph.json is only judged when it exists
+    // Falls back to what the BUILD narrowed to. Both layers, exactly as on the build
+    // side: a graph built under `-e .ts` holds no Python nodes, and a check that
+    // enumerated every language would report each excluded file as `added` forever —
+    // drift that no `graft build` would ever "fix", because it isn't drift.
+    const checkExts = opts.extensions ?? readExtensions(dir);
+    const r = engine.check(dir, { extensions: checkExts });
+    const g = await engine.checkGraph(dir, { extensions: checkExts }); // graph.json is only judged when it exists
 
     // A layer that IS present must be in sync; a never-built layer (keyless
     // build skips the markdown layer) is informational, not a failure.
@@ -418,9 +580,9 @@ program
     const dir = queryRoot(dirArg);
     const { existsSync } = await import("node:fs");
     const { resolve, basename } = await import("node:path");
-    const { spawn } = await import("node:child_process");
     const { fileURLToPath } = await import("node:url");
     const { contextDirFor } = await import("./context/node-file.js");
+    const { openInBrowser } = await import("./cli-open.js");
     const { startVizServer } = await import("./viz/serve.js");
 
     const root = resolve(dir);
@@ -438,10 +600,9 @@ program
       repoName: basename(root),
     });
     console.log(`graft viz → ${srv.url}  (ctrl-c to stop)`);
-    if (opts.open) {
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      spawn(opener, [srv.url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
-    }
+    // Never fatal: on a headless box there is no opener to spawn, and the URL above
+    // is the whole point of the command. See `cli-open.ts`.
+    if (opts.open) openInBrowser(srv.url);
   });
 
 program
@@ -518,7 +679,10 @@ program
       const globalOpts = program.opts<{ dir?: string }>();
       if (readWorkspace(dir, globalOpts.dir)) {
         runWorkspaceGrep(dir, globalOpts.dir, pattern, {
-          ignoreCase: opts.ignoreCase, fixed: opts.fixed, json: opts.json,
+          // `--in` used to stop here: federation forwarded ignoreCase/fixed only,
+          // so at a workspace root the flag was accepted, dropped, and every repo
+          // searched — a wider answer than the user asked for, silently.
+          ignoreCase: opts.ignoreCase, fixed: opts.fixed, in: opts.in, json: opts.json,
         });
         return;
       }
@@ -597,6 +761,10 @@ program
       return;
     }
     const repo = resolve(dir);
+    // Before the picker, not after: `init` writes agent files, hooks and a stamp
+    // into this path, and a typo would have created the whole tree — after asking
+    // the user which agents to wire into it.
+    assertRepoDir(repo);
     const explicit = Array.isArray(opts.agents) ? opts.agents : undefined;
 
     if (explicit) {
@@ -626,11 +794,19 @@ program
       const picked = await runPicker(plan, repo, home);
       if (picked === null) {
         console.error("· cancelled — nothing written");
+        // Non-zero on every path that writes nothing, so `graft init && <next step>`
+        // stops instead of continuing as if the repo were wired. Only `--dry-run`
+        // and `--list-agents` write nothing *and* succeed — they were asked a
+        // question, not told to install. The no-TTY path below is the one that
+        // actually bites: in Git Bash / MSYS without winpty `stdin.isTTY` is false,
+        // so a plain interactive `graft init` lands there and used to exit 0.
+        process.exitCode = 1;
         return;
       }
       ids = picked;
     } else {
       console.error(formatNonInteractiveHelp(detectedIds));
+      process.exitCode = 1;
       return;
     }
 
@@ -653,6 +829,7 @@ program
     }
     if (ids.length === 0) {
       console.error("· no agents selected — nothing written");
+      process.exitCode = 1;
       return;
     }
 
@@ -696,9 +873,15 @@ function wireTarget(
   },
 ): void {
     const { home, cliPath, plan, wantClaude, opts } = ctx;
+    // Recorded in the stamp below so the NEXT init can tell a permission the user
+    // deleted from one that was never offered here. Undefined when Claude Code
+    // wasn't wired this run — writeStamp then carries the previous record forward
+    // instead of erasing it.
+    let offeredAllow: string[] | undefined;
 
     if (wantClaude) {
       const res = runInit(repo, { build: opts.build, cliPath });
+      offeredAllow = res.offeredAllow;
       console.error(`✓ wrote ${res.settingsPath}`);
       for (const s of res.shims) console.error(`✓ wrote ${s}`);
       console.error(`✓ wrote ${res.skill}`);
@@ -736,11 +919,19 @@ function wireTarget(
     // them on a mismatch, so an `npm i -g` upgrade reaches the hooks/skill/rules
     // too — not just the binary. The flags ride along so a refresh replays the
     // user's choices (notably --no-global) instead of overriding them.
-    writeStamp(repo, currentVersion, ids, {
-      global: opts.global !== false,
-      mcp: opts.mcp !== false,
-      hooks: opts.hooks !== false,
-    });
+    writeStamp(
+      repo,
+      currentVersion,
+      ids,
+      {
+        global: opts.global !== false,
+        mcp: opts.mcp !== false,
+        hooks: opts.hooks !== false,
+      },
+      undefined,
+      undefined, // the real homedir(): the memo is deliberately machine-global
+      offeredAllow,
+    );
 
     // Every host's wiring points at graft/, so the graph is built whatever was
     // selected — not only when Claude Code is in the list (runInit does its own).
