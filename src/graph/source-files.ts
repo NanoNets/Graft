@@ -13,11 +13,12 @@ import { relPosix } from "../util/paths.js";
 import { readIncludeDirs } from "../util/state.js";
 import { languageOf, depthExtensions } from "./extract.js";
 import { genericLangOf, genericExtensions } from "./generic.js";
+import { containerLangOf, containerExtensions } from "./container.js";
 
-/** Every extension graft has a parser for (depth + breadth), sorted and de-duped —
- * the authoritative answer to "what does `-e` actually support". */
+/** Every extension graft has a parser for (depth + breadth + container), sorted
+ * and de-duped — the authoritative answer to "what does `-e` actually support". */
 export function supportedExtensions(): string[] {
-  return [...new Set([...depthExtensions(), ...genericExtensions()])].sort();
+  return [...new Set([...depthExtensions(), ...genericExtensions(), ...containerExtensions()])].sort();
 }
 
 /** Normalize a user-supplied extension: ensure a leading dot, lower-case. */
@@ -49,11 +50,13 @@ export function listSourceFiles(
   outDir: string,
   repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root))),
 ): string[] {
-  // A file is a source file if a depth-tier grammar (languageOf) OR a breadth-tier
-  // grammar (genericLangOf) claims its extension. Both must agree here or `build`
-  // and `check` would enumerate different sets.
+  // A file is a source file if a depth-tier grammar (languageOf), a breadth-tier
+  // grammar (genericLangOf) or a container (containerLangOf) claims its extension.
+  // All three must agree here or `build` and `check` would enumerate different sets.
   return repoFiles.filter(
-    (f) => !f.startsWith(outDir) && (languageOf(f) !== null || genericLangOf(f) !== null),
+    (f) =>
+      !f.startsWith(outDir) &&
+      (languageOf(f) !== null || genericLangOf(f) !== null || containerLangOf(f) !== null),
   );
 }
 

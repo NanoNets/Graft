@@ -19,6 +19,7 @@ import { walkDir } from "../ingest/fs.js";
 import { contextDirFor, ensureGitignored, ensureSearchable } from "../context/node-file.js";
 import { extractFile, languageLabelOf, languageOf, type RawEdge } from "./extract.js";
 import { extractGeneric, genericLangOf, warmGenericGrammars } from "./generic.js";
+import { containerLangOf, extractContainer, warmContainerGrammars } from "./container.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
 import { readSourceFile } from "../util/source.js";
@@ -186,6 +187,11 @@ export async function buildGraph(
   await warmGenericGrammars(
     new Set(files.map((f) => genericLangOf(f.abs)?.name).filter((n): n is string => !!n)),
   );
+  // Container tier (.vue and friends) loads its wrapper grammars the same way,
+  // for the same reason: extractContainer runs inside the sync loop below.
+  await warmContainerGrammars(
+    new Set(files.map((f) => containerLangOf(f.abs)?.name).filter((n): n is string => !!n)),
+  );
 
   files.forEach((f, i) => {
     const rel = f.rel;
@@ -193,8 +199,12 @@ export async function buildGraph(
     // Depth tier (hand-written, native grammar) if a language claims the file;
     // otherwise the breadth tier (generic tags.scm over a WASM grammar).
     const lang = languageOf(f.abs);
-    const generic = lang ? null : genericLangOf(f.abs);
-    const label = languageLabelOf(f.abs) ?? generic?.name ?? "unknown";
+    // A container is neither tier: its wrapper grammar only locates the embedded
+    // block, which then goes to the depth-tier extractor. Checked before the
+    // breadth tier so a future grammar claiming .vue can't shadow it.
+    const container = lang ? null : containerLangOf(f.abs);
+    const generic = lang || container ? null : genericLangOf(f.abs);
+    const label = languageLabelOf(f.abs) ?? container?.name ?? generic?.name ?? "unknown";
     const cached = priorExtract.files[rel];
 
     // Every file is read and hashed, every build — only the *parse* is memoized.
@@ -243,7 +253,9 @@ export async function buildGraph(
     try {
       const { nodes: fileNodes, rawEdges: fileEdges } = lang
         ? extractFile(rel, source, lang)
-        : extractGeneric(rel, source, generic!.name);
+        : container
+          ? extractContainer(rel, source, container)
+          : extractGeneric(rel, source, generic!.name);
       nodes.push(...fileNodes);
       rawEdges.push(...fileEdges);
       sources.set(rel, source);
