@@ -42,8 +42,10 @@ export function runHostsInit(
     home?: string;
     mcp?: boolean;
     hooks?: boolean;
-    /** false → skip every write outside the repo (the ~/.codex/ targets). */
-    global?: boolean;
+    /** false → skip every write outside the repo (the ~/.codex/ targets);
+     * 'if-present' → update those targets only where graft is already registered
+     * (see `upkeep.ts#refreshOpts`). */
+    global?: boolean | 'if-present';
   } = {},
 ): HostsInitResult {
   const home = opts.home ?? homedir();
@@ -75,10 +77,11 @@ export function runHostsInit(
     opts.mcp === false
       ? []
       : registerMcpConfigs(repo, selected.map((h) => h.id), { home, global: opts.global });
-  // Every hook target is user-level, so --no-global suppresses the lot.
+  // Every hook target is user-level, so --no-global suppresses the lot — and
+  // 'if-present' downgrades it from "install" to "keep an existing install current".
   const hooks =
     opts.hooks === false || opts.global === false || !selected.some((h) => h.id === 'agents')
       ? []
-      : installCodexHooks(home);
+      : installCodexHooks(home, { onlyIfPresent: opts.global === 'if-present' });
   return { written, skipped, unknown, mcp, hooks };
 }

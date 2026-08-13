@@ -8,15 +8,17 @@
  * `registerMcpConfigs()` walks that same list to do the writing.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { PlannedWrite } from './plan.js';
 
 export interface McpWrite {
   id: string;
   path: string;
-  action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable';
+  /** `skipped-absent`: `onlyIfPresent` was asked for and graft is not registered
+   * in this file, so there was nothing to update and creating it was not ours to
+   * do. Distinct from `unchanged`, which means graft IS registered and correct. */
+  action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable' | 'skipped-absent';
 }
 
 /** A planned MCP write, plus the detail needed to actually perform it. */
@@ -48,9 +50,59 @@ export interface McpTarget extends PlannedWrite {
 const NPX_LAUNCH = { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] };
 const BIN_LAUNCH = { command: 'graft', args: ['mcp'] };
 
+/**
+ * Is a `graft` executable resolvable from PATH?
+ *
+ * This used to be `spawnSync('graft', ['--version'])`, which answered "no" on all of
+ * Windows: an `npm i -g` install leaves only the `graft.cmd` shim, `spawnSync`
+ * appends nothing but `.exe`, and the resulting ENOENT reads as "not installed". So
+ * every Windows `graft init` wrote the `npx` launcher the comment above spends a
+ * paragraph arguing against — and because `.mcp.json` is committed, it wrote it for
+ * the whole team, flipping back and forth in the diff as Windows and macOS devs took
+ * turns running init.
+ *
+ * Walking PATH (with PATHEXT on Windows, as `resolveClaudeBin` does) fixes both the
+ * platform bug and the cost: this ran up to seven times per `graft init` — once per
+ * host in `planInit`, again per workspace child — each one a process spawn with a
+ * 5s ceiling, inside a session-start budget of 8s. A handful of `existsSync` calls
+ * replaces all of it.
+ *
+ * Presence is the whole question, deliberately: what gets written is the bare word
+ * `graft`, so all that matters is whether the host will be able to resolve that same
+ * name. Whether the binary is currently healthy enough to answer `--version` is not
+ * something this file can fix by writing `npx` instead.
+ */
+function resolveOnPath(name: string): string | undefined {
+  // .EXE first — it runs without a shim. The empty string covers posix and any
+  // extensionless file a user dropped on PATH themselves.
+  const exts = process.platform === 'win32' ? ['.EXE', '.CMD', '.BAT', '.COM', ''] : [''];
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    // PATH entries on Windows are frequently quoted; an unstripped quote makes
+    // every join under that entry miss.
+    const base = dir.replace(/^"|"$/g, '');
+    for (const ext of exts) {
+      const p = join(base, name + ext);
+      if (existsSync(p)) return p;
+    }
+  }
+  return undefined;
+}
+
+/** Memoized because `serverEntry` is called from five places and `planInit` fans it
+ * out per host: PATH does not change under a single `graft init`. Never persisted to
+ * disk — the same reason `shim-template.ts` refuses to bake a resolved path into a
+ * file that outlives the run. */
+let onPathMemo: boolean | undefined;
+
 function graftOnPath(): boolean {
-  const r = spawnSync('graft', ['--version'], { stdio: 'ignore', timeout: 5000 });
-  return r.status === 0;
+  if (onPathMemo === undefined) onPathMemo = resolveOnPath('graft') !== undefined;
+  return onPathMemo;
+}
+
+/** Test seam: drop the memoized lookup so a test can flip PATH. */
+export function resetGraftOnPathCache(): void {
+  onPathMemo = undefined;
 }
 
 /**
@@ -77,7 +129,13 @@ function dirExists(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
-export function mergeJsonKey(id: string, path: string, topKey: string, entry: object): McpWrite {
+export function mergeJsonKey(
+  id: string,
+  path: string,
+  topKey: string,
+  entry: object,
+  opts: { onlyIfPresent?: boolean } = {},
+): McpWrite {
   let root: Record<string, any> = {};
   const existed = existsSync(path);
   if (existed) {
@@ -87,10 +145,14 @@ export function mergeJsonKey(id: string, path: string, topKey: string, entry: ob
       return { id, path, action: 'skipped-unparseable' };
     }
   }
+  if (opts.onlyIfPresent && !existed) return { id, path, action: 'skipped-absent' };
   const bucket = (root[topKey] ??= {});
   if (typeof bucket !== 'object' || bucket === null || Array.isArray(bucket)) {
     return { id, path, action: 'skipped-unparseable' };
   }
+  // Registering graft for the first time is an INSTALL; re-pointing an entry that
+  // already names graft is maintenance. Only the second one is allowed here.
+  if (opts.onlyIfPresent && bucket.graft === undefined) return { id, path, action: 'skipped-absent' };
   if (JSON.stringify(bucket.graft) === JSON.stringify(entry)) return { id, path, action: 'unchanged' };
   const action = existed ? 'updated' : 'created';
   bucket.graft = entry;
@@ -99,10 +161,14 @@ export function mergeJsonKey(id: string, path: string, topKey: string, entry: ob
   return { id, path, action };
 }
 
-function upsertCodexToml(id: string, path: string): McpWrite {
+function upsertCodexToml(id: string, path: string, opts: { onlyIfPresent?: boolean } = {}): McpWrite {
   const existed = existsSync(path);
   const text = existed ? readFileSync(path, 'utf8') : '';
   if (/^\[mcp_servers\.graft\]$/m.test(text)) return { id, path, action: 'unchanged' };
+  // Append-if-absent is exactly the "absent" half `onlyIfPresent` forbids, so under
+  // it this file is only ever read. (The section carries no version, so a present
+  // one is never stale — which is why the branch above already returns unchanged.)
+  if (opts.onlyIfPresent) return { id, path, action: 'skipped-absent' };
   const { command, args } = serverEntry();
   const argList = args.map((a) => JSON.stringify(a)).join(", ");
   const section = `[mcp_servers.graft]\ncommand = \"${command}\"\nargs = [${argList}]\n`;
@@ -170,13 +236,18 @@ export function mcpTargets(
 export function registerMcpConfigs(
   repo: string,
   ids: string[],
-  opts: { home?: string; global?: boolean } = {},
+  opts: { home?: string; global?: boolean | 'if-present' } = {},
 ): McpWrite[] {
+  // 'if-present' applies ONLY to the out-of-repo targets. A repo-scoped file
+  // (`.cursor/mcp.json`, `opencode.json`) is part of the wiring the refresh exists
+  // to maintain, and creating one there is what `graft init` already decided.
+  const onlyIfPresent = opts.global === 'if-present';
   return mcpTargets(repo, ids, opts)
     .filter((t) => opts.global !== false || t.scope !== 'global')
-    .map((t) =>
-      t.format === 'toml'
-        ? upsertCodexToml(t.id, t.path)
-        : mergeJsonKey(t.id, t.path, t.topKey!, t.entry!),
-    );
+    .map((t) => {
+      const guard = { onlyIfPresent: onlyIfPresent && t.scope === 'global' };
+      return t.format === 'toml'
+        ? upsertCodexToml(t.id, t.path, guard)
+        : mergeJsonKey(t.id, t.path, t.topKey!, t.entry!, guard);
+    });
 }
