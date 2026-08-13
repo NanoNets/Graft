@@ -16,7 +16,7 @@ import { fingerprintPath, isClean, probeDrift, readFingerprint } from "../src/gr
 import { readAskIndex } from "../src/ask/index-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1 } from "../src/graph/types.js";
-import { chmodDenialUnavailable } from "./helpers.js";
+import { chmodDenialUnavailable, rmDir } from "./helpers.js";
 
 const MATH = [
   "export function add(a: number, b: number): number {",
@@ -196,7 +196,7 @@ test("gitignored generated files stay out of the graph, fingerprint, and drift p
     writeFileSync(bundle, "export function generatedBundle(): number { return 2; }\n");
     assert.ok(isClean(probeDrift(d, outOf(d))!), "ignored output changes must not trigger a refresh");
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 

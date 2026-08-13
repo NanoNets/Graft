@@ -15,6 +15,7 @@ import { readGraph, wiringPath, writeGraph } from "../src/graph/write.js";
 import { loadGraphCached } from "../src/graph/load.js";
 import { writeBuildConfig } from "../src/util/state.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 function fx(layout: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "scopes-"));
@@ -34,7 +35,7 @@ test("frontend/backend markers under one git root -> two scopes", () => {
   assert.deepEqual(scopes.map((s) => s.prefix).sort(), ["backend", "frontend"]);
   assert.equal(scopeOf("frontend/src/app.ts", scopes).label, "frontend");
   assert.equal(scopeOf("README.md", scopes).prefix, "");  // root scope always exists as fallback
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("workspace globs are intent: packages/* honored, deeper ignored", () => {
@@ -46,7 +47,7 @@ test("workspace globs are intent: packages/* honored, deeper ignored", () => {
   });
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["packages/cli", "packages/core"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("gitignored generated workspace directories cannot become scopes (#39)", () => {
@@ -62,7 +63,7 @@ test("gitignored generated workspace directories cannot become scopes (#39)", ()
     execFileSync("git", ["init", "-q"], { cwd: d });
     assert.deepEqual(discoverScopes(d).map((s) => s.prefix), ["packages/app"]);
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -70,19 +71,19 @@ test("root-only marker -> canonical single scope", () => {
   const d = fx({ "package.json": "{}", "src/a.ts": "1" });
   const scopes = discoverScopes(d);
   assert.deepEqual(scopes, [{ prefix: "", label: "", markers: ["package.json"] }]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("depth guard: markers 3 levels down ignored without workspace glob", () => {
   const d = fx({ "a/b/c/package.json": "{}", "src/x.ts": "1" });
   assert.equal(discoverScopes(d).length, 1); // root only
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("nesting collapse keeps shallower candidate", () => {
   const d = fx({ "svc/package.json": "{}", "svc/sub/package.json": "{}", "svc/i.ts": "1" });
   assert.deepEqual(discoverScopes(d).filter((s) => s.prefix).map((s) => s.prefix), ["svc"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("nesting collapse is layout-deterministic regardless of sibling readdir order (P10)", () => {
@@ -103,7 +104,7 @@ test("nesting collapse is layout-deterministic regardless of sibling readdir ord
         .map((s) => s.prefix)
         .sort();
     } finally {
-      rmSync(d, { recursive: true, force: true });
+      rmDir(d);
     }
   };
   // Normalize the sibling's own name away so the two runs compare structurally:
@@ -126,7 +127,7 @@ test("literal (non-glob) workspace entry resolves as a workspace match", () => {
   });
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["apps/web", "docs"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("workspace-under-workspace collapses to the shallower scope (packages/**)", () => {
@@ -137,7 +138,7 @@ test("workspace-under-workspace collapses to the shallower scope (packages/**)",
   });
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["packages/a"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("workspace-under-workspace collapse also sweeps markerless dirs under a **-glob", () => {
@@ -148,7 +149,7 @@ test("workspace-under-workspace collapse also sweeps markerless dirs under a **-
   });
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["packages/a"]); // no markerless packages/a/src* survives
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("literal + glob workspace overlap collapses to the shallower literal entry", () => {
@@ -159,7 +160,7 @@ test("literal + glob workspace overlap collapses to the shallower literal entry"
   });
   const prefixes = discoverScopes(d).map((s) => s.prefix).sort();
   assert.deepEqual(prefixes, ["apps"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("discoverWorkspaceChildren finds immediate git children only", () => {
@@ -168,7 +169,7 @@ test("discoverWorkspaceChildren finds immediate git children only", () => {
   mkdirSync(join(d, "repoB/.git"), { recursive: true });
   mkdirSync(join(d, "repoB/vendored/.git"), { recursive: true }); // nested: not a child of d
   assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["repoA", "repoB"]);
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 test("A5: discoverScopes finds a marker under a SKIP_DIRS name once persisted via --include-dir state, absent otherwise", () => {
@@ -178,7 +179,7 @@ test("A5: discoverScopes finds a marker under a SKIP_DIRS name once persisted vi
   writeBuildConfig(d, { includeDirs: ["build"] });
   const prefixes = discoverScopes(d).map((s) => s.prefix);
   assert.deepEqual(prefixes, ["build"], "once persisted, build/'s own marker is discovered as a scope");
-  rmSync(d, { recursive: true, force: true });
+  rmDir(d);
 });
 
 function tsFns(n: number): string {
@@ -205,7 +206,7 @@ test("buildGraph wires meta.scopes: substantial scopes survive, tiny scopes merg
     const prefixes = (graph!.meta.scopes ?? []).map((s) => s.prefix).sort();
     assert.deepEqual(prefixes, ["backend", "frontend"]); // tiny (1 symbol) merged into root
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });
 
@@ -226,6 +227,6 @@ test("old graphs without meta.scopes fall back to the canonical root scope via s
     assert.deepEqual(scopes, [{ prefix: "", label: "", markers: [] }]);
     assert.equal(scopeOf("anything/at/all.ts", scopes).prefix, "");
   } finally {
-    rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 });

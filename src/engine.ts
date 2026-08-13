@@ -10,7 +10,7 @@
  * the sync. This class wires the configured LLM provider into the build/check
  * pipelines; an API key is required for any LLM-backed operation.
  */
-import { resolveConfig, type EngineConfig, type ResolvedConfig } from "./ai/providers.js";
+import { credentialProblem, resolveConfig, type EngineConfig, type ResolvedConfig } from "./ai/providers.js";
 import { ChatSynthesizer, type Synthesizer } from "./ai/synthesize.js";
 import { ChatSummarizer, type Summarizer } from "./ai/summarize.js";
 import { ChatCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
@@ -116,18 +116,17 @@ export class Graft {
   private chatModel(): ChatModel {
     if (this.cfg.chatModel) return this.cfg.chatModel;
     if (this._chatModel) return this._chatModel;
-    if (!this.cfg.apiKey) {
-      throw new Error(
-        "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
-          "for your provider) to build or summarize the graph.",
-      );
-    }
+    const problem = credentialProblem(this.cfg);
+    if (problem) throw new Error(problem);
     this._chatModel = createChatModel({
       provider: this.cfg.provider,
       apiKey: this.cfg.apiKey,
       model: this.cfg.model,
       baseUrl: this.cfg.baseUrl,
       headers: this.cfg.headers,
+      bin: this.cfg.bin,
+      timeoutMs: this.cfg.timeoutMs,
+      maxBudgetUsd: this.cfg.maxBudgetUsd,
     });
     return this._chatModel;
   }

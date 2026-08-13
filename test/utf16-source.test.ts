@@ -29,7 +29,7 @@ import { grepGraph } from "../src/search/grep.js";
 import { ask } from "../src/ask/ask.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { contextDirFor } from "../src/context/node-file.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, rmDir } from "./helpers.js";
 
 /** BOM + UTF-16LE bytes — the shape Windows tooling in general actually writes. */
 function utf16le(text: string): Buffer {
@@ -53,7 +53,7 @@ test("readSourceFile: decodes a UTF-16LE BOM, returns null for UTF-16BE, and rea
     assert.equal(readSourceFile(join(dir, "be.ts")), null);
     assert.equal(readSourceFile(join(dir, "plain.ts")), "export const x = 1;\n");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -66,7 +66,7 @@ test("A1 graph/build.ts: a UTF-16LE .ts file is decoded at graph ingest, not moj
     const graph = readGraph(wiringPath(join(dir, "graft")))!;
     assert.ok(graph.nodes.some((n) => n.id === "legacy.ts#fromLegacy"), "the UTF-16LE file's function must be extracted");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -79,7 +79,7 @@ test("A1 graph/build.ts: a UTF-16BE file is an empty entry, not a build error (n
     const graph = readGraph(wiringPath(join(dir, "graft")))!;
     assert.ok(!graph.nodes.some((n) => n.path === "legacy.ts"), "no nodes minted for the undecodable file");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -98,7 +98,7 @@ test("A1 hash-what-you-parse consistency: build/check/fingerprint agree on a UTF
     const drift = probeDrift(join(dir), join(dir, "graft"));
     assert.deepEqual(drift, { changed: [], added: [], removed: [] }, "fingerprint's probe must agree too — no drift");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -128,7 +128,7 @@ test("A1 fingerprint reports drift when indexed UTF-16LE becomes unsupported UTF
   } finally {
     if (previousRefresh === undefined) delete process.env.GRAFT_REFRESH;
     else process.env.GRAFT_REFRESH = previousRefresh;
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -150,7 +150,7 @@ test("A1 context/build.ts + check.ts: a UTF-16LE file's summarizer input decodes
     assert.equal(check.ok, true, "content hash must agree between build and check for the same UTF-16LE file");
     assert.deepEqual(check.contentDrift, []);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -169,7 +169,7 @@ test("A1 search/grep.ts: finds a pattern inside a UTF-16LE file", async () => {
     assert.equal(r.totalHits, 1, "grep must find the pattern in the UTF-16LE file's decoded text");
     assert.match(r.groups[0]!.hits[0]!.text, /NEEDLE hit/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -189,6 +189,6 @@ test("A1 ask.ts --source: inlines clean (non-garbled) source sliced from a UTF-1
     assert.match(hit!.code!, /return 42/, "the sliced span must decode cleanly, not as mojibake");
     assert.ok(!hit!.code!.includes("\u0000"), "no stray NUL bytes from a mis-decoded UTF-16LE read");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

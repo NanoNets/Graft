@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { startVizServer } from "../src/viz/serve.js";
+import { rmDir } from "./helpers.js";
 
 function makeDirs(): { contextDir: string; viewerDir: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "graftviz-srv-"));
@@ -54,7 +55,7 @@ test("viz server serves viewer, context graph, and gates code graph", async () =
     assert.equal(code.meta.version, 1);
   } finally {
     await srv.close();
-    rmSync(root, { recursive: true, force: true });
+    rmDir(root);
   }
 });
 
@@ -68,7 +69,7 @@ test("viz server falls back to the next free port", async () => {
   } finally {
     await srv.close();
     await new Promise((res) => blocker.close(res));
-    rmSync(root, { recursive: true, force: true });
+    rmDir(root);
   }
 });
 
@@ -95,6 +96,6 @@ test("viz server emits an SSE event when the context dir changes", async () => {
     assert.match(seen, /data: change/);
   } finally {
     await srv.close();
-    rmSync(root, { recursive: true, force: true });
+    rmDir(root);
   }
 });
