@@ -214,8 +214,9 @@ program
 program
   .command("upgrade")
   .description("Upgrade the globally installed graft to the latest version on npm")
-  .action(() => {
-    const result = runUpgrade(import.meta.url);
+  .option("--force", "install @latest even when it is OLDER than this build (a fork, an rc, a linked checkout)")
+  .action((opts: { force?: boolean }) => {
+    const result = runUpgrade(import.meta.url, { force: opts.force });
     console.log(formatUpgradeReport(result));
     if (result.ran && !result.ok) process.exit(1);
   });

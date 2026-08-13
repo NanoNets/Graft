@@ -11,6 +11,7 @@ import {
   isRunningViaNpx,
   getNpmViewVersion,
   runUpgrade,
+  compareVersions,
 } from '../src/cli-meta.js';
 import { tmpRepo } from './helpers.js';
 
@@ -29,6 +30,35 @@ test('formatVersionReport: newer version available', () => {
 test('formatVersionReport: offline / unreachable', () => {
   const out = formatVersionReport('0.4.4', { ok: false });
   assert.equal(out, 'graft 0.4.4\nlatest: unreachable (offline?)');
+});
+
+test('formatVersionReport: a build NEWER than npm is not told to downgrade', () => {
+  // The check used to be `latest === current`, so any difference printed "run
+  // graft upgrade" — advice that destroys a fork, an rc, or an `npm link`ed
+  // checkout, because upgrade installs @latest.
+  const out = formatVersionReport('0.11.0', { ok: true, version: '0.10.1' });
+  assert.doesNotMatch(out, /run graft upgrade/);
+  assert.match(out, /this build is newer/);
+});
+
+test('compareVersions: numeric per part, and a prerelease sits below its release', () => {
+  assert.ok(compareVersions('0.10.1', '0.11.0') < 0);
+  assert.ok(compareVersions('0.11.0', '0.10.1') > 0);
+  assert.equal(compareVersions('1.2.3', '1.2.3'), 0);
+  // String compare would put 0.9.0 above 0.10.0 — the whole point of parsing.
+  assert.ok(compareVersions('0.10.0', '0.9.0') > 0);
+  assert.ok(compareVersions('1.2.0-rc.1', '1.2.0') < 0);
+  assert.ok(compareVersions('1.2.0-rc.2', '1.2.0-rc.1') > 0);
+  assert.equal(compareVersions('v1.2.3', '1.2.3'), 0);
+  assert.equal(compareVersions('garbage', 'garbage'), 0);
+});
+
+test('formatUpgradeReport: a refused downgrade explains itself, not the npx no-op', () => {
+  // A refusal also has ran=false; reporting it as the npx path would hide why.
+  const out = formatUpgradeReport({ ran: false, ok: true, oldVersion: '0.11.0', refused: { latest: '0.10.1' } });
+  assert.match(out, /0\.11\.0 is newer than 0\.10\.1/);
+  assert.match(out, /graft upgrade --force/);
+  assert.doesNotMatch(out, /running via npx/);
 });
 
 // --- formatUpgradeReport: pure formatting, injected upgrade results (no network, no spawn) ---
