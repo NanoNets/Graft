@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSyn
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
-import { ask } from "../src/ask/ask.js";
+import { ask, BODY_INDEX_MISSING_NOTE, type AskResult } from "../src/ask/ask.js";
 import { contextDirFor } from "../src/context/node-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { askIndexPath, readAskIndex, tokenize, counts, writeAskIndex } from "../src/ask/index-file.js";
@@ -51,6 +51,26 @@ function makeFixture(): string {
 }
 
 const QUERY = "How does authentication middleware validate incoming API requests?";
+
+/**
+ * The sidecar-parity assertions below are about RANKING — same hits, same
+ * scores — and they predate the degraded-recall warning. Falling back to live
+ * tokenization is no longer indistinguishable on purpose: without the sidecar,
+ * a graph read from disk has no `body_text` at all, so recall genuinely drops
+ * and `ask` now says so in `note` (see BODY_INDEX_MISSING_NOTE). Stripping
+ * `note` before comparing keeps these tests pinned to what they were written
+ * to pin, while `assertDegradedNote` pins the new signal explicitly.
+ */
+function withoutNote(r: AskResult): AskResult {
+  const { note: _note, ...rest } = r;
+  return rest as AskResult;
+}
+
+function assertDegradedNote(r: AskResult): void {
+  assert.ok(r.note, "a sidecar-less run must warn about reduced recall, not degrade silently");
+  assert.match(r.note!, /body index missing or stale/);
+  assert.equal(r.note!.includes(BODY_INDEX_MISSING_NOTE), true);
+}
 
 /**
  * Reconstruct a "fat" wiring.json — body_text present on every node, as EVERY
@@ -150,7 +170,13 @@ test("ask results are IDENTICAL with and without the sidecar (same hits, same sc
     try {
       assert.equal(readAskIndex(outDir), null, "sanity: sidecar is really gone");
       const withoutIndex = ask(dir, QUERY, { source: false });
-      assert.deepEqual(withoutIndex, withIndex, "sidecar vs live fallback must produce identical AskResult");
+      assert.deepEqual(
+        withoutNote(withoutIndex),
+        withoutNote(withIndex),
+        "sidecar vs live fallback must produce identical hits and scores",
+      );
+      assert.equal(withIndex.note, undefined, "a healthy sidecar warns about nothing");
+      assertDegradedNote(withoutIndex);
       assert.ok(withIndex.hits.length > 0, "the fixture query should actually match something");
     } finally {
       writeFileSync(idxPath, backup);
@@ -176,7 +202,8 @@ test("unknown sidecar version falls back to live tokenization without crashing",
 
     assert.equal(readAskIndex(outDir), null, "an unknown version reads as null (fallback signal)");
     const withBadVersion = ask(dir, QUERY, { source: false });
-    assert.deepEqual(withBadVersion, live, "unknown-version sidecar must not change results");
+    assert.deepEqual(withoutNote(withBadVersion), withoutNote(live), "unknown-version sidecar must not change results");
+    assertDegradedNote(withBadVersion);
   } finally {
     rmDir(dir);
   }
@@ -197,7 +224,8 @@ test("a stale sidecar (docCount mismatch) falls back to live tokenization", asyn
     writeFileSync(idxPath, JSON.stringify(raw));
 
     const stale = ask(dir, QUERY, { source: false });
-    assert.deepEqual(stale, live, "a docCount-mismatched sidecar must not change results");
+    assert.deepEqual(withoutNote(stale), withoutNote(live), "a docCount-mismatched sidecar must not change results");
+    assertDegradedNote(stale);
   } finally {
     rmDir(dir);
   }
@@ -216,7 +244,8 @@ test("an unparseable sidecar file falls back to live tokenization", async () => 
 
     assert.equal(readAskIndex(outDir), null);
     const withGarbage = ask(dir, QUERY, { source: false });
-    assert.deepEqual(withGarbage, live);
+    assert.deepEqual(withoutNote(withGarbage), withoutNote(live));
+    assertDegradedNote(withGarbage);
   } finally {
     rmDir(dir);
   }

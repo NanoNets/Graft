@@ -4,10 +4,7 @@
  * (incoming), mirroring the focus-mode edge colors.
  */
 import { type VizGraph, colorToken, cvar } from "./data.js";
-
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-}
+import { escapeHtml as esc } from "./escape.js";
 
 export function renderDetail(
   host: HTMLElement,

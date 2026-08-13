@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { grepGraph } from '../src/search/grep.js';
-import { zeroHitNote } from '../src/search/grep-cli.js';
+import { formatGrepResult, zeroHitNote } from '../src/search/grep-cli.js';
 import { WALK_RELATIONS } from '../src/graph/relations.js';
 import { readGraph, wiringPath } from '../src/graph/write.js';
 import type { GraphV1, NodeV1 } from '../src/graph/types.js';
@@ -260,6 +260,146 @@ test('grepGraph: unreadable file is skipped and counted into truncated.files, no
   assert.equal(r.filesSearched, 2);
   assert.equal(r.truncated.files, 1);
   assert.equal(r.totalHits, 1);
+});
+
+test('grepGraph: CRLF files match end-anchored patterns — the \\r is not left on the line', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-grep-crlf-'));
+  // Exactly what a Windows checkout with git's default core.autocrlf=true holds.
+  writeFileSync(join(d, 'crlf.ts'), 'const foo = 1;\r\nconst bar = 2;\r\n');
+  writeFileSync(join(d, 'lf.ts'), 'const foo = 1;\nconst bar = 2;\n');
+  const graph = graphOf([fileNode('crlf.ts', 2), fileNode('lf.ts', 2)]);
+
+  // `;$` is the ordinary "line ends with a semicolon" pattern. Splitting on
+  // "\n" alone leaves "const foo = 1;\r", where `$` never matches — so the CRLF
+  // file silently contributed zero hits while the LF file contributed two.
+  const anchored = grepGraph(graph, d, ';$');
+  assert.equal(anchored.totalHits, 4, 'both CRLF lines and both LF lines must match an end-anchored pattern');
+  assert.deepEqual(
+    [...new Set(anchored.groups.map((g) => g.path))].sort(),
+    ['crlf.ts', 'lf.ts'],
+  );
+
+  // The stray \r must not survive into the reported hit text either.
+  const text = grepGraph(graph, d, 'foo').groups.flatMap((g) => g.hits).map((h) => h.text);
+  assert.equal(text.some((t) => t.includes('\r')), false, 'hit text must be free of the CRLF carriage return');
+});
+
+test('grepGraph: a catastrophically-backtracking pattern is bounded by the time budget, and says so', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-grep-redos-'));
+  // `(a+)+b` against a line of a's with no b is the textbook exponential case:
+  // ~22 a's is a few ms of pure backtracking, and 300 such lines is minutes of
+  // a wedged event loop — on the MCP server that is every other tool call too.
+  const line = 'a'.repeat(22) + '!';
+  writeFileSync(join(d, 'evil.txt'), Array.from({ length: 300 }, () => line).join('\n') + '\n');
+  const graph = graphOf([fileNode('evil.txt', 300)]);
+
+  const t0 = Date.now();
+  const r = grepGraph(graph, d, '(a+)+b', { budgetMs: 300 });
+  const elapsed = Date.now() - t0;
+
+  assert.equal(r.truncated.timeout, true, 'giving up must be reported, never silent');
+  assert.equal(r.filesSearched, 1, 'only the files actually opened are reported as searched');
+  // Generous ceiling: the budget bounds the loop, one in-flight RegExp.test can
+  // still overshoot it. Unbounded, this run takes tens of seconds.
+  assert.ok(elapsed < 5_000, `expected the scan to be bounded, took ${elapsed}ms`);
+});
+
+/** `files` file nodes plus `symbols` symbol nodes spread evenly over them —
+ * the shape (not the content) of a large real graph, for the grouping-cost
+ * assertions below. */
+function wideGraph(files: number, symbols: number): GraphV1 {
+  const nodes: NodeV1[] = [];
+  for (let f = 0; f < files; f++) nodes.push(fileNode(`src/f${f}.ts`, 100));
+  for (let s = 0; s < symbols; s++) {
+    const f = s % files;
+    nodes.push({
+      ...fileNode(`src/f${f}.ts`, 100),
+      id: `src/f${f}.ts#sym${s}`,
+      name: `sym${s}`,
+      kind: 'function',
+      span: `L${(s % 90) + 1}-L${(s % 90) + 2}`,
+    });
+  }
+  return graphOf(nodes);
+}
+
+test('grepGraph: symbol grouping is indexed once per call, not re-scanned per file', () => {
+  // 1000 files x 100000 symbols — a few times this repo's own cited scale
+  // ("at 32k nodes"), deliberately symbol-heavy so the quadratic term is what
+  // the clock sees. The old per-file `symbolsOf` walked ALL 101000 nodes for
+  // every file (101M node visits) purely to bucket spans; the one-pass index
+  // makes it 101000 visits total. Kept few enough files that the ENOENT cost
+  // of the (deliberately absent) sources stays small next to the grouping.
+  const graph = wideGraph(1_000, 100_000);
+  const dir = mkdtempSync(join(tmpdir(), 'graft-grep-perf-'));
+
+  const t0 = Date.now();
+  const r = grepGraph(graph, dir, 'NEEDLE');
+  const elapsed = Date.now() - t0;
+
+  assert.equal(r.filesSearched, 1_000);
+  assert.ok(elapsed < 400, `grouping should be near-linear in nodes, took ${elapsed}ms`);
+});
+
+test('grepGraph: the per-file symbol buckets are complete and start-sorted (what the one-pass index must preserve)', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-grep-buckets-'));
+  writeFileSync(join(d, 'a.ts'), 'NEEDLE\n'.repeat(6));
+  writeFileSync(join(d, 'b.ts'), 'NEEDLE\n'.repeat(6));
+  const sym = (path: string, name: string, span: string): NodeV1 => ({
+    ...fileNode(path, 6),
+    id: `${path}#${name}`,
+    name,
+    kind: 'function',
+    span,
+  });
+  // Deliberately out of span order in `graph.nodes`, and interleaved between
+  // files: `enclosingSymbol` stops at the first span that starts after the
+  // line, so a bucket that isn't sorted by start silently loses hits.
+  const graph = graphOf([
+    fileNode('a.ts', 6),
+    fileNode('b.ts', 6),
+    sym('a.ts', 'late', 'L5-L6'),
+    sym('b.ts', 'only', 'L1-L6'),
+    sym('a.ts', 'early', 'L1-L2'),
+  ]);
+
+  const r = grepGraph(graph, d, 'NEEDLE');
+  const named = new Map(r.groups.filter((g) => g.symbol).map((g) => [g.symbol!.name, g.hits.map((h) => h.line)]));
+  assert.deepEqual(named.get('early'), [1, 2]);
+  assert.deepEqual(named.get('late'), [5, 6]);
+  assert.deepEqual(named.get('only'), [1, 2, 3, 4, 5, 6]);
+  // a.ts lines 3-4 fall outside every span -> file-level group, and b.ts has none.
+  const fileLevel = r.groups.filter((g) => g.symbol === null);
+  assert.equal(fileLevel.length, 1);
+  assert.deepEqual(fileLevel[0], { symbol: null, path: 'a.ts', inDegree: 0, hits: [{ line: 3, text: 'NEEDLE' }, { line: 4, text: 'NEEDLE' }] });
+});
+
+test('grep-cli.ts: a timeout is surfaced by BOTH the CLI notes, and never as a complete search', () => {
+  const d = mkdtempSync(join(tmpdir(), 'graft-grep-cli-timeout-'));
+  const line = 'a'.repeat(22) + '!';
+  writeFileSync(join(d, 'evil.txt'), Array.from({ length: 300 }, () => line).join('\n') + '\n');
+  const graph = graphOf([fileNode('evil.txt', 300)]);
+
+  // The MCP side already said this (`grepTimeoutNote` in mcp/tools.ts); the CLI's
+  // own two notes never mentioned the flag, so `graft grep` printed a zero-hit
+  // result claiming "All indexed code was searched" over a scan that gave up.
+  const none = grepGraph(graph, d, '(a+)+b', { budgetMs: 300 });
+  assert.equal(none.truncated.timeout, true);
+  const zero = zeroHitNote(none);
+  assert.match(zero, /never searched/);
+  assert.doesNotMatch(zero, /All indexed code was searched/);
+
+  // …and with hits, the header note has to carry it too — the note rides under the
+  // header precisely so a `head -N` of the report cannot lose the one line saying
+  // the answer is partial. Hand-built, because a pattern that both matches AND
+  // backtracks catastrophically is not something to make deterministic.
+  const withHits = {
+    ...none,
+    totalHits: 1,
+    groups: [{ symbol: null, path: 'evil.txt', inDegree: 0, hits: [{ line: 1, text: line }] }],
+  };
+  const report = formatGrepResult(withHits);
+  assert.match(report.split('\n')[1], /truncated: search hit its time budget/);
 });
 
 test('zeroHitNote (grep-cli.ts): zero hits AND unreadable indexed files mentions the unreadable count, not just the zero-hit note', () => {
