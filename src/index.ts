@@ -27,13 +27,21 @@ export type { GraphCheckResult, GraphCheckOptions } from "./graph/check.js";
 export type { ContextNode, NodeLink, SourceRef, Manifest } from "./context/node-file.js";
 
 export type { EngineConfig, ResolvedConfig } from "./ai/providers.js";
-export { resolveConfig, DEFAULTS, DEFAULT_MODELS } from "./ai/providers.js";
+export { resolveConfig, credentialProblem, DEFAULTS, DEFAULT_MODELS } from "./ai/providers.js";
 
 // Provider transport, for advanced/custom setups.
 export type { ChatModel, ChatRequest, ChatResponse, Message, ToolSpec, ToolCall, Usage } from "./ai/llm/types.js";
-export { createChatModel, type ProviderKind, type ChatModelConfig } from "./ai/llm/factory.js";
+export {
+  createChatModel,
+  providerNeedsKey,
+  PROVIDER_KINDS,
+  type ProviderKind,
+  type ChatModelConfig,
+} from "./ai/llm/factory.js";
 export { OpenAIChatModel } from "./ai/llm/openai.js";
 export { AnthropicChatModel } from "./ai/llm/anthropic.js";
+export { ClaudeCliChatModel, claudeCliAvailable, resolveClaudeBin } from "./ai/llm/claude-cli.js";
+export type { ClaudeCliChatModelOptions, ClaudeCliRunner, ClaudeCliResult } from "./ai/llm/claude-cli.js";
 
 // Engine ops, for advanced/custom setups.
 export { ChatSynthesizer } from "./ai/synthesize.js";

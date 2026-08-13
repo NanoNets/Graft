@@ -39,17 +39,26 @@ export interface GenericLang {
 }
 
 /** The breadth registry. Add a row + a queries/<name>.scm to support a language.
- * Extensions here must NOT collide with the depth tier's EXTENSIONS (extract.ts). */
+ * Extensions here must NOT collide with the depth tier's EXTENSIONS (extract.ts) —
+ * with ONE deliberate, documented exception, `java` (see its row). */
 export const GENERIC_LANGS: readonly GenericLang[] = [
   { name: "rust", exts: [".rs"], wasm: "rust" },
+  // The exception to the no-collision rule above, and it is a TEST FIXTURE, not a
+  // language graft indexes this way: `.java` belongs to the depth tier (extract.ts),
+  // which always wins in build.ts (`lang ? null : genericLangOf(...)`), so
+  // `extractGeneric` never sees a .java file in a real build. The row exists because
+  // test/generic-extract.test.ts uses Java as its method-heavy example for the
+  // breadth tier's call-kind widening. Callers computing what to WARM must filter out
+  // depth-tier files first, or every Java repo loads a multi-MB wasm for nothing.
   { name: "java", exts: [".java"], wasm: "java" },
   { name: "c", exts: [".c", ".h"], wasm: "c" },
   { name: "cpp", exts: [".cpp", ".cc", ".cxx", ".hpp", ".hh"], wasm: "cpp" },
   { name: "ruby", exts: [".rb"], wasm: "ruby" },
   { name: "php", exts: [".php"], wasm: "php" },
   { name: "c_sharp", exts: [".cs"], wasm: "c_sharp" },
-  // These ship a tags.scm (calls + symbols); ocaml/zig have none and use the
-  // node-kind walker fallback (symbols only) — still one row, zero query.
+  // The rows above and the next four ship a queries/<name>.scm (calls + symbols).
+  // ocaml, zig and dart have none and use the node-kind walker fallback (symbols only,
+  // no call edges) — still one row, zero query.
   { name: "kotlin", exts: [".kt", ".kts"], wasm: "kotlin" },
   { name: "scala", exts: [".scala", ".sc"], wasm: "scala" },
   { name: "swift", exts: [".swift"], wasm: "swift" },
@@ -85,7 +94,15 @@ const KIND: Record<string, Kind> = {
 
 // Loaded grammars + compiled tags queries, keyed by graft lang name. Populated by
 // warmGenericGrammars; read synchronously by extractGeneric.
-interface Loaded { language: unknown; query: unknown | null }
+//
+// The Parser is built ONCE per language and kept here. web-tree-sitter's Parser, Tree
+// and Query all live in the WASM heap, which V8's GC knows nothing about: a Parser
+// constructed per file (and a Tree never `.delete()`d) is leaked for the life of the
+// process. On a repo with thousands of breadth-tier files that grows monotonically
+// through build.ts's whole parse loop and ends in hundreds of MB or an outright
+// `Cannot enlarge memory arrays`. Rebuilding the parser per file was pure waste anyway
+// — the grammar it is set to never changes.
+interface Loaded { language: unknown; query: unknown | null; parser: TsParser }
 const loaded = new Map<string, Loaded>();
 let tsMod: typeof import("web-tree-sitter") | null = null;
 let initPromise: Promise<void> | null = null;
@@ -140,7 +157,9 @@ export async function warmGenericGrammars(langNames: Iterable<string>): Promise<
       if (scm) {
         try { query = new Query(language, scm); } catch { query = null; }
       }
-      loaded.set(name, { language, query });
+      const parser = new tsMod.Parser();
+      parser.setLanguage(language as never);
+      loaded.set(name, { language, query, parser: parser as unknown as TsParser });
     } catch {
       /* grammar failed to instantiate — skip; files extract as file-only */
     }
@@ -150,6 +169,21 @@ export async function warmGenericGrammars(langNames: Iterable<string>): Promise<
 /** True if a grammar has been warmed for this lang (else extractGeneric is file-only). */
 export function isWarm(langName: string): boolean {
   return loaded.has(langName);
+}
+
+/**
+ * Of `langNames`, the breadth languages that have NO usable grammar after a warmup —
+ * their files extract to a file node and nothing else.
+ *
+ * A missing wasm and a grammar that fails to instantiate are both swallowed silently by
+ * {@link warmGenericGrammars} (correctly: neither should fail a build), and the caller
+ * had no way to notice. So a build over a repo whose `dart` wasm isn't in the bundle
+ * announced `[dart]` in its language banner having indexed exactly zero dart symbols —
+ * which reads as "graft is broken at querying dart", not "graft has no dart grammar
+ * here". Call this after warming and report the gap instead of claiming coverage.
+ */
+export function unavailableGrammars(langNames: Iterable<string>): string[] {
+  return [...new Set(langNames)].filter((n) => !loaded.has(n)).sort();
 }
 
 const PARSE_CHUNK = 16384; // <32KB slices — same tree-sitter limit workaround as extract.ts
@@ -163,7 +197,7 @@ function fileNode(rel: string, source: string): NodeV1 {
   };
 }
 
-interface Def { id: string; startIndex: number; endIndex: number }
+export interface Def { id: string; startIndex: number; endIndex: number }
 
 /** Extract a single generic-tier file. Synchronous; needs the grammar pre-warmed.
  * Uses the grammar's compiled tags.scm when present (symbols + call edges);
@@ -172,19 +206,61 @@ interface Def { id: string; startIndex: number; endIndex: number }
 export function extractGeneric(rel: string, source: string, langName: string): ExtractResult {
   const nodes: NodeV1[] = [fileNode(rel, source)];
   const rawEdges: RawEdge[] = [];
-  const entry = loaded.get(langName);
+  const lang = headerGrammarFor(rel, source, langName);
+  const entry = loaded.get(lang);
   if (!entry || !tsMod) return { nodes, rawEdges };
 
-  let tree;
+  let tree: TsTree | null;
   try {
-    const parser = new tsMod.Parser();
-    parser.setLanguage(entry.language as never);
-    tree = parser.parse((i: number) => source.slice(i, i + PARSE_CHUNK));
+    tree = entry.parser.parse((i: number) => source.slice(i, i + PARSE_CHUNK));
   } catch {
     return { nodes, rawEdges };
   }
   if (!tree) return { nodes, rawEdges };
+  try {
+    return extractFromTree(tree.rootNode, rel, source, lang, nodes, rawEdges);
+  } finally {
+    // The one place a Tree can be released: every early return above happens before one
+    // exists, and every path below funnels through here. Without it each parsed file
+    // leaves its whole syntax tree resident in the WASM heap forever (see `Loaded`).
+    tree.delete();
+  }
+}
 
+/**
+ * The grammar a `.h` file should actually be parsed with.
+ *
+ * The registry maps an extension to exactly one grammar and `.h` is claimed by C — but
+ * in a C++ project the headers are precisely where the classes, templates and namespaces
+ * live, and c.scm has no `class_specifier` and no `namespace` pattern at all. Those
+ * symbols simply did not exist in the graph (while resolve.ts happily treated the same
+ * `.h` as a valid `#include` target), and templates additionally produced ERROR nodes.
+ *
+ * The extension cannot decide this — the same `.h` is C in one repo and C++ in the next
+ * — so the content does. The `loaded.has("cpp")` gate is what keeps this safe: the cpp
+ * grammar is warmed only when the repo has real C++ sources, so a pure-C project can
+ * never be routed away from the C parse it had.
+ *
+ * Known seam: adding a repo's FIRST `.cpp` file flips this decision for headers whose
+ * own bytes did not move, and the extraction memo is keyed on bytes — so those headers
+ * keep their C parse until they are edited or the memo turns over. Re-parsing the whole
+ * repo on that transition is not worth the machinery; `graft build --no-reuse` settles it.
+ */
+const CPP_HEADER = /^[ \t]*(?:template\s*<|namespace\s+[\w{]|class\s+\w|public:|private:|protected:|using\s+namespace\b)/m;
+function headerGrammarFor(rel: string, source: string, langName: string): string {
+  if (langName !== "c" || !rel.toLowerCase().endsWith(".h")) return langName;
+  return loaded.has("cpp") && CPP_HEADER.test(source) ? "cpp" : langName;
+}
+
+function extractFromTree(
+  root: TsNode,
+  rel: string,
+  source: string,
+  langName: string,
+  nodes: NodeV1[],
+  rawEdges: RawEdge[],
+): ExtractResult {
+  const entry = loaded.get(langName)!;
   const minted = new Set<string>([rel]);
   const lines = source.split("\n");
   const defs: Def[] = [];
@@ -216,16 +292,16 @@ export function extractGeneric(rel: string, source: string, langName: string): E
   };
 
   if (entry.query) {
-    tagsExtract(entry.query, tree.rootNode as TsNode, rel, mkDef, defs, rawEdges);
+    tagsExtract(entry.query, root, rel, mkDef, defs, rawEdges);
   } else {
-    walkExtract(tree.rootNode as TsNode, mkDef); // no tags.scm → symbols only
+    walkExtract(root, mkDef); // no tags.scm → symbols only
   }
   // The preprocessor is invisible to tags.scm, but in C/C++ a local `#include "x.h"`
   // IS the dependency graph — capture it as a file→file import. Likewise a Rust
   // `use crate::…` is an in-crate module dependency.
-  if (langName === "c" || langName === "cpp") extractIncludes(tree.rootNode as TsNode, rel, rawEdges);
-  else if (langName === "rust") extractUses(tree.rootNode as TsNode, rel, rawEdges);
-  else if (langName === "php") extractPhpUses(tree.rootNode as TsNode, rel, rawEdges);
+  if (langName === "c" || langName === "cpp") extractIncludes(root, rel, rawEdges);
+  else if (langName === "rust") extractUses(root, rel, rawEdges);
+  else if (langName === "php") extractPhpUses(root, rel, rawEdges);
   return { nodes, rawEdges };
 }
 
@@ -357,22 +433,57 @@ function tagsExtract(
          "reference.implementation" in cap || "reference.module" in cap) && cap.name)
       refs.push({ name: cap.name.text, at: cap.name.startIndex });
   }
-  // innermost enclosing definition of a token at byte offset `at`
-  const enclosing = (at: number) =>
-    defs
-      .filter((d) => d.startIndex <= at && at < d.endIndex)
-      .sort((a, b) => (a.endIndex - a.startIndex) - (b.endIndex - b.startIndex))[0];
-  for (const c of calls) {
+  const callEnc = enclosingDefs(defs, calls.map((c) => c.at));
+  for (let i = 0; i < calls.length; i++) {
+    const c = calls[i];
     if (defNameAt.has(c.at)) continue;
-    const enc = enclosing(c.at);
+    const enc = callEnc[i];
     rawEdges.push({ source: enc ? enc.id : rel, relation: "calls", file: rel, name: c.name });
   }
-  for (const r of refs) {
+  const refEnc = enclosingDefs(defs, refs.map((r) => r.at));
+  for (let i = 0; i < refs.length; i++) {
+    const r = refs[i];
     if (defNameAt.has(r.at)) continue;
-    const enc = enclosing(r.at);
+    const enc = refEnc[i];
     if (!enc) continue; // a reference with no enclosing definition has no sound source
     rawEdges.push({ source: enc.id, relation: "references", file: rel, name: r.name });
   }
+}
+
+/**
+ * The innermost definition enclosing each of `offsets`, positionally.
+ *
+ * The obvious per-token `defs.filter(contains).sort(bySize)[0]` is O(D·C) and allocates
+ * two arrays PER TOKEN. On a generated file — a 100k-line C# API client, Rust bindings,
+ * compiled protobuf — that is ~15k definitions against ~50k call sites: 750M comparisons
+ * and 50k throwaway arrays, tens of seconds inside build.ts's synchronous per-file loop,
+ * for bookkeeping nobody would believe costs anything.
+ *
+ * Definition spans come from syntax-tree nodes, so they NEST — no two of them partially
+ * overlap. That is what makes a single ordered sweep sufficient: walk the offsets in
+ * order, push definitions as their start passes, pop them as their end passes, and the
+ * top of the stack is the innermost one still open. O((D+C) log(D+C)) overall.
+ *
+ * Exported so a test can pin the behaviour and the scale directly, without having to
+ * synthesize a 100k-line source file to reach the path.
+ */
+export function enclosingDefs(defs: Def[], offsets: number[]): Array<Def | undefined> {
+  // `.fill` because a bare `new Array(n)` is SPARSE, and a hole is not the same value
+  // as `undefined` to anything that inspects the array (deepEqual, JSON, spread).
+  const out = new Array<Def | undefined>(offsets.length).fill(undefined);
+  if (defs.length === 0) return out;
+  // Ties on startIndex: the wider span is the outer one, so it must be pushed first.
+  const byStart = [...defs].sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
+  const order = offsets.map((_, i) => i).sort((a, b) => offsets[a] - offsets[b]);
+  const open: Def[] = [];
+  let next = 0;
+  for (const i of order) {
+    const at = offsets[i];
+    while (next < byStart.length && byStart[next].startIndex <= at) open.push(byStart[next++]);
+    while (open.length && open[open.length - 1].endIndex <= at) open.pop();
+    out[i] = open[open.length - 1];
+  }
+  return out;
 }
 
 // Node-type → Kind for the walker fallback. A node is a definition when its type
@@ -427,6 +538,17 @@ function walkExtract(root: TsNode, mkDef: (name: string, kind: Kind, whole: TsNo
     }
   };
   visit(root);
+}
+
+/** The slice of web-tree-sitter's Tree we use. `delete()` is not optional bookkeeping:
+ * it is the only way a tree's WASM-heap memory is ever reclaimed. */
+interface TsTree {
+  rootNode: TsNode;
+  delete(): void;
+}
+
+interface TsParser {
+  parse(input: (index: number) => string): TsTree | null;
 }
 
 interface TsNode {

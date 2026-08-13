@@ -1,0 +1,9 @@
+# The two shims under .claude/helpers/ are GENERATED from src/claude/shim-template.ts
+# and checked in because .claude/settings.json points every hook at them — a clone
+# without them fails with "Cannot find module". test/claude-shim-template.test.ts
+# compares them against the template, which only ever emits \n, so their committed
+# bytes have to stay LF no matter what core.autocrlf says on the contributor's box.
+.claude/helpers/*.cjs text eol=lf
+
+# Fixtures whose bytes are the point of the test.
+*.patch -text

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   emptyStats, readStats, writeStats, patchStats,
   readSession, writeSession, acquireLock, releaseLock, cacheDir, LOCK_STALE_MS, writeJsonAtomic,
+  type SessionState,
 } from '../src/claude/state.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-state-')); }
@@ -24,7 +25,12 @@ test('stats round-trip and patch merge', () => {
 test('session defaults and round-trip', () => {
   const d = fresh();
   const s = readSession(d, 'abc');
-  assert.deepEqual(s, { lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [], nudges: 0 });
+  // The expected value is typed rather than a bare literal: `deepEqual` narrows its
+  // first argument to the second's type, so an inline literal would retype `s` to
+  // `{ lastQuery: null, … }` and make the assignments below unassignable — and it
+  // pins the defaults against the real shape instead of a hand-copied one.
+  const defaults: SessionState = { lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [], nudges: 0 };
+  assert.deepEqual(s, defaults);
   s.lastQuery = 'pkce'; s.graftReads = 2;
   writeSession(d, 'abc', s);
   assert.equal(readSession(d, 'abc').lastQuery, 'pkce');

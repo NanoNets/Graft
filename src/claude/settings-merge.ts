@@ -2,16 +2,29 @@ type Json = Record<string, any>;
 
 const SL_CMD = 'node "${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-statusline.cjs"';
 const FOOTER = 'graft/[\\w./-]+\\.md';
-// Every form graft is actually invoked as. 'graft:*' covers a global install;
-// the other two cover a repo working on graft itself (or any consumer running it
-// from a checkout), where the binary is not on PATH under that name. A retrieval
-// call that raises a permission prompt loses to grep, which never does.
-const ALLOW_ENTRIES = [
+// Every form graft is actually invoked as. 'graft:*' covers a global install; the
+// npx form covers a machine without one; the last two cover a repo working on graft
+// itself (or any consumer running it from a checkout), where the binary is not on
+// PATH under that name. A retrieval call that raises a permission prompt loses to
+// grep, which never does.
+//
+// The npx entry is scoped to the package name on purpose. `npx graft` resolves to
+// the UNSCOPED `graft` package on the registry — someone else's code entirely — and
+// this list is written into `.claude/settings.json`, the shared, committed file, so
+// the grant reaches everyone who pulls. Auto-approving "download and run whatever
+// npm currently serves under the name `graft`" is not a grant graft gets to make on
+// a team's behalf; auto-approving its own published package is.
+export const ALLOW_ENTRIES = [
   'Bash(graft:*)',
-  'Bash(npx graft:*)',
+  'Bash(npx -y @nanonets/graft:*)',
   'Bash(graft-dev:*)',
   'Bash(node dist/cli.js:*)',
 ];
+
+// Grants an older graft added that this one takes back. Dropped on every merge, so
+// the fix reaches repos already wired — a refresh runs on the next version bump,
+// and a stale entry sitting in a committed settings.json is precisely the problem.
+const REVOKED_ALLOW_ENTRIES = ['Bash(npx graft:*)'];
 
 function hookCmd(arg: string): string {
   return `node "\${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs" ${arg}`;
@@ -43,7 +56,19 @@ function isGraftHookEntry(entry: Json): boolean {
   return JSON.stringify(entry ?? '').includes('graft-hooks.cjs');
 }
 
-export function mergeGraftSettings(existing: Json): { merged: Json; warnings: string[] } {
+/**
+ * @param opts.offeredBefore  Allow entries a PREVIOUS graft init already proposed
+ *   for this repo (recorded in the wiring stamp). Any of them now missing from
+ *   `permissions.allow` was taken out deliberately, so it is not re-added — a
+ *   permission the user revoked coming back on every version bump is graft
+ *   overruling a decision, and `.claude/settings.json` is committed, so it comes
+ *   back for the whole team. Entries NOT in this list have never been offered here
+ *   (a new graft version, or a first init) and are proposed normally.
+ */
+export function mergeGraftSettings(
+  existing: Json,
+  opts: { offeredBefore?: readonly string[] } = {},
+): { merged: Json; warnings: string[]; offeredAllow: string[] } {
   const merged: Json = { ...(existing ?? {}) };
   const warnings: string[] = [];
 
@@ -69,11 +94,19 @@ export function mergeGraftSettings(existing: Json): { merged: Json; warnings: st
   // headless/subagent runs hard-deny Bash by default; without an allowlist entry
   // `graft ask`'s own Bash calls (and the skill it installs) can't run out-of-box.
   merged.permissions = { ...(merged.permissions ?? {}) };
-  const allow = Array.isArray(merged.permissions.allow) ? [...merged.permissions.allow] : [];
+  const prior: unknown[] = Array.isArray(merged.permissions.allow) ? merged.permissions.allow : [];
+  const allow = prior.filter((e) => !REVOKED_ALLOW_ENTRIES.includes(e as string));
+  const revoked = new Set(opts.offeredBefore ?? []);
   for (const entry of ALLOW_ENTRIES) {
-    if (!allow.includes(entry)) allow.push(entry);
+    // Offered before and gone now ⇒ removed on purpose. Nothing else deletes an
+    // entry from this array: graft only ever appends, and the one list it does
+    // delete from (REVOKED_ALLOW_ENTRIES) is a different set entirely.
+    if (!allow.includes(entry) && !revoked.has(entry)) allow.push(entry);
   }
   merged.permissions.allow = allow;
 
-  return { merged, warnings };
+  // Everything this version proposes, recorded whether or not it ended up in the
+  // file — an entry skipped above was offered by an EARLIER run, and forgetting
+  // that would re-offer it on the next one, which is the whole defect.
+  return { merged, warnings, offeredAllow: [...ALLOW_ENTRIES] };
 }

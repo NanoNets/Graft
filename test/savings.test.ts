@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { savingsFor, savingsLine, withSavings, toTokens } from '../src/context/savings.js';
+import { formatCount } from '../src/util/num.js';
 import type { GraphV1, NodeV1 } from '../src/graph/types.js';
 
 function fileNode(path: string, chars?: number): NodeV1 {
@@ -48,7 +49,10 @@ test('savingsLine: reports saved tokens and percent when the output is smaller',
   assert.match(footer, /tokens saved ≈ [\d,]+ \(\d+%\)/);
   assert.match(footer, /2 file\(s\)/);
   const base = toTokens(8000);
-  assert.ok(footer.includes((base - toTokens(body.length)).toLocaleString()));
+  // Pinned en-US, not the machine locale: this line is parsed by an agent that is
+  // asked to sum it, and a pt-BR "1.990" would read as 1.99.
+  assert.ok(footer.includes(formatCount(base - toTokens(body.length))));
+  assert.equal(savingsLine('x'.repeat(4000), { files: 2, baselineChars: 8_000_000 }).includes('1,999,000'), true);
   // The nudge rides along so the agent reports the turn total without SKILL.md.
   assert.match(footer, /end of your reply/i);
   assert.match(footer, /graft saved ~N tokens this turn/);

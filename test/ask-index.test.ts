@@ -14,12 +14,13 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSyn
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
-import { ask } from "../src/ask/ask.js";
+import { ask, BODY_INDEX_MISSING_NOTE, type AskResult } from "../src/ask/ask.js";
 import { contextDirFor } from "../src/context/node-file.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { askIndexPath, readAskIndex, tokenize, counts, writeAskIndex } from "../src/ask/index-file.js";
 import { extractFile, languageOf } from "../src/graph/extract.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 /** A small multi-file fixture with enough overlapping vocabulary that IDF and
  * BM25 actually differentiate hits, so a parity test on scores is meaningful. */
@@ -50,6 +51,26 @@ function makeFixture(): string {
 }
 
 const QUERY = "How does authentication middleware validate incoming API requests?";
+
+/**
+ * The sidecar-parity assertions below are about RANKING — same hits, same
+ * scores — and they predate the degraded-recall warning. Falling back to live
+ * tokenization is no longer indistinguishable on purpose: without the sidecar,
+ * a graph read from disk has no `body_text` at all, so recall genuinely drops
+ * and `ask` now says so in `note` (see BODY_INDEX_MISSING_NOTE). Stripping
+ * `note` before comparing keeps these tests pinned to what they were written
+ * to pin, while `assertDegradedNote` pins the new signal explicitly.
+ */
+function withoutNote(r: AskResult): AskResult {
+  const { note: _note, ...rest } = r;
+  return rest as AskResult;
+}
+
+function assertDegradedNote(r: AskResult): void {
+  assert.ok(r.note, "a sidecar-less run must warn about reduced recall, not degrade silently");
+  assert.match(r.note!, /body index missing or stale/);
+  assert.equal(r.note!.includes(BODY_INDEX_MISSING_NOTE), true);
+}
 
 /**
  * Reconstruct a "fat" wiring.json — body_text present on every node, as EVERY
@@ -124,7 +145,7 @@ test("writeAskIndex + readAskIndex round-trip matches live tokenization exactly"
     const reread = readAskIndex(outDir);
     assert.deepEqual(reread, index, "re-writing an unchanged graph reproduces the same sidecar");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -149,13 +170,19 @@ test("ask results are IDENTICAL with and without the sidecar (same hits, same sc
     try {
       assert.equal(readAskIndex(outDir), null, "sanity: sidecar is really gone");
       const withoutIndex = ask(dir, QUERY, { source: false });
-      assert.deepEqual(withoutIndex, withIndex, "sidecar vs live fallback must produce identical AskResult");
+      assert.deepEqual(
+        withoutNote(withoutIndex),
+        withoutNote(withIndex),
+        "sidecar vs live fallback must produce identical hits and scores",
+      );
+      assert.equal(withIndex.note, undefined, "a healthy sidecar warns about nothing");
+      assertDegradedNote(withoutIndex);
       assert.ok(withIndex.hits.length > 0, "the fixture query should actually match something");
     } finally {
       writeFileSync(idxPath, backup);
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -175,9 +202,10 @@ test("unknown sidecar version falls back to live tokenization without crashing",
 
     assert.equal(readAskIndex(outDir), null, "an unknown version reads as null (fallback signal)");
     const withBadVersion = ask(dir, QUERY, { source: false });
-    assert.deepEqual(withBadVersion, live, "unknown-version sidecar must not change results");
+    assert.deepEqual(withoutNote(withBadVersion), withoutNote(live), "unknown-version sidecar must not change results");
+    assertDegradedNote(withBadVersion);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -196,9 +224,10 @@ test("a stale sidecar (docCount mismatch) falls back to live tokenization", asyn
     writeFileSync(idxPath, JSON.stringify(raw));
 
     const stale = ask(dir, QUERY, { source: false });
-    assert.deepEqual(stale, live, "a docCount-mismatched sidecar must not change results");
+    assert.deepEqual(withoutNote(stale), withoutNote(live), "a docCount-mismatched sidecar must not change results");
+    assertDegradedNote(stale);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -215,9 +244,10 @@ test("an unparseable sidecar file falls back to live tokenization", async () => 
 
     assert.equal(readAskIndex(outDir), null);
     const withGarbage = ask(dir, QUERY, { source: false });
-    assert.deepEqual(withGarbage, live);
+    assert.deepEqual(withoutNote(withGarbage), withoutNote(live));
+    assertDegradedNote(withGarbage);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -247,7 +277,7 @@ test("A3: a duplicate-named definition still gets its own ask-index doc (unique 
     const docIds = new Set(index!.docs.map((d) => d.id));
     for (const id of ids) assert.ok(docIds.has(id), `sidecar missing doc for ${id}`);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -256,7 +286,7 @@ test("readAskIndex returns null when the sidecar is simply missing", () => {
   try {
     assert.equal(readAskIndex(contextDirFor(dir)), null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -276,7 +306,7 @@ test("readAskIndex returns null when docCount doesn't match docs.length", () => 
     writeFileSync(idxPath, JSON.stringify(corrupted));
     assert.equal(readAskIndex(outDir), null, "docCount !== docs.length must read as null");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -302,7 +332,7 @@ test("a failed sidecar write is recorded in build errors, not fatal", async () =
     assert.ok(graph, "wiring graph should still be written despite the sidecar failure");
     assert.ok(result.cards > 0, "cards should still be written despite the sidecar failure");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -333,7 +363,7 @@ test("ask WITH sidecar: identical hits/scores whether the underlying wiring.json
       "sidecar-driven ask must be identical whether wiring.json is slim or carries body_text",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -368,7 +398,7 @@ test("ask WITHOUT sidecar on a SLIM graph: no crash, body contributions absent, 
     const hit = byName.hits.find((h) => h.title.startsWith("checkout"));
     assert.ok(hit, "name-field matching still works with no sidecar and a slim graph");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -402,6 +432,6 @@ test("ask on an OLD fat graph (body_text present, no sidecar): unchanged behavio
     const hit = r.hits.find((h) => h.title.startsWith("checkout"));
     assert.ok(hit, "an old fat graph with no sidecar must still find a body-only term via node.body_text");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

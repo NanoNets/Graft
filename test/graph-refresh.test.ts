@@ -220,9 +220,13 @@ test("GRAFT_REFRESH=hash: drift the probe reports is drift the rebuild repairs",
   const staleHash = fp.files["src/math.ts"][2];
   fp.files["src/math.ts"] = [now.size, now.mtimeMs, staleHash];
   writeFileSync(fingerprintPath(outOf(d)), JSON.stringify(fp));
-  const memo = JSON.parse(readFileSync(extractCachePath(outOf(d)), "utf8"));
+  // null when no extractor stamp could be computed, i.e. no memo exists — the
+  // stat-trusting rebuild this test provokes could then never happen.
+  const memoPath = extractCachePath(outOf(d));
+  assert.ok(memoPath, "the memo the rebuild must not trust has to exist for the test to mean anything");
+  const memo = JSON.parse(readFileSync(memoPath, "utf8"));
   Object.assign(memo.files["src/math.ts"], { size: now.size, mtimeMs: now.mtimeMs });
-  writeFileSync(extractCachePath(outOf(d)), JSON.stringify(memo));
+  writeFileSync(memoPath, JSON.stringify(memo));
 
   // Nobody notices without the flag — that's the documented trade-off, and the
   // whole reason the flag exists.
