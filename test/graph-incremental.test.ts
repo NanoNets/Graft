@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -240,7 +241,11 @@ test("an unreadable file is still recorded, so it can't look new on every probe"
  */
 test("extractorStamp: a real identity for the loaded extraction code", () => {
   const s = extractorStamp();
-  assert.notEqual(s, "unknown", "path resolution must work under both tsx and dist/, or invalidation silently stops");
+  // null is the live failure mode (no identity could be established at all) and it
+  // disables memoization entirely, so it has to be asserted, not assumed; "unknown"
+  // is the superseded sentinel that used to be written into sidecars as a real id.
+  assert.ok(s, "path resolution must work under both tsx and dist/, or invalidation silently stops");
+  assert.notEqual(s, "unknown", "the failure sentinel must never come back as a usable stamp");
   assert.match(s, /^[0-9a-f]{16}$/);
   assert.equal(s, extractorStamp(), "memoized — the cost is paid once per process");
 });
@@ -273,10 +278,67 @@ test("the stamp moves for any module in the extractor directory, not just one", 
   assert.notEqual(stampDir(dir, ".js", "0.8.0"), beforeRename, "a rename at identical content is still a change");
 });
 
+/**
+ * The breadth tier's whole extraction is the `.scm` query — `queries/c.scm` decides
+ * which C nodes exist at all — and it lives in a SUBDIRECTORY with a non-module
+ * extension, so the module sweep above cannot see it. That meant fixing a query left
+ * the stamp identical, `readExtractCache` accepted every pre-fix entry, and the fix
+ * reached nobody until something else in graph/ happened to change.
+ */
+test("the stamp moves when a queries/*.scm changes, not just a module", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-stamp-scm-"));
+  writeFileSync(join(dir, "extract.js"), "export const a = 1;\n");
+  const noQueries = stampDir(dir, ".js", "0.8.0");
+  assert.ok(noQueries, "a directory with modules has an identity");
+
+  mkdirSync(join(dir, "queries"), { recursive: true });
+  writeFileSync(join(dir, "queries", "c.scm"), "(function_definition) @definition.function\n");
+  const withQuery = stampDir(dir, ".js", "0.8.0");
+  assert.notEqual(withQuery, noQueries, "a query file is part of the extractor's identity");
+  assert.equal(stampDir(dir, ".js", "0.8.0"), withQuery, "stable for identical input");
+
+  writeFileSync(join(dir, "queries", "c.scm"), "(function_declarator) @definition.function\n");
+  const edited = stampDir(dir, ".js", "0.8.0");
+  assert.notEqual(edited, withQuery, "editing a query must invalidate every replayed parse");
+
+  writeFileSync(join(dir, "queries", "notes.txt"), "not a query\n");
+  assert.equal(stampDir(dir, ".js", "0.8.0"), edited, "a non-query file in queries/ must not churn the memo");
+
+  writeFileSync(join(dir, "queries", "cpp.scm"), "(class_specifier) @definition.class\n");
+  assert.notEqual(stampDir(dir, ".js", "0.8.0"), edited, "adding a query for another language counts too");
+});
+
+/**
+ * Every grammar is a `^` dependency, so `npm i` can swap the parser under an unchanged
+ * graft version. The stamp has to move with the grammar it actually loaded, or the memo
+ * replays parses the current parser would no longer produce.
+ */
+test("extractorStamp folds in the resolved grammar versions, not just graft's own", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-stamp-grammar-"));
+  writeFileSync(join(dir, "extract.js"), "export const a = 1;\n");
+  const req = createRequire(import.meta.url);
+  const tsVersion = JSON.parse(
+    readFileSync(req.resolve("tree-sitter-typescript/package.json"), "utf8"),
+  ).version as string;
+
+  // computeStamp's `version` argument is `<graft version>|<grammar versions>`, so the
+  // grammar half moving must move the stamp exactly as graft's own version does.
+  const before = stampDir(dir, ".js", `0.8.0|tree-sitter-typescript@${tsVersion}`);
+  const after = stampDir(dir, ".js", `0.8.0|tree-sitter-typescript@${tsVersion}-bump`);
+  assert.notEqual(after, before, "a grammar upgrade under an unchanged graft version must invalidate");
+
+  // …and the real stamp really does carry them: the same modules + graft version alone
+  // would collide with the stamp computed from graft's own directory otherwise.
+  assert.match(extractorStamp()!, /^[0-9a-f]{16}$/);
+});
+
 test("a memo written by a different extractor is dropped, not replayed", async () => {
   const d = repo();
   await buildGraph(d);
   const path = extractCachePath(outOf(d));
+  // null here means the stamp failed and no memo was written at all — the test
+  // would then trivially "pass" on an empty cache it never planted anything in.
+  assert.ok(path, "a memo path is required for this test to have a memo to corrupt");
   const cache = JSON.parse(readFileSync(path, "utf8"));
   assert.ok(Object.keys(cache.files).length > 0);
 

@@ -18,7 +18,7 @@ import { basename, dirname, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { contextDirFor, ensureGitignored, ensureSearchable } from "../context/node-file.js";
 import { extractFile, languageLabelOf, languageOf, type RawEdge } from "./extract.js";
-import { extractGeneric, genericLangOf, warmGenericGrammars } from "./generic.js";
+import { extractGeneric, genericLangOf, unavailableGrammars, warmGenericGrammars } from "./generic.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
 import { readSourceFile } from "../util/source.js";
@@ -74,6 +74,11 @@ export interface GraphBuildOptions {
   /** Replay unchanged files from the extraction cache instead of re-parsing them
    * (default true). False forces a cold parse of the whole repo. */
   reuse?: boolean;
+  /** Narrow the indexed file set to these extensions (`graft build -e`). Absent →
+   * every language graft has a grammar for. Applied in {@link listSourceFiles}, the
+   * single enumeration this build is made of, so the fingerprint and the extraction
+   * cache describe exactly the same set the graph does. */
+  extensions?: string[];
   /** Write only what a query reads — the graph, the `ask` sidecar, the freshness
    * record — and skip the markdown projections and the `.gitignore` touch. Set by
    * the pre-query refresh (`graph/refresh.ts`); an explicit `graft build` never
@@ -153,7 +158,7 @@ export async function buildGraph(
   // resolution must agree on the same Git-ignore-aware working-tree view —
   // including the repo's persisted `--include-dir` override.
   const repoFiles = walkDir(root, readIncludeDirs(root));
-  const files = listSourceStats(root, outDir, repoFiles);
+  const files = listSourceStats(root, outDir, repoFiles, opts.extensions);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
   const nodes: NodeV1[] = [];
@@ -183,9 +188,34 @@ export async function buildGraph(
   // Breadth tier: WASM grammars load asynchronously, so warm the ones this repo
   // needs ONCE here (buildGraph is async) before the synchronous parse loop below
   // can call extractGeneric. Depth-tier (native) grammars need no warmup.
-  await warmGenericGrammars(
-    new Set(files.map((f) => genericLangOf(f.abs)?.name).filter((n): n is string => !!n)),
+  //
+  // The `languageOf(...) === null` filter is what keeps the warmup honest about which
+  // files actually REACH the breadth tier. `.java` is claimed by both registries and the
+  // depth tier always wins in the loop below (`lang ? null : genericLangOf(...)`), so
+  // without it every build of every Java repo instantiated a multi-MB Java wasm and
+  // compiled queries/java.scm for a code path that can never run.
+  const breadthLangs = new Set(
+    files
+      .filter((f) => languageOf(f.abs) === null)
+      .map((f) => genericLangOf(f.abs)?.name)
+      .filter((n): n is string => !!n),
   );
+  await warmGenericGrammars(breadthLangs);
+  // A breadth language whose grammar could not be loaded still "extracts" — as a file
+  // node and nothing else. Reporting it in `meta.languages` anyway made the banner claim
+  // `[dart]` over a repo where not one dart symbol had been indexed, which reads as a
+  // broken query rather than a missing grammar. Name the gap once, and leave the
+  // language out of the roster it did not earn.
+  const noGrammar = new Set(unavailableGrammars(breadthLangs));
+  for (const lang of noGrammar) errors.push(`${lang}: no grammar available — indexed as file-only`);
+
+  // Only the Tier-2 meaning pass reads the source text again (`enrichGraph` returns
+  // before touching `sources` when there is no summarizer), so filling this map on a
+  // Tier-1 build — the default, and every pre-query refresh — retained the whole repo's
+  // text for nothing. JS strings are UTF-16, so a 200 MB monorepo pinned ~400 MB until
+  // the build returned, and the refresh path paid it on every query that saw drift, even
+  // when every single file came from the memo.
+  const keepSources = !!opts.summarizer;
 
   files.forEach((f, i) => {
     const rel = f.rel;
@@ -195,6 +225,9 @@ export async function buildGraph(
     const lang = languageOf(f.abs);
     const generic = lang ? null : genericLangOf(f.abs);
     const label = languageLabelOf(f.abs) ?? generic?.name ?? "unknown";
+    // …unless the breadth grammar it needs isn't there, in which case this file yields a
+    // file node and no symbols, and claiming the language would be a lie (see above).
+    const indexed = !generic || !noGrammar.has(generic.name);
     const cached = priorExtract.files[rel];
 
     // Every file is read and hashed, every build — only the *parse* is memoized.
@@ -227,7 +260,7 @@ export async function buildGraph(
     const hash = contentHash(source);
     if (cached && hash === cached.hash) {
       entries[rel] = { ...cached, size: f.size, mtimeMs: f.mtimeMs };
-      sources.set(rel, source);
+      if (keepSources) sources.set(rel, source);
       reused++;
       if (cached.error) {
         errors.push(cached.error); // this file failed to parse last time too
@@ -235,7 +268,7 @@ export async function buildGraph(
       }
       nodes.push(...cached.nodes);
       rawEdges.push(...cached.rawEdges);
-      langs.add(label);
+      if (indexed) langs.add(label);
       return;
     }
 
@@ -246,8 +279,8 @@ export async function buildGraph(
         : extractGeneric(rel, source, generic!.name);
       nodes.push(...fileNodes);
       rawEdges.push(...fileEdges);
-      sources.set(rel, source);
-      langs.add(label);
+      if (keepSources) sources.set(rel, source);
+      if (indexed) langs.add(label);
       entries[rel] = { size: f.size, mtimeMs: f.mtimeMs, hash, nodes: fileNodes, rawEdges: fileEdges };
     } catch (err) {
       const message = `${rel}: parse failed — ${err instanceof Error ? err.message : String(err)}`;

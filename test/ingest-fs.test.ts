@@ -62,6 +62,77 @@ test("walkDir keeps tracked files that match an ignore rule and untracked visibl
   }
 });
 
+/**
+ * `git ls-files` prints one line PER INDEX STAGE, so an unmerged path arrives three
+ * times (stages 1/2/3). Nothing downstream deduplicated: the build looped over the
+ * same file three times and pushed three nodes per id, which trips
+ * `checkGraphInvariants`, inflates `meta.nodeCount`, and makes `ask` score one body
+ * 3×. The Claude Code `Stop` hook builds at the end of every turn, so this fired on
+ * its own in the middle of a conflicted merge.
+ */
+test("walkDir returns each file once during a merge conflict, not once per index stage", () => {
+  const dir = fixture("conflict");
+  try {
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    write(dir, "a.ts", "export const value = 1;\n");
+    execFileSync("git", ["add", "-A"], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
+    execFileSync("git", ["checkout", "-qb", "other"], { cwd: dir });
+    write(dir, "a.ts", "export const value = 2;\n");
+    execFileSync("git", ["commit", "-qam", "other"], { cwd: dir });
+
+    execFileSync("git", ["checkout", "-q", base], { cwd: dir });
+    execFileSync("git", ["checkout", "-qb", "mine"], { cwd: dir });
+    write(dir, "a.ts", "export const value = 3;\n");
+    execFileSync("git", ["commit", "-qam", "mine"], { cwd: dir });
+
+    try {
+      execFileSync("git", ["merge", "other"], { cwd: dir, stdio: "pipe" });
+      assert.fail("the fixture must actually conflict");
+    } catch {
+      /* the conflict is the point */
+    }
+    const staged = execFileSync("git", ["ls-files", "--cached", "--", "a.ts"], { cwd: dir, encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean);
+    assert.ok(staged.length > 1, `the path must really be unmerged (git printed ${staged.length} line(s))`);
+
+    assert.deepEqual(walked(dir), ["a.ts"]);
+  } finally {
+    rmDir(dir);
+  }
+});
+
+/**
+ * A bad `[dir]` used to surface as `ENOENT: no such file or directory, scandir 'C:\…'`
+ * from four frames down in `readdirSync` — cli.ts prints `err.message` and nothing more,
+ * so the message named neither the command nor the argument that was wrong.
+ */
+test("walkDir rejects a missing or non-directory path with a message that names it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-walk-baddir-"));
+  try {
+    const missing = join(dir, "definitely-not-here");
+    assert.throws(() => walkDir(missing), (err: Error) => {
+      assert.match(err.message, /no such directory — pass a repository root/);
+      assert.ok(err.message.includes(missing), "the message must name the argument that was wrong");
+      return true;
+    });
+
+    const file = join(dir, "notes.txt");
+    writeFileSync(file, "not a repo\n");
+    assert.throws(() => walkDir(file), (err: Error) => {
+      assert.match(err.message, /not a directory — pass a repository root/);
+      assert.ok(err.message.includes(file));
+      return true;
+    });
+  } finally {
+    rmDir(dir);
+  }
+});
+
 test("walkDir retains fixed skips and filesystem fallback outside Git", () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-walk-nongit-"));
   try {

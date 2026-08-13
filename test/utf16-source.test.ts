@@ -57,6 +57,44 @@ test("readSourceFile: decodes a UTF-16LE BOM, returns null for UTF-16BE, and rea
   }
 });
 
+/** BOM + UTF-8 bytes — what Visual Studio writes for .cs by default and what
+ * PowerShell 5.1's `Out-File -Encoding utf8` writes for anything at all. */
+function utf8bom(text: string): Buffer {
+  return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, "utf8")]);
+}
+
+test("readSourceFile: strips a UTF-8 BOM instead of handing U+FEFF to the grammar", () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-utf8bom-unit-"));
+  try {
+    writeFileSync(join(dir, "bom.ts"), utf8bom("export const x = 1;\n"));
+    const got = readSourceFile(join(dir, "bom.ts"));
+    assert.equal(got, "export const x = 1;\n");
+    assert.ok(!got!.startsWith("﻿"), "U+FEFF is category Cf, not whitespace — it becomes an ERROR node at offset 0");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("a BOM-prefixed source file is indexed like any other", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-utf8bom-build-"));
+  try {
+    // Go's grammar lists only /\s/ in its `extras`, so a leading U+FEFF is what
+    // actually breaks — it starts the parse in error recovery.
+    writeFileSync(join(dir, "main.go"), utf8bom("package main\n\nfunc FromBom() int {\n\treturn 1\n}\n"));
+    writeFileSync(join(dir, "app.ts"), utf8bom("export function fromBomTs(): void {}\n"));
+    const r = await buildGraph(dir, { reuse: false });
+    assert.deepEqual(r.errors, []);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    assert.ok(graph.nodes.some((n) => n.id === "main.go#FromBom"), "the BOM'd Go function must be extracted");
+    assert.ok(graph.nodes.some((n) => n.id === "app.ts#fromBomTs"), "…and the BOM'd TS one");
+    // hash-what-you-parse: the stripped text is what is hashed, so check must agree.
+    const check = await checkGraph(dir);
+    assert.equal(check.ok, true, "build and check must decode the BOM the same way");
+  } finally {
+    rmDir(dir);
+  }
+});
+
 test("A1 graph/build.ts: a UTF-16LE .ts file is decoded at graph ingest, not mojibake-parsed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-utf16-build-"));
   try {
