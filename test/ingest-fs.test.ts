@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { shouldSkipDir, walkDir, SKIP_DIRS } from "../src/ingest/fs.js";
 import { discoverScopes, discoverWorkspaceChildren } from "../src/graph/scopes.js";
+import { rmDir } from "./helpers.js";
 
 function fixture(tag: string): string {
   const dir = mkdtempSync(join(tmpdir(), `graft-walk-${tag}-`));
@@ -42,7 +43,7 @@ test("walkDir respects root and nested .gitignore rules, including negation", ()
       "src/app.ts",
     ]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -57,7 +58,7 @@ test("walkDir keeps tracked files that match an ignore rule and untracked visibl
 
     assert.deepEqual(walked(dir), ["tracked.generated.ts", "visible.ts"]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -70,7 +71,7 @@ test("walkDir retains fixed skips and filesystem fallback outside Git", () => {
 
     assert.deepEqual(walked(dir), ["src/app.ts"]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -124,7 +125,7 @@ test("A5: walkDir(dir, includes) descends into an included SKIP_DIRS-named direc
     assert.ok(withIncludes.some((f) => f.startsWith("build")), "build/ is walked once included");
     assert.ok(!withIncludes.some((f) => f.startsWith("vendor")), "vendor/ stays skipped — only the named dir is included");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -137,7 +138,7 @@ test("A5: in a Git repo, --include-dir lifts the built-in skip for git-visible f
     assert.ok(!walked(dir).includes("vendor/lib.ts"), "default: vendor/ is skipped by the built-in list");
     assert.deepEqual(walked(dir, new Set(["vendor"])), ["src/app.ts", "vendor/lib.ts"]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -150,7 +151,7 @@ test("A5: --include-dir does not override gitignore — an ignored directory sta
 
     assert.deepEqual(walked(dir, new Set(["build"])), ["src/app.ts"]);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -201,7 +202,7 @@ test("walkDir and every scopes.ts consumer agree on the skip set: SKIP_DIRS + a 
     for (const name of SKIP_DIRS) assert.ok(!children.includes(name), `discoverWorkspaceChildren must skip ${name}`);
     assert.ok(!children.includes(".hidden"), "discoverWorkspaceChildren must skip the dot-dir");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -220,6 +221,6 @@ test("workspace-glob resolution (scopes.ts's resolveGlob over visible-file dirs)
     for (const name of SKIP_DIRS) assert.ok(!prefixes.includes(name), `the glob must not resolve into ${name}`);
     assert.ok(!prefixes.includes(".hidden"), "the glob must not resolve into the dot-dir");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });

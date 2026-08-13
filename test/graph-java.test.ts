@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 const PKG = "src/main/java/com/acme";
 
@@ -135,7 +136,7 @@ test("Java extraction: classes, interfaces, enums, records, methods, constructor
     assert.equal(nodeById(graph!, `${APP_JAVA}#App.greet`)?.kind, "method");
     assert.equal(nodeById(graph!, `${APP_JAVA}#App.App`)?.kind, "method");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -163,7 +164,7 @@ test("Java extraction: visibility comes from the modifier list, not the name", a
       "package-private (no modifier) is not API surface",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -199,7 +200,7 @@ test("Java extraction: call edges — implicit `this`, typed field receiver, con
       "persist should have a constructor edge to Point",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -227,7 +228,7 @@ test("Java extraction: a `var` local states no type, so its member call stays un
       "the constructor edge still resolves, so the dependency is still visible",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -256,7 +257,7 @@ test("Java extraction: extends and implements", async () => {
       "App implements Greeter",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -280,7 +281,7 @@ test("Java extraction: imports resolve by package path; external types stay stri
       "java.util.List should remain an external type string",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -311,7 +312,7 @@ test("Java extraction: a static-member import resolves to its enclosing type", a
       "a static-member import should fall back to its enclosing type's file",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -344,7 +345,7 @@ test("Java extraction: an ambiguous package suffix stays unresolved rather than 
       "an ambiguous suffix must stay an unresolved specifier",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -407,7 +408,7 @@ test("Java overloads: a delegating call resolves to the other overload, not itse
       "and must not call itself",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -431,7 +432,7 @@ test("Java overloads: a variadic candidate is never filtered out by argument cou
       "a 3-argument call should still reach the variadic overload",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -451,6 +452,6 @@ test("Java overloads: same-arity overloads stay unresolved rather than guessing"
     assert.equal(a?.arity, 1);
     assert.equal(b?.arity, 1, "both render overloads have arity 1, so count cannot separate them");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
