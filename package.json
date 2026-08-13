@@ -47,6 +47,10 @@
     "dev": "tsc -p tsconfig.json --watch",
     "cli": "tsx src/cli.ts",
     "test": "node scripts/run-tests.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "check:package": "node scripts/check-package-contents.mjs",
+    "check:engines": "node scripts/check-engines.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/postinstall.mjs"
@@ -56,7 +60,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.113.0",
-    "commander": "^15.0.0",
+    "commander": "^14.0.3",
     "dotenv": "^17.4.2",
     "gray-matter": "^4.0.3",
     "openai": "^6.45.0",
@@ -77,13 +81,5 @@
     "esbuild": "^0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
-  },
-  "allowScripts": {
-    "tree-sitter@0.21.1": true,
-    "tree-sitter-typescript@0.23.2": true,
-    "tree-sitter-python@0.21.0": true,
-    "tree-sitter-go@0.23.4": true,
-    "tree-sitter-javascript@0.23.1": true,
-    "tree-sitter-java@0.23.5": true
   }
 }
