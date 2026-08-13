@@ -30,14 +30,29 @@ export interface ChatModelConfig {
   apiKey?: string;
   model: string;
   baseUrl?: string;
-  /** Extra default headers for OpenAI-compatible endpoints (e.g. OpenRouter `X-Title`). */
+  /** Extra default headers, for whichever gateway sits behind `baseUrl` (e.g. OpenRouter `X-Title`). */
   headers?: Record<string, string>;
   /** `claude-cli` only: explicit path to the binary (else resolved from PATH). */
   bin?: string;
-  /** `claude-cli` only: per-call wall clock in milliseconds. */
+  /** Per-call wall clock in milliseconds, for every provider. */
   timeoutMs?: number;
   /** `claude-cli` only: per-call spend ceiling, passed through as `--max-budget-usd`. */
   maxBudgetUsd?: number;
+  /**
+   * Retries after a failed call, for every provider (default 2 — the SDKs' own).
+   *
+   * Worth exposing because the right number is a property of the ENDPOINT, not of
+   * graft: a `--deep` build is one call per file over hours, so on a hard-rate-limited
+   * key 2 retries throws away files that a longer backoff would have summarized, while
+   * against a local server (llama.cpp, Ollama) retrying a refused connection 2× per
+   * file just triples the time it takes to find out nothing is listening. `0` is a
+   * legal value and means "fail on the first error".
+   *
+   * Both SDK adapters honour the endpoint's `Retry-After` header inside these
+   * attempts; `claude-cli` has no headers to read (it is a subprocess) and uses its
+   * own fixed backoff.
+   */
+  maxRetries?: number;
 }
 
 export function createChatModel(cfg: ChatModelConfig): ChatModel {
@@ -48,15 +63,29 @@ export function createChatModel(cfg: ChatModelConfig): ChatModel {
         bin: cfg.bin,
         timeoutMs: cfg.timeoutMs,
         maxBudgetUsd: cfg.maxBudgetUsd,
+        maxRetries: cfg.maxRetries,
       });
     case "anthropic":
-      return new AnthropicChatModel({ apiKey: requireKey(cfg), model: cfg.model, baseUrl: cfg.baseUrl });
+      // headers reach this adapter too: `baseUrl` may point at a gateway that
+      // speaks the Messages API and demands its own header, and dropping the
+      // caller's headers there failed silently (a 401 from the gateway, with
+      // nothing in the config to suggest graft had thrown them away).
+      return new AnthropicChatModel({
+        apiKey: requireKey(cfg),
+        model: cfg.model,
+        baseUrl: cfg.baseUrl,
+        headers: cfg.headers,
+        timeoutMs: cfg.timeoutMs,
+        maxRetries: cfg.maxRetries,
+      });
     case "openai":
       return new OpenAIChatModel({
         apiKey: requireKey(cfg),
         model: cfg.model,
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
+        timeoutMs: cfg.timeoutMs,
+        maxRetries: cfg.maxRetries,
       });
     default: {
       const _exhaustive: never = cfg.provider;

@@ -6,7 +6,7 @@
  * incidental identifier. Each node is attributed to the source files it is
  * grounded in, so provenance (and staleness) stays exact.
  */
-import type { ChatModel } from "./llm/types.js";
+import { isTruncated, type ChatModel } from "./llm/types.js";
 
 /** A directed edge to another node, by node name (resolved to a slug later). */
 export interface SynthLink {
@@ -133,6 +133,9 @@ export class ChatSynthesizer implements Synthesizer {
     const res = await this.model.create({
       temperature: 0,
       maxTokens: 8192,
+      // Structured extraction under a fixed budget: thinking would be billed
+      // against the same 8192 tokens the node list has to fit in.
+      thinking: { kind: "disabled" },
       tools: [
         {
           name: RECORD_TOOL,
@@ -146,6 +149,13 @@ export class ChatSynthesizer implements Synthesizer {
         { role: "user", content: userContent(files) },
       ],
     });
+    // A batch cut short is NOT "the model found nothing here": the tool_use block
+    // never closed. Returning [] would cache an empty synthesis for this batch key
+    // and, in a run where every batch truncates, hand the caller a graph with no
+    // nodes at all — which the reconciler reads as "delete everything".
+    if (isTruncated(res)) {
+      throw new Error(`synthesis truncated at maxTokens (stop_reason=${res.stopReason}) — try a smaller batch budget`);
+    }
     const call = res.toolCalls[0];
     if (!call) return [];
     // `args` is already a parsed object — no JSON.parse.

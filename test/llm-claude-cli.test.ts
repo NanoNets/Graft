@@ -214,6 +214,20 @@ test("claude-cli: a transient failure is retried, and the result is kept", async
   assert.equal(res.text, "hello");
 });
 
+test("claude-cli: maxRetries decides how many attempts a transient failure gets", async () => {
+  // `maxRetries: 0` is the setting for a machine where the CLI is not signed in:
+  // every attempt fails identically, and three of them per file (with backoff)
+  // turns a clear error into a very slow one. The count was a hard-coded 3.
+  const { run, calls } = fakeRunner([
+    { code: 1, stderr: "Overloaded" },
+    { code: 1, stderr: "Overloaded" },
+    envelope(),
+  ]);
+  const m = new ClaudeCliChatModel({ model: "sonnet", run, maxRetries: 0 });
+  await assert.rejects(() => m.create({ messages: [{ role: "user", content: "x" }] }), /Overloaded/);
+  assert.equal(calls.length, 1, "no retry means exactly one call");
+});
+
 test("claude-cli: a permanent failure fails on the first attempt, not after backoff", async () => {
   const { run, calls } = fakeRunner([{ code: 1, stderr: "Invalid API key · Please run /login" }]);
   const m = new ClaudeCliChatModel({ model: "sonnet", run });

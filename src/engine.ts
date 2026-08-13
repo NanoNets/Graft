@@ -28,6 +28,12 @@ export type { BuildResult, BuildProgress, CheckResult, GraphBuildResult, GraphCh
 export interface InitOptions {
   /** Code extensions to include. Default: {@link CODE_EXTENSIONS}. */
   extensions?: string[];
+  /** Max files summarized in parallel during the concept pass — the library face
+   * of `graft build -j`. Without it the flag reached only the wiring graph's
+   * Tier-2 pass, so `-j 1` (set to survive a rate limit, or to avoid N
+   * simultaneous `claude-cli` processes) still fired 5 concurrent calls through
+   * the whole concept phase, which is where a `--deep` build spends most of them. */
+  concurrency?: number;
   /** Progress callback for long builds. */
   onProgress?: (info: BuildProgress) => void;
 }
@@ -36,9 +42,25 @@ export interface CheckRunOptions {
   extensions?: string[];
 }
 
+/** Token totals for everything one {@link Graft} instance sent to the model.
+ * `input` is uncached input only — the adapters already separate it from
+ * `cacheRead`/`cacheCreate`, which are billed at different rates by every
+ * provider that has them. */
+export interface RunUsage {
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
+}
+
 export interface GraphRunOptions {
   /** Run the Tier-2 LLM meaning pass (summary + crux). Absent → Tier-1 only. */
   llm?: boolean;
+  /** Narrow the indexed file set to these extensions (`graft build -e`). Pass the
+   * same value to {@link Graft.checkGraph} or the check reports the excluded files
+   * as drift. */
+  extensions?: string[];
   /** Max files summarized in parallel during the LLM pass. */
   concurrency?: number;
   /** Replay unchanged files from the extraction cache (default true). */
@@ -60,6 +82,7 @@ export class Graft {
     return buildContext(dir, {
       contextDir: this.cfg.contextDir,
       extensions: opts.extensions,
+      concurrency: opts.concurrency,
       model: this.modelLabel(),
       summarizer: this.summarizer(),
       synthesizer: this.synthesizer(),
@@ -74,8 +97,8 @@ export class Graft {
 
   /** Report whether the committed `graph.json` is in sync with the code (Tier-1 diff).
    * Async because the breadth tier warms WASM grammars before re-extraction. */
-  checkGraph(dir: string): Promise<GraphCheckResult> {
-    return checkGraph(dir, { contextDir: this.cfg.contextDir });
+  checkGraph(dir: string, opts: CheckRunOptions = {}): Promise<GraphCheckResult> {
+    return checkGraph(dir, { contextDir: this.cfg.contextDir, extensions: opts.extensions });
   }
 
   /**
@@ -87,6 +110,7 @@ export class Graft {
     return buildGraph(dir, {
       contextDir: this.cfg.contextDir,
       summarizer: opts.llm ? this.cruxSummarizer() : undefined,
+      extensions: opts.extensions,
       concurrency: opts.concurrency,
       reuse: opts.reuse,
       lsp: opts.lsp,
@@ -111,14 +135,33 @@ export class Graft {
   }
 
   private _chatModel?: ChatModel;
+  private _usage: RunUsage = { calls: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+
+  /**
+   * What this engine instance has spent so far, in tokens.
+   *
+   * Every adapter normalizes `Usage` carefully (uncached input separated from cache
+   * reads and cache writes) and every op then dropped it on the floor, so a `--deep`
+   * build over a 5000-file repo could not tell you afterwards how many calls it made,
+   * let alone what they cost. Counted HERE, by wrapping the transport once, rather
+   * than threaded through summarize/synthesize/crux — those three would each have to
+   * remember, and a fourth op would silently not count.
+   *
+   * Tokens, not dollars: prices are per-model, change without notice, and are not
+   * knowable at all for `claude-cli` (a subscription) or for whatever gateway sits
+   * behind a custom base URL. A wrong number here would be worse than none.
+   */
+  usage(): RunUsage {
+    return { ...this._usage };
+  }
 
   /** The configured transport, or a clear error telling the user how to set a key. */
   private chatModel(): ChatModel {
-    if (this.cfg.chatModel) return this.cfg.chatModel;
     if (this._chatModel) return this._chatModel;
+    if (this.cfg.chatModel) return (this._chatModel = this.metered(this.cfg.chatModel));
     const problem = credentialProblem(this.cfg);
     if (problem) throw new Error(problem);
-    this._chatModel = createChatModel({
+    this._chatModel = this.metered(createChatModel({
       provider: this.cfg.provider,
       apiKey: this.cfg.apiKey,
       model: this.cfg.model,
@@ -127,8 +170,28 @@ export class Graft {
       bin: this.cfg.bin,
       timeoutMs: this.cfg.timeoutMs,
       maxBudgetUsd: this.cfg.maxBudgetUsd,
-    });
+      maxRetries: this.cfg.maxRetries,
+    }));
     return this._chatModel;
+  }
+
+  /** The transport with a token counter around it. A wrapper rather than a
+   * subclass, because the thing being wrapped may be a caller's own `chatModel`
+   * — an object this engine did not construct and must not change. */
+  private metered(inner: ChatModel): ChatModel {
+    const totals = this._usage;
+    return {
+      label: inner.label,
+      async create(req) {
+        const res = await inner.create(req);
+        totals.calls++;
+        totals.input += res.usage.input;
+        totals.output += res.usage.output;
+        totals.cacheRead += res.usage.cacheRead;
+        totals.cacheCreate += res.usage.cacheCreate;
+        return res;
+      },
+    };
   }
 
   private synthesizer(): Synthesizer {

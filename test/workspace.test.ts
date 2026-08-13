@@ -19,6 +19,7 @@ import {
   federateGrep,
   isWorkspaceBuildRoot,
 } from "../src/graph/workspace.js";
+import { keepGoingOnChildFailure } from "../src/graph/workspace-cli.js";
 import { formatAsk } from "../src/ask/ask.js";
 import type { GraphV1 } from "../src/graph/types.js";
 import { rmDir } from "./helpers.js";
@@ -180,6 +181,53 @@ test("grep federation merges groups across children with child-prefixed paths", 
   rmDir(p);
 });
 
+test("grep federation applies --in: one child, and a path prefix inside it", async () => {
+  const p = workspaceFx({
+    repoA: {
+      "src/a.ts": "export function alphaHandler() { return 1; }\n",
+      "tests/a.test.ts": "export function alphaHandlerSpec() { return 1; }\n",
+    },
+    repoB: { "b.ts": "export function betaHandler() { return 2; }\n" },
+  });
+  await buildWorkspace(p);
+
+  // Federation forwarded ignoreCase/fixed only, so `--in repoA` searched repoB
+  // too — and every path came back child-prefixed, which made the wider answer
+  // look deliberate rather than wrong.
+  const scoped = federateGrep(p, undefined, "Handler", { ignoreCase: true, in: "repoA" });
+  const paths = scoped.result.groups.map((g) => g.path);
+  assert.ok(paths.length > 0, JSON.stringify(paths));
+  assert.ok(paths.every((x) => x.startsWith("repoA/")), JSON.stringify(paths));
+
+  // Past the first segment the rest is that child's own path prefix — the same
+  // spelling `federateAsk --in` takes.
+  const inner = federateGrep(p, undefined, "Handler", { ignoreCase: true, in: "repoA/src" });
+  assert.deepEqual(inner.result.groups.map((g) => g.path), ["repoA/src/a.ts"]);
+
+  // A first segment naming no child is a caller mistake, not an empty result.
+  assert.throws(() => federateGrep(p, undefined, "Handler", { in: "nope" }), /no workspace repo "nope"/);
+  rmDir(p);
+});
+
+test("grep federation spends ONE hit budget and one clock across the children", async () => {
+  const p = workspaceFx(REPOS);
+  await buildWorkspace(p);
+
+  // Each child used to be handed the full cap, so a workspace could return
+  // maxHits × children — from a cap whose whole job is bounding one answer.
+  const capped = federateGrep(p, undefined, "Handler", { ignoreCase: true, maxHits: 1 });
+  assert.equal(capped.result.totalHits, 1);
+  assert.ok(capped.result.truncated.hits >= 1, JSON.stringify(capped.result.truncated));
+
+  // And an exhausted wall clock is reported, not lost: `truncated` was rebuilt as
+  // `{files, hits}` on this path, so a federated scan that gave up looked exactly
+  // like one that had searched everything and found nothing.
+  const outOfTime = federateGrep(p, undefined, "Handler", { ignoreCase: true, budgetMs: 0 });
+  assert.equal(outOfTime.result.truncated.timeout, true);
+  assert.equal(outOfTime.result.totalHits, 0);
+  rmDir(p);
+});
+
 test("one unbuilt child is surfaced, not silently skipped", async () => {
   const p = workspaceFx({
     ...REPOS,
@@ -264,7 +312,9 @@ test("federated ask: explicit --in <weak child> bypasses the cross-child gate (f
 
 for (const padN of [0, 200]) {
   test(`strength gate: body-only junk (\`position\`) gated out at ${padN ? "~200" : "~30"}-node scale`, async () => {
-    const strongPad = padN ? { "pad.ts": pad(padN) } : {};
+    // Annotated: the inferred type of the branch is `{ "pad.ts"?: undefined }` on
+    // the 0 side, which is not a valid file map to spread into a child's fixture.
+    const strongPad: Record<string, string> = padN ? { "pad.ts": pad(padN) } : {};
     const p = workspaceFx({
       repoStrong: { "m.ts": "export function scrollbarOverlay() { return computeThumb(); }\nfunction computeThumb() { return 1; }\n", ...strongPad },
       repoJunk: { "m.ts": "export function drawFrame() { const position = 0; return position; }\nfunction helper() { return 1; }\n", ...strongPad },
@@ -325,6 +375,43 @@ for (const [kind, junkFiles] of [
     rmDir(p);
   });
 }
+
+// One child failing used to reject splitWorkspace's await chain, reach
+// parseAsync().catch → process.exit(1), and leave every LATER child unbuilt. The
+// failures that really happen here (expired key, 429) hit every child alike, so
+// that is the worst possible moment to abandon the queue.
+test("a failing child is reported and skipped — the rest of the workspace still builds", async () => {
+  const p = workspaceFx({
+    repoA: { "a.ts": "export const a = 1;\n" },
+    repoB: { "b.ts": "export const b = 2;\n" },
+    repoC: { "c.ts": "export const c = 3;\n" },
+  });
+  const built: string[] = [];
+  const failed: string[] = [];
+  const errs: string[] = [];
+  const realError = console.error;
+  console.error = (msg?: unknown) => void errs.push(String(msg));
+  try {
+    const { children } = await splitWorkspace(
+      p,
+      undefined,
+      keepGoingOnChildFailure(async (_childDir, name) => {
+        if (name === "repoB") throw new Error("429 rate limited");
+        built.push(name);
+      }, failed),
+    );
+    assert.deepEqual(children, ["repoA", "repoB", "repoC"]);
+    assert.deepEqual(built, ["repoA", "repoC"], "repoC is queued AFTER the failure and must still be built");
+    assert.deepEqual(failed, ["repoB"], "recorded, so the caller can still exit non-zero");
+    assert.ok(
+      errs.some((e) => e.includes("repoB") && e.includes("429")),
+      `the reason must reach the user, got ${JSON.stringify(errs)}`,
+    );
+  } finally {
+    console.error = realError;
+    rmDir(p);
+  }
+});
 
 test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   const p = mkdtempSync(join(tmpdir(), "ws-"));

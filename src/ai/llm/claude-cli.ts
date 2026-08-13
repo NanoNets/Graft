@@ -72,6 +72,10 @@ export interface ClaudeCliChatModelOptions {
   timeoutMs?: number;
   /** Optional spend ceiling passed through as `--max-budget-usd`. */
   maxBudgetUsd?: number;
+  /** Retries after a transient failure (default {@link DEFAULT_MAX_RETRIES}).
+   * `0` fails on the first error — the right setting when the CLI is not signed
+   * in on this machine at all and every attempt will fail the same way. */
+  maxRetries?: number;
   /** Inject a runner (tests stub it; production omits it). */
   run?: ClaudeCliRunner;
 }
@@ -97,12 +101,15 @@ export class ClaudeCliChatModel implements ChatModel {
   private runner: ClaudeCliRunner;
   private timeoutMs: number;
   private maxBudgetUsd?: number;
+  private maxRetries: number;
 
   constructor(opts: ClaudeCliChatModelOptions) {
     this.model = opts.model;
     this.label = opts.label ?? `${PROVIDER}:${opts.model}`;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxBudgetUsd = opts.maxBudgetUsd;
+    // `?? DEFAULT` and not `|| DEFAULT`: 0 is the meaningful "don't retry" value.
+    this.maxRetries = Math.max(0, opts.maxRetries ?? DEFAULT_MAX_RETRIES);
     this.runner = opts.run ?? defaultRunner(opts.bin);
   }
 
@@ -164,14 +171,15 @@ export class ClaudeCliChatModel implements ChatModel {
    */
   private async invoke(prompt: string): Promise<CliEnvelope> {
     let lastErr: unknown;
-    for (let attempt = 0; attempt < TRANSIENT_ATTEMPTS; attempt++) {
+    const attempts = this.maxRetries + 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       try {
         return await this.invokeOnce(prompt);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
-        if (attempt === TRANSIENT_ATTEMPTS - 1 || !isTransient(msg)) throw err;
-        await sleep(BACKOFF_MS[attempt]);
+        if (attempt === attempts - 1 || !isTransient(msg)) throw err;
+        await sleep(backoffMs(attempt));
       }
     }
     throw lastErr;
@@ -216,8 +224,18 @@ export class ClaudeCliChatModel implements ChatModel {
 
 // --- transient-failure policy ------------------------------------------------
 
-const TRANSIENT_ATTEMPTS = 3;
+/** Retries after the first attempt. Matches the OpenAI/Anthropic SDK default, so
+ * one `maxRetries` means the same number of calls whichever provider is in use. */
+const DEFAULT_MAX_RETRIES = 2;
 const BACKOFF_MS = [1_000, 5_000];
+
+/** Backoff before retry `attempt` (0-based). Beyond the tabulated pair it doubles
+ * and caps at a minute: a configured `maxRetries: 8` must not turn into a fixed
+ * 5s poll against an endpoint that is telling us to slow down. */
+function backoffMs(attempt: number): number {
+  const last = BACKOFF_MS[BACKOFF_MS.length - 1];
+  return BACKOFF_MS[attempt] ?? Math.min(60_000, last * 2 ** (attempt - BACKOFF_MS.length + 1));
+}
 
 /**
  * Retry only what a retry can fix. Quota exhaustion and a missing/expired login

@@ -14,7 +14,7 @@
  * sees each symbol's neighbours, which sharpens the summaries. Line numbers are
  * consumed once, at write time, to slice the crux text verbatim from source.
  */
-import type { ChatModel } from "./llm/types.js";
+import { isTruncated, type ChatModel } from "./llm/types.js";
 import type { Kind } from "../graph/types.js";
 
 /** One definition we want described, located by its line span within the file. */
@@ -78,24 +78,40 @@ const SYMBOLS_SCHEMA = {
 /** Cap the file text sent per request so one huge file can't blow the context. */
 const MAX_CODE_CHARS = 18_000;
 
-function numberLines(source: string): string {
-  const clipped =
-    source.length > MAX_CODE_CHARS ? `${source.slice(0, MAX_CODE_CHARS)}\n… (truncated)` : source;
-  return clipped
-    .split("\n")
-    .map((line, i) => `${i + 1}\t${line}`)
-    .join("\n");
+/**
+ * The numbered slice of the file the model will actually see, and the subset of
+ * targets that lives inside it.
+ *
+ * The filtering is the load-bearing part. The clip is by CHARACTERS (~450 lines
+ * at 18k) while the targets carry spans over the WHOLE file, so on a 1200-line
+ * file the prompt used to demand a crux for `L900-L950` — lines the model was
+ * never shown. It cannot refuse (the tool call is forced), so it invents a range;
+ * enrich.ts then clamps that range to the node's span and slices the FULL source,
+ * writing crux code that reads as grounded and is not. A symbol past the window
+ * is simply not asked about, which enrich.ts records as `pending` — the honest
+ * state, and the one a later run can still fix.
+ */
+function clipToWindow(input: FileCruxInput): { body: string; targets: NodeRef[] } {
+  const whole = input.source.length <= MAX_CODE_CHARS;
+  const lines = (whole ? input.source : input.source.slice(0, MAX_CODE_CHARS)).split("\n");
+  // A char-wise cut lands mid-line; that fragment is not a line the model can reason about.
+  if (!whole && lines.length > 1) lines.pop();
+  const numbered = lines.map((line, i) => `${i + 1}\t${line}`).join("\n");
+  return {
+    body: whole ? numbered : `${numbered}\n… (truncated)`,
+    targets: whole ? input.nodes : input.nodes.filter((n) => n.endLine <= lines.length),
+  };
 }
 
-function userContent(input: FileCruxInput): string {
-  const targets = input.nodes
+function userContent(input: FileCruxInput, body: string, targets: NodeRef[]): string {
+  const list = targets
     .map(
       (n) =>
         `- id=${n.id} | ${n.kind} | lines L${n.startLine}-L${n.endLine}` +
         (n.signature ? ` | ${n.signature}` : ""),
     )
     .join("\n");
-  return `FILE: ${input.path}\n\n${numberLines(input.source)}\n\nTARGETS:\n${targets}`;
+  return `FILE: ${input.path}\n\n${body}\n\nTARGETS:\n${list}`;
 }
 
 /** Normalize the tool's parsed argument object into a {@link NodeCrux} list. */
@@ -119,9 +135,18 @@ export class ChatCruxSummarizer implements CruxSummarizer {
 
   async describeFile(input: FileCruxInput): Promise<NodeCrux[]> {
     if (input.nodes.length === 0) return [];
+    const { body, targets } = clipToWindow(input);
+    // Every requested symbol sits past the truncation point. Sending the request
+    // anyway costs a full call whose only possible answers are invented — and
+    // enrich.ts retries a file whose targets came back missing, so it would cost
+    // that twice.
+    if (targets.length === 0) return [];
     const res = await this.model.create({
       temperature: 0,
       maxTokens: 8192,
+      // Structured extraction over a file already in front of the model: thinking
+      // would eat the same 8192 tokens the per-symbol answers have to fit in.
+      thinking: { kind: "disabled" },
       tools: [
         {
           name: RECORD_TOOL,
@@ -132,9 +157,15 @@ export class ChatCruxSummarizer implements CruxSummarizer {
       responseFormat: { kind: "tool", name: RECORD_TOOL },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userContent(input) },
+        { role: "user", content: userContent(input, body, targets) },
       ],
     });
+    // A turn cut off before its tool_use block closed parses as zero symbols,
+    // which enrich.ts cannot tell apart from "the model skipped these" — so it
+    // silently marks them pending and eats the cost. Say what actually happened.
+    if (isTruncated(res)) {
+      throw new Error(`crux truncated at maxTokens (stop_reason=${res.stopReason}) — ${targets.length} symbols requested for ${input.path}`);
+    }
     return parseResults(res.toolCalls[0]?.args as { symbols?: unknown } | undefined);
   }
 }
