@@ -27,13 +27,14 @@ import {
   scopesHereClause,
   scopesOfGraph,
 } from "../graph/scopes.js";
-import { normalizePathPrefix } from "../util/paths.js";
+import { normalizePathPrefix, toPosixPath } from "../util/paths.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { rankScopesAndFuse } from "./fuse.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
+import { formatCount } from "../util/num.js";
 
 export interface AskHit {
   kind: "concept" | "symbol" | "caller" | "callee";
@@ -235,6 +236,29 @@ function subjectWords(query: string): string[] {
   return [...new Set(query.split(/[^A-Za-z0-9_.]+/).filter(Boolean))];
 }
 
+/**
+ * The words that EXPRESS the structural intent, and so can never BE its
+ * subject. `INCOMING`/`OUTGOING` above already consumed them; leaving them in
+ * the candidate list lets the question's own grammar hijack the answer.
+ *
+ * The failure is not hypothetical and not rare: `resolveSymbol` matches
+ * case-insensitively and by id suffix (`#calls`, `.calls`), so in any repo with
+ * a method or field named `calls`/`uses`/`imports` — which describes most graph
+ * or HTTP-client code, this repo included — "who calls run" resolves `calls`
+ * (same length as `run`, and stable sort keeps the earlier word) and answers
+ * "callers / references of calls". The user asked about `run` and got a
+ * confident answer about something else entirely.
+ */
+const INTENT_WORDS = new Set([
+  "call", "calls", "caller", "callers", "called", "calling",
+  "use", "uses", "used", "using", "usage",
+  "import", "imports", "imported", "importing",
+  "depend", "depends", "depend_on", "dependency", "dependencies",
+  "reference", "references", "referenced",
+  "who", "what", "which", "where", "does", "do", "is", "are", "the", "a", "an",
+  "into", "by", "on", "of", "from", "to", "in", "and", "or",
+]);
+
 /** Resolve the query's structural subject via {@link resolveSymbol}, trying
  * each word longest-first — the intended subject of a structural query is
  * usually the most specific (longest) identifier-shaped word, never a short
@@ -253,7 +277,17 @@ function subjectWords(query: string): string[] {
  * today — and if nothing survives for ANY word, `subjects.length === 0`
  * naturally falls through to the existing loud fallthrough note. */
 function findSubjectNodes(query: string, graph: GraphV1, inPrefix?: string): { nodes: NodeV1[]; tried: string } {
-  const words = subjectWords(query).sort((a, b) => b.length - a.length);
+  const all = subjectWords(query);
+  // Intent words are dropped, not merely deprioritized — but only when
+  // something else survives, so a degenerate query like "who calls calls" can
+  // still resolve rather than falling through with nothing to try.
+  const candidates = all.filter((w) => !INTENT_WORDS.has(w.toLowerCase()));
+  const pool = candidates.length ? candidates : all;
+  // Ties on length break toward the word that appeared LAST: English puts the
+  // object at the end ("what does the gate import" — `gate` and `import` are
+  // both 6 letters, and it is `gate` that is being asked about).
+  const order = new Map(pool.map((w, i) => [w, i]));
+  const words = [...pool].sort((a, b) => b.length - a.length || order.get(b)! - order.get(a)!);
   for (const w of words) {
     let nodes = resolveSymbol(graph, w);
     if (inPrefix) nodes = nodes.filter((n) => pathUnderPrefix(n.path, inPrefix));
@@ -315,15 +349,25 @@ function structural(query: string, graph: GraphV1, limit: number, inPrefix?: str
   if (hits.length === 0) return { fallthroughNote: fallthroughNoteFor(subjects[0].name) };
 
   hits.sort((a, b) => a.pointer.localeCompare(b.pointer));
+  const subject = subjects[0].name;
+  // Structural hits all score 1, so the `limit` cut falls on a PATH-alphabetical
+  // ordering — there is no "best 5" here, only "the 5 whose paths sort first".
+  // With the MCP default of limit 5, "who calls X" on a symbol with 40 callers
+  // returned 5 and looked complete, and the agent shipped a refactor with 35
+  // callers it never saw. The count is the fix; the ordering is a detail.
+  const dropped = hits.length - limit;
+  const head = outgoing ? `outgoing edges from ${subject}` : `callers / references of ${subject}`;
   return {
     result: {
       query,
       mode: "structural",
-      subject: subjects[0].name,
+      subject,
       hits: hits.slice(0, limit),
-      note: outgoing
-        ? `outgoing edges from ${subjects[0].name}`
-        : `callers / references of ${subjects[0].name}`,
+      note:
+        dropped > 0
+          ? `${head} — showing ${limit} of ${hits.length} (ordered by path, not relevance); ` +
+            `run graft callers '${subject}' for the full list`
+          : head,
     },
   };
 }
@@ -392,6 +436,11 @@ function matchedIdfShare(
   return total > 0 ? matched / total : 0;
 }
 
+/** Exported so callers (and tests) can recognize the degraded-recall state
+ * without string-matching a literal that might drift. */
+export const BODY_INDEX_MISSING_NOTE =
+  "body index missing or stale (graft/.cache/ask-index.json) — matches that exist only inside a definition's code are invisible right now; run `graft build` to restore full recall";
+
 function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean, inPrefix?: string): AskResult {
   // Binary query terms: a word repeated in a pasted issue body counts once, so a
   // ranty description can't linearly amplify an incidental word.
@@ -444,6 +493,17 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     if (graph.nodes.every((n) => map.has(n.id))) docById = map;
   }
   const askIndex = docById ? corpus.askIndex : null;
+
+  // The fallback above is graceful, but it is NOT equivalent, and until now it
+  // was invisible. `writeGraph` strips `body_text` from every node it
+  // serializes, so on any graph read back from disk the sidecar's per-doc bags
+  // are the ONLY surviving copy of a symbol's body tokens; without it `body`
+  // collapses to signature + summary and every body-only match disappears.
+  // A missing or stale sidecar (build wrote it to a failed path, a worktree
+  // seed skipped it, a hand-edit desynced the ids) therefore shows up as "ask
+  // is just bad in this repo" rather than as anything diagnosable. Same
+  // never-silent posture grep-cli takes on truncation.
+  const bodyIndexMissing = docById === null && (graph?.nodes.length ?? 0) > 0;
 
   // Symbols AND file nodes are scored: a symbol's body_text is its definition;
   // a file's body_text is the module-level residual (imports/constants not in
@@ -703,9 +763,17 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     coverageStrong: scored.length && q.size > 0 ? matchedStrongOf.get(scored[0]) ?? 0 : undefined,
     // Zero hits on a genuinely multi-scope graph names the scopes that exist,
     // so a query that missed everywhere still tells the caller where to look.
-    note: scored.length
-      ? undefined
-      : `no matching nodes — try different words, or \`graft build\` if graft/ is empty${scopesHereClause(scopes ?? [])}`,
+    // The degraded-index warning rides alongside it: with no body tokens, zero
+    // hits may well mean "the index lost them", not "the code doesn't say it".
+    note:
+      [
+        scored.length
+          ? null
+          : `no matching nodes — try different words, or \`graft build\` if graft/ is empty${scopesHereClause(scopes ?? [])}`,
+        bodyIndexMissing ? BODY_INDEX_MISSING_NOTE : null,
+      ]
+        .filter(Boolean)
+        .join("\n") || undefined,
   };
 }
 
@@ -877,10 +945,16 @@ export function skeleton(dir: string, file: string, opts: { contextDir?: string 
   const graph = loadGraphCached(outDir);
   if (!graph) return { file, entries: [], note: "no wiring graph — run `graft build` first" };
 
-  let defs = graph.nodes.filter((n) => n.kind !== "file" && n.path === file);
+  // Every `node.path` in the graph is posix. An agent on Windows types (or a
+  // Windows tool hands back) `src\ask\ask.ts`, which equals no node path at
+  // all, and the file falls out the bottom as "no definitions indexed for this
+  // file" — the exact silent-miss `--in` already guards against via
+  // `normalizePathPrefix`. See the header of src/util/paths.ts.
+  const wanted = toPosixPath(file);
+  let defs = graph.nodes.filter((n) => n.kind !== "file" && n.path === wanted);
   if (!defs.length) {
     const matches = new Set(
-      graph.nodes.filter((n) => n.path === file || n.path.endsWith(`/${file}`)).map((n) => n.path),
+      graph.nodes.filter((n) => n.path === wanted || n.path.endsWith(`/${wanted}`)).map((n) => n.path),
     );
     if (matches.size > 1)
       return { file, entries: [], note: `ambiguous — matches: ${[...matches].sort().join(", ")}` };
@@ -995,9 +1069,9 @@ function askSavingsLine(r: AskResult, body: string): string {
   const saved = base - pack;
   const pct = Math.round((saved / base) * 100);
   return (
-    `[graft] tokens saved ≈ ${saved.toLocaleString()} (${pct}%) — this pack ≈ ` +
-    `${pack.toLocaleString()} tok vs reading the ${r.saved.files} source file(s) whole ≈ ` +
-    `${base.toLocaleString()} tok. Estimate (baseline = those files read in full).` +
+    `[graft] tokens saved ≈ ${formatCount(saved)} (${pct}%) — this pack ≈ ` +
+    `${formatCount(pack)} tok vs reading the ${r.saved.files} source file(s) whole ≈ ` +
+    `${formatCount(base)} tok. Estimate (baseline = those files read in full).` +
     SAVINGS_TURN_NUDGE
   );
 }

@@ -7,7 +7,7 @@
  * than being hand-rolled per file because both carry a platform trap that is
  * invisible until CI runs on Windows: see {@link tmpRepo} and {@link homeEnv}.
  */
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,25 @@ import type { Summarizer, Synthesizer, SynthNode, SynthLink, FileSummary } from 
  */
 export function tmpRepo(tag: string): string {
   return realpathSync.native(mkdtempSync(join(tmpdir(), `graft-${tag}-`)));
+}
+
+/**
+ * Delete a scratch directory — the `finally` half of {@link tmpRepo}.
+ *
+ * The retries are the point, and they are a Windows trap of the same family as
+ * the one above. POSIX unlinks a path immediately even while a handle is open;
+ * Windows only *marks* the file for deletion and keeps it in its directory until
+ * the last handle closes, so an rmdir racing a just-closed tree-sitter parse, a
+ * child process still exiting, or a virus scanner that opened the file behind
+ * your back fails with ENOTEMPTY/EBUSY/EPERM. Nothing is wrong with the test —
+ * a few milliseconds later the same call succeeds.
+ *
+ * Left bare, this shows up as a *different* test failing on each CI run, which
+ * reads as a real intermittent bug and costs an afternoon to chase. `maxRetries`
+ * is node's own remedy for exactly this.
+ */
+export function rmDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
 /**
@@ -92,9 +111,12 @@ export function runCli(args: string[], opts: { home?: string; timeoutMs?: number
   return res;
 }
 
-/** Summarizer that passes the source through unchanged, so tests control the text. */
+/** Summarizer that passes the source through unchanged, so tests control the text.
+ * Declares `opts` even though it ignores it: dropping the parameter still satisfies
+ * `Summarizer`, but then a test wrapping this one cannot forward the call it
+ * received, and the delegation stops type-checking. */
 export class PassthroughSummarizer implements Summarizer {
-  async summarize(code: string): Promise<string> {
+  async summarize(code: string, _opts?: { path: string }): Promise<string> {
     return code;
   }
 }

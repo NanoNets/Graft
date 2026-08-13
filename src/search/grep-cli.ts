@@ -41,9 +41,14 @@ export function formatGrepHeader(result: GrepResult): string {
 
 /** Loud truncation note — dropped counts are never silent. */
 function truncationNote(result: GrepResult): string | null {
-  const { files, hits } = result.truncated;
-  if (files === 0 && hits === 0) return null;
+  const { files, hits, timeout } = result.truncated;
+  if (files === 0 && hits === 0 && !timeout) return null;
   const parts: string[] = [];
+  // First, because it is the only one that means "files were never looked at":
+  // the other two are counted drops within a complete pass. The MCP side already
+  // surfaced it (`mcp/tools.ts#grepTimeoutNote`); the CLI reported the timeout
+  // as nothing at all, so a scan that gave up looked like a finished one.
+  if (timeout) parts.push("search hit its time budget — some indexed files were never searched");
   if (hits > 0) parts.push(`${hits} more hit${hits === 1 ? "" : "s"} beyond the cap`);
   if (files > 0) parts.push(`${files} indexed file${files === 1 ? "" : "s"} unreadable`);
   return `(truncated: ${parts.join(", ")} — narrow with --in or refine the pattern)`;
@@ -71,8 +76,15 @@ export function formatGrepResult(result: GrepResult): string {
  * otherwise a zero-hit result on a stale graph or wrong root reads as "no
  * matches" when really some files were never searched at all. */
 export function zeroHitNote(result: GrepResult): string {
+  const { files, timeout } = result.truncated;
+  // The timeout case has to replace the sentence, not append to it: "All indexed
+  // code was searched" is FALSE under a timeout, and a zero-hit answer there means
+  // "gave up", not "not there" — the reading that sends someone off believing a
+  // symbol doesn't exist in the repo.
+  if (timeout) {
+    return `no hits yet for "${result.pattern}" — the search hit its time budget after ${result.filesSearched} indexed files and the rest were never searched. This is "gave up", not "not there": narrow with --in, or simplify the pattern (a nested-quantifier regex can backtrack catastrophically on one line)`;
+  }
   const base = `no hits for "${result.pattern}" in ${result.filesSearched} indexed files. The pattern may be too specific — retry graft grep with a bare symbol name or short substring (drop the receiver, full signature, and regex anchors). All indexed code was searched; use raw grep -rn only for genuinely unindexed files (docs, configs, brand-new files)`;
-  const { files } = result.truncated;
   if (files === 0) return base;
   return `${base} — note: ${files} indexed file${files === 1 ? "" : "s"} could not be read (stale graph? run graft build)`;
 }

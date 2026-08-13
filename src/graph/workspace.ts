@@ -35,7 +35,7 @@ import { wiringPath } from "./write.js";
 import type { GraphV1 } from "./types.js";
 import { ask, type AskHit, type AskResult } from "../ask/ask.js";
 import { fuseScopes, STRONG_FLOOR, HIGH_FLOOR, type ScopedDoc } from "../ask/fuse.js";
-import { grepGraph, type GrepGroup, type GrepResult } from "../search/grep.js";
+import { grepGraph, DEFAULT_BUDGET_MS, DEFAULT_MAX_HITS, type GrepGroup, type GrepResult } from "../search/grep.js";
 import { formatGrepResult, zeroHitNote } from "../search/grep-cli.js";
 import { withSavings, type Savings } from "../context/savings.js";
 
@@ -305,6 +305,29 @@ export function federateAsk(
   return result;
 }
 
+export interface GrepFederateOptions {
+  ignoreCase?: boolean;
+  fixed?: boolean;
+  /** Narrow to one child (`repoA`) or a path prefix within it (`repoA/src`) — the
+   * same spelling `federateAsk`'s `in` takes, so `--in` means one thing at a
+   * workspace root too. A prefix naming no known child throws, listing the repos.
+   *
+   * Federation used to forward only ignoreCase/fixed, so `graft grep --in repoA`
+   * at a parent searched every repo and said nothing: the caller believes it
+   * scoped the search to one package and reads a result set drawn from all of
+   * them, with the child dir prefixed onto every path making it look deliberate. */
+  in?: string;
+  /** Aggregate hit cap for the WHOLE federated scan (default {@link DEFAULT_MAX_HITS}).
+   * Each child used to get its own 300, so a 12-repo workspace could return 3600
+   * hits from a tool whose contract says 300 — the cap that exists to keep one
+   * tool call from filling the context window. */
+  maxHits?: number;
+  /** Aggregate wall-clock ceiling, same reasoning: a per-child budget multiplies
+   * by the number of repos, and it exists to bound a catastrophic-backtracking
+   * pattern that would otherwise wedge the (single-threaded) MCP server. */
+  budgetMs?: number;
+}
+
 /** Merge every child's `GrepResult` into one, prefixing group paths with the
  * child dir and re-sorting by coupling (inDegree desc, path asc) across repos.
  * In-degree stays each child's own — it comes from that child's graph. */
@@ -312,25 +335,63 @@ export function federateGrep(
   root: string,
   override: string | undefined,
   pattern: string,
-  opts: { ignoreCase?: boolean; fixed?: boolean } = {},
+  opts: GrepFederateOptions = {},
 ): { result: GrepResult; coverage: string } {
   const wg = loadWorkspaceGraphs(root, override);
   const groups: GrepGroup[] = [];
   let filesSearched = 0;
   let totalHits = 0;
-  const truncated = { files: 0, hits: 0 };
+  const truncated: GrepResult["truncated"] = { files: 0, hits: 0 };
   let savedFiles = 0;
   let savedChars = 0;
 
+  // Same `--in` resolution as `federateAsk`: first segment names the child, the
+  // rest is that child's own path prefix.
+  let onlyChild: string | undefined;
+  let childIn: string | undefined;
+  if (opts.in) {
+    const [name, ...rest] = opts.in.replace(/\/+$/, "").split(/[\\/]/);
+    const allChildren = [...wg.loaded.map((l) => l.child), ...wg.missing].sort();
+    if (!allChildren.includes(name)) {
+      throw new Error(`no workspace repo "${name}" - repos: ${allChildren.join(", ")}`);
+    }
+    onlyChild = name;
+    childIn = rest.length ? rest.join("/") : undefined;
+  }
+
+  // Both budgets are spent DOWN across children rather than handed to each in
+  // full. `maxHits: 0` on an exhausted budget is deliberate: grepGraph still
+  // counts what it finds into `truncated.hits`, so the total stays honest instead
+  // of the later repos silently vanishing from the tally.
+  let hitsLeft = opts.maxHits ?? DEFAULT_MAX_HITS;
+  const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
+  let timedOut = false;
+
   for (const { child, graph } of wg.loaded) {
+    if (onlyChild && child !== onlyChild) continue;
+    const msLeft = deadline - Date.now();
+    if (msLeft <= 0) {
+      // The remaining children were never opened at all — the loudest possible
+      // form of truncation, and exactly what the flag below is for.
+      timedOut = true;
+      break;
+    }
     const r = grepGraph(graph, join(root, child), pattern, {
       ignoreCase: opts.ignoreCase,
       fixed: opts.fixed,
+      in: childIn,
+      maxHits: Math.max(0, hitsLeft),
+      budgetMs: msLeft,
     });
     filesSearched += r.filesSearched;
     totalHits += r.totalHits;
+    hitsLeft -= r.totalHits;
     truncated.files += r.truncated.files;
     truncated.hits += r.truncated.hits;
+    // Rebuilding `truncated` as `{files, hits}` dropped this flag on the floor, so
+    // a workspace grep that gave up on its budget reported "no hits" as though it
+    // had searched everything — the one reading the flag exists to prevent.
+    if (r.truncated.timeout) timedOut = true;
     if (r.saved) {
       savedFiles += r.saved.files;
       savedChars += r.saved.baselineChars;
@@ -343,6 +404,7 @@ export function federateGrep(
       });
     }
   }
+  if (timedOut) truncated.timeout = true;
 
   groups.sort((a, b) => b.inDegree - a.inDegree || a.path.localeCompare(b.path));
   const saved: Savings | undefined = savedChars > 0 ? { files: savedFiles, baselineChars: savedChars } : undefined;

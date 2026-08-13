@@ -3,6 +3,7 @@
  * SSE live reload, and the three views (Context graph / Code graph / Outline).
  */
 import { loadContextGraph, loadCodeGraph, onServerChange, chipKey, CHIP_HINT, colorToken, cvar, famOf, type VizGraph } from "./data.js";
+import { escapeHtml } from "./escape.js";
 import { GraphView } from "./graph.js";
 import { renderDetail } from "./detail.js";
 import { renderOutline } from "./tree.js";
@@ -47,7 +48,10 @@ function renderChips(): void {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "echip" + (view.hiddenRels[key] ? "" : " on");
-    btn.innerHTML = `${glyphFor(key)} ${key} <span style="opacity:.55">${counts.get(key)}</span>`;
+    // `key` is a relation verb copied out of card frontmatter, i.e. LLM output
+    // over a repo graft did not write — same untrusted origin as the ids in
+    // detail.ts/tree.ts, and the same reason it cannot go into innerHTML raw.
+    btn.innerHTML = `${glyphFor(key)} ${escapeHtml(key)} <span style="opacity:.55">${counts.get(key)}</span>`;
     btn.title = (CHIP_HINT[key] ?? `"${key}" edges`) + " — click to " + (view.hiddenRels[key] ? "show" : "hide");
     btn.addEventListener("click", () => {
       view.hiddenRels[key] = !view.hiddenRels[key];
@@ -82,7 +86,7 @@ function renderLegend(): void {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "lchip" + (view.hiddenTypes[type] ? " off" : "");
-    chip.innerHTML = `<span class="sw" style="background:${cvar(colorToken(graphTab(), type))}"></span>${type} <span style="color:var(--muted);font-weight:500">${count}</span>`;
+    chip.innerHTML = `<span class="sw" style="background:${cvar(colorToken(graphTab(), type))}"></span>${escapeHtml(type)} <span style="color:var(--muted);font-weight:500">${count}</span>`;
     chip.addEventListener("click", () => {
       view.hiddenTypes[type] = !view.hiddenTypes[type];
       renderLegend();

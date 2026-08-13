@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildGraph } from "../src/graph/build.js";
 import { ask, formatAsk, skeleton, formatSkeleton, isTestPath } from "../src/ask/ask.js";
+import { rmDir } from "./helpers.js";
 
 test("isTestPath: de-ranks test files, not real source", () => {
   for (const p of ["server/download_test.go", "packages/x/tests/foo.test.tsx", "a/__tests__/b.ts", "src/api.spec.ts", "pkg/foo/bar_test.go"])
@@ -65,7 +66,7 @@ test("test files rank below the source they exercise for a non-test query, but n
     const rt = ask(dir, "tests for downloadChunk stall");
     assert.ok(rt.hits.some((h) => /download\.test\.ts/.test(h.pointer)), "test file surfaces for a test-seeking query");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -94,7 +95,7 @@ test("test de-ranking survives normalization when a test is the strongest lexica
     assert.ok(source >= 0, "implementation hit present");
     assert.ok(testHit === -1 || source < testHit, "implementation ranks above the stronger lexical test match");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -119,7 +120,7 @@ test("ask without source returns pointers but no inlined code", async () => {
     assert.match(hit.pointer, /^math\.ts:L\d+-L\d+$/);
     assert.equal(hit.code, undefined, "no source inlined without the option");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -147,7 +148,7 @@ test("ask --source inlines the crux by default, the whole span with full", async
     assert.match(fullHit.code!, /export function addNumbers/, "full definition span inlined");
     assert.doesNotMatch(fullHit.code!, /rerun with --full/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -159,7 +160,7 @@ test("ask --source falls back to the span when a node has no crux", async () => 
     const hit = r.hits.find((h) => h.title.startsWith("addNumbers"))!;
     assert.match(hit.code!, /export function addNumbers/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -182,7 +183,7 @@ test("skeleton lists a file's definitions in span order, matches by basename", a
     assert.match(txt, /L\d+-L\d+ {2}function first/);
     assert.match(skeleton(dir, "nope.ts").note ?? "", /no definitions/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -199,7 +200,7 @@ test("ask reports coverage: 1.0 when every query term hits, low on mostly-off-co
     assert.ok(chatty.hits.length > 0, "still returns lexical hits");
     assert.ok((chatty.coverage ?? 1) < 0.15, `coverage should be under the floor, got ${chatty.coverage}`);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -220,7 +221,7 @@ test("ask finds a symbol by a term that appears only in its body (body-indexing)
     assert.ok(hit, "checkout is findable via a term that only appears in its body");
     assert.match(hit.pointer, /^pay\.ts:L\d+-L\d+$/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -240,7 +241,7 @@ test("ask surfaces a file by a term only in its module-level code (file-body ind
     assert.ok(hit, "the file surfaces via a term that lives only in module-level code");
     assert.ok(hit.title.endsWith("· file"), "it is the file node, pointed at the whole file (no span)");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -261,7 +262,7 @@ test("ask indexes a symbol past the 32KB tree-sitter boundary (chunked parse)", 
       "a symbol defined past the 32KB boundary is indexed and findable",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -303,7 +304,7 @@ test("ask: 'who calls Cache.get' resolves via qualified id-suffix (the previousl
       "loadItem calls Cache.get, and must show up as a caller",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -318,7 +319,7 @@ test("ask: structural subject resolves but has zero edges — falls through to l
     assert.match(r.note!, /graft callers 'unusedHelper'/);
     assert.ok(r.hits.length > 0, "lexical fallback still finds the function by name");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -331,7 +332,7 @@ test("ask: structural intent for an unresolvable subject also falls through with
     assert.ok(r.note, "a fallthrough note must be set even when nothing resolved");
     assert.match(r.note!, /structural index: no entries for 'NoSuchSymbolXyz'/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -347,7 +348,7 @@ test("formatAsk: the structural fallthrough note prints prominently, before any 
     const firstHitIdx = out.search(/\n1\.\s/); // lexical hit numbering starts at "1. "
     assert.ok(firstHitIdx === -1 || noteIdx < firstHitIdx, "the note prints before any hit");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -408,7 +409,7 @@ test("ask on a multi-scope repo: top hits federate both scopes, labeled, with a 
     assert.match(out, /matched in: .*frontend\/ \(\d+\)/, "footer reports frontend's hit count");
     assert.match(out, /matched in: .*backend\/ \(\d+\)/, "footer reports backend's hit count");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -489,7 +490,7 @@ test("cross-seam fix: a monorepo scope with only a body-comment collision is gat
     assert.match(out, /also matched: junk\/ — narrow with --in junk\//, `expected an alsoMatched footer, got:\n${out}`);
     assert.doesNotMatch(out, /\[junk\/\]/, "no junk/-labeled hit anywhere in the rendered output");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -522,7 +523,7 @@ test("ask --in: filters to nodes under the prefix, segment-aware ('widgets' must
       "widgets-extra/ must NOT be pulled in by a naive substring/prefix match",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -567,7 +568,7 @@ test("ask --in: per-scope idf differs from global — a term's rank flips relati
       "filtered to proj/, zzzcommonword_b (now the locally-rare term) overtakes zzzraretoken (now locally-common)",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -580,7 +581,7 @@ test("ask --in: unknown/no-match prefix throws a scope-enumerating error", async
       /nothing indexed under "wrong\/" — scopes here: .*frontend\/.*backend\/.* \(or any path prefix\)/,
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -596,7 +597,7 @@ test("ask --in: unknown prefix on a single-scope repo throws without a scopes-he
       return true;
     });
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -619,7 +620,7 @@ test("CLI: `graft ask --in <unknown>` exits 1 with the scope-enumerating error o
     assert.match(threw!.stderr ?? "", /✗ nothing indexed under "wrong\/"/);
     assert.match(threw!.stderr ?? "", /scopes here:.*frontend\/.*backend\//);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -632,7 +633,7 @@ test("ask: a zero-hit query on a multi-scope graph appends scope enumeration to 
     assert.match(r.note ?? "", /no matching nodes — try different words/);
     assert.match(r.note ?? "", /scopes here: .*frontend\/.*backend\//);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -650,7 +651,7 @@ test("ask --in on the multi-scope fixture: filtering to one scope carries no sco
     const out = formatAsk(r);
     assert.doesNotMatch(out, /\[frontend\/\] |\[backend\/\] |matched in:|also matched:/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -686,7 +687,7 @@ test("ask --in: a body-only term is still found when filtered to its own directo
     const hit = r.hits.find((h) => h.title.startsWith("checkout"));
     assert.ok(hit, "checkout must still be findable via its body-only term when --in filters to its OWN directory");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -705,7 +706,7 @@ test("ask --in: a trailing slash is accepted — `--in frontend/` behaves exactl
       "trailing slash must not change which hits are returned",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -752,7 +753,7 @@ test("ask --in: structural queries narrow the resolved subject by prefix, not ju
       "backend's handle/caller must not leak in when --in=frontend",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -770,7 +771,7 @@ test("ask --in: a structural subject that exists ONLY outside the prefix falls t
     assert.ok(r.note, "a fallthrough note must be set");
     assert.match(r.note!, /structural index: no entries for 'handle'/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -794,7 +795,7 @@ test("regression pin: single-scope ask output is byte-equal with canonical meta.
     assert.equal(canonical, absent, "single-scope output must not drift by a byte");
     assert.doesNotMatch(absent, /matched in:|also matched:|\[\w+\/\] /, "zero new output on single-scope");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -810,6 +811,149 @@ test("ask with source inlines the actual span from disk", async () => {
     // formatAsk renders it as a fenced block so it drops into agent context.
     assert.match(formatAsk(r), /```[\s\S]*return a \+ b;[\s\S]*```/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
+  }
+});
+
+// ── Structural subject selection: the question's own verbs must not be the answer ──
+
+/** `Tracker.calls` and `Registry.uses` are ordinary members — the kind any
+ * graph, HTTP-client or metrics module has — that happen to be spelled like
+ * the intent verbs `structural()` keys on. `run`/`log` are the real subjects,
+ * and `gate` exists so the equal-length tie-break has something to land on. */
+function verbCollisionFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-verbs-"));
+  writeFileSync(
+    join(dir, "collide.ts"),
+    `export class Tracker {\n` +
+      `  calls(): number {\n` +
+      `    return 1;\n` +
+      `  }\n` +
+      `}\n\n` +
+      `export class Registry {\n` +
+      `  uses(): number {\n` +
+      `    return 2;\n` +
+      `  }\n` +
+      `}\n\n` +
+      `export function run(): number {\n` +
+      `  return 3;\n` +
+      `}\n\n` +
+      `export function log(): number {\n` +
+      `  return 4;\n` +
+      `}\n\n` +
+      `export function gate(): number {\n` +
+      `  return 5;\n` +
+      `}\n\n` +
+      `export function auth(): number {\n` +
+      `  return 6;\n` +
+      `}\n\n` +
+      `export function driver(): number {\n` +
+      `  const t = new Tracker();\n` +
+      `  const r = new Registry();\n` +
+      `  return run() + log() + gate() + auth() + t.calls() + r.uses();\n` +
+      `}\n`,
+  );
+  return dir;
+}
+
+test("ask: the intent verb never becomes the subject, even when a symbol is named `calls`", async () => {
+  const dir = verbCollisionFixture();
+  try {
+    await buildGraph(dir);
+    // 'calls' (5) sorts ahead of 'run' (3) by length, and resolveSymbol matches
+    // it against `Tracker.calls` by id suffix — so the question's own verb used
+    // to hijack the answer and ask reported "callers / references of calls".
+    const r = ask(dir, "who calls run");
+    assert.equal(r.mode, "structural");
+    assert.equal(r.subject, "run", "the subject is the thing being asked about, not the verb asking");
+    assert.match(r.note ?? "", /callers \/ references of run/);
+    assert.ok(r.hits.some((h) => h.title === "driver"), "driver calls run and must show up");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("ask: `uses` as a member name does not hijack a 'who uses X' question either", async () => {
+  const dir = verbCollisionFixture();
+  try {
+    await buildGraph(dir);
+    const r = ask(dir, "who uses log");
+    assert.equal(r.mode, "structural");
+    assert.equal(r.subject, "log");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("ask: an equal-length tie resolves to the object at the end of the sentence, not the first word", async () => {
+  const dir = verbCollisionFixture();
+  try {
+    await buildGraph(dir);
+    // "the auth gate" — `auth` and `gate` are both 4 letters and both resolve,
+    // so length alone can't choose. A stable sort kept the earlier one, which
+    // is the modifier; the head noun (what the question is about) is last.
+    const r = ask(dir, "who calls the auth gate");
+    assert.equal(r.mode, "structural");
+    assert.equal(r.subject, "gate");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+// ── Structural truncation is announced, not silent ─────────────────────────
+
+/** One `target` with 12 callers spread across files, so a small `limit` has to
+ * drop most of them. */
+function manyCallersFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-many-"));
+  writeFileSync(join(dir, "target.ts"), `export function target(): number {\n  return 0;\n}\n`);
+  for (let i = 0; i < 12; i++) {
+    writeFileSync(
+      join(dir, `caller${i}.ts`),
+      `import { target } from "./target";\nexport function caller${i}(): number {\n  return target();\n}\n`,
+    );
+  }
+  return dir;
+}
+
+test("ask: a structural answer cut down to `limit` says how many it dropped", async () => {
+  const dir = manyCallersFixture();
+  try {
+    await buildGraph(dir);
+    // Every structural hit scores 1 and they are ordered by path, so this is
+    // not a "top 5" — it is the 5 whose paths sort first. Returning them under
+    // a note that reads like a complete answer is how a refactor ships with
+    // callers nobody looked at.
+    const cut = ask(dir, "who calls target", { limit: 5 });
+    assert.equal(cut.mode, "structural");
+    assert.equal(cut.hits.length, 5);
+    assert.match(cut.note ?? "", /showing 5 of \d+/);
+    assert.match(cut.note ?? "", /ordered by path, not relevance/);
+    assert.match(cut.note ?? "", /graft callers 'target'/);
+    assert.match(formatAsk(cut), /showing 5 of \d+/, "the count has to reach the rendered pack too");
+
+    // Nothing dropped -> the note stays exactly as it was.
+    const whole = ask(dir, "who calls target", { limit: 100 });
+    assert.equal(whole.note, "callers / references of target");
+  } finally {
+    rmDir(dir);
+  }
+});
+
+test("skeleton: a native-separator path resolves like the posix one", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-skel-sep-"));
+  try {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "api.ts"), `export function first(a: number): number {\n  return a;\n}\n`);
+    await buildGraph(dir);
+    // `node.path` is always posix; `join` produces `src\api.ts` on Windows,
+    // which is what an agent (or a Windows tool) actually types. That used to
+    // compare unequal to every node and report "no definitions indexed".
+    const native = skeleton(dir, join("src", "api.ts"));
+    assert.deepEqual(native.entries.map((e) => e.name), ["first"], native.note ?? "");
+    assert.equal(native.file, "src/api.ts");
+    assert.deepEqual(native, skeleton(dir, "src/api.ts"));
+  } finally {
+    rmDir(dir);
   }
 });

@@ -151,6 +151,19 @@ test("resolveSymbol: file nodes are matched as a last resort for filename-shaped
   assert.deepEqual(matches.map((n) => n.id), ["src/file.ts"]);
 });
 
+test("resolveSymbol: a filename query is matched with native separators too", () => {
+  const g = baseGraph();
+  // `graft_trace_calls`'s schema says "a file path also works", and on Windows the
+  // path an agent has in hand (from a tool result, or from tab-completion) is
+  // `src\file.ts` — which matched no `node.path` at all and read as "symbol not
+  // found". `join` rather than a literal `\`, for the same reason the `--in` test
+  // above uses it: normalization is keyed to the platform separator.
+  assert.deepEqual(
+    resolveSymbol(g, join("src", "file.ts")).map((n) => n.id),
+    ["src/file.ts"],
+  );
+});
+
 test("resolveSymbol: unknown symbol returns empty array", () => {
   const g = baseGraph();
   assert.deepEqual(resolveSymbol(g, "NoSuchSymbol"), []);
@@ -226,7 +239,10 @@ test("callersOf / calleesOf: no edges → empty array", () => {
 
 // ── impactOf ─────────────────────────────────────────────────────────────
 
-function diamondGraph(): GraphV1 {
+/** The graph plus the seed node every caller walks from — declared as the pair it
+ * returns. It used to claim `GraphV1` and then double-cast the pair back, so the
+ * annotation and the value disagreed and neither side was checked. */
+function diamondGraph(): { node: NodeV1; graph: GraphV1 } {
   const X = nodeStub({ id: "X", name: "X" });
   const A = nodeStub({ id: "A", name: "A" });
   const B = nodeStub({ id: "B", name: "B" });
@@ -237,7 +253,7 @@ function diamondGraph(): GraphV1 {
       [X, A, B, C],
       [edge("A", "X", "calls"), edge("B", "X", "calls"), edge("C", "A", "calls"), edge("C", "B", "calls")],
     ),
-  } as unknown as { node: NodeV1; graph: GraphV1 };
+  };
 }
 
 test("impactOf: BFS over incoming edges, diamond converges to one hit, deduped at min depth", () => {

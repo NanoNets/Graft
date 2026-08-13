@@ -12,6 +12,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { writeBuildConfig } from "../src/util/state.js";
 import type { GraphV1, NodeV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 const MAIN_GO = `package main
 
@@ -92,7 +93,7 @@ test("Go extraction: funcs, methods, structs, interfaces, type aliases", async (
     assert.equal(nodeById(graph!, "main.go#Reader")?.kind, "interface");
     assert.equal(nodeById(graph!, "main.go#ID")?.kind, "type");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -127,7 +128,7 @@ test("Go extraction: call and import edges", async () => {
     );
     assert.ok(external, "fmt should remain an external package string");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -163,7 +164,7 @@ test("Go extraction: go.mod in a subdirectory resolves intra-module imports", as
       "fmt should remain an external package string",
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
 
@@ -200,6 +201,6 @@ test("A5: a go.mod under a persisted --include-dir override is found, so imports
     );
     assert.ok(!external, "must not be left as an unresolved external package string once the module is found");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   }
 });
