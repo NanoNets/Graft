@@ -10,12 +10,13 @@ import Parser from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import Python from "tree-sitter-python";
 import Go from "tree-sitter-go";
+import Java from "tree-sitter-java";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
 import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
-export type Language = "typescript" | "tsx" | "python" | "go";
+export type Language = "typescript" | "tsx" | "python" | "go" | "java";
 
 /**
  * Extension → the tree-sitter grammar that parses it, and the label a human expects
@@ -44,11 +45,17 @@ const EXTENSIONS: ReadonlyArray<{ ext: string; grammar: Language; label: string 
   { ext: ".pyi", grammar: "python", label: "python" },
   { ext: ".py", grammar: "python", label: "python" },
   { ext: ".go", grammar: "go", label: "go" },
+  { ext: ".java", grammar: "java", label: "java" },
 ];
 
 function entryFor(path: string): (typeof EXTENSIONS)[number] | undefined {
   const p = path.toLowerCase();
   return EXTENSIONS.find((e) => p.endsWith(e.ext));
+}
+
+/** Every file extension a depth-tier (hand-written) extractor claims. */
+export function depthExtensions(): string[] {
+  return EXTENSIONS.map((e) => e.ext);
 }
 
 /** Map a file path to a supported language, or null if unsupported. */
@@ -80,6 +87,11 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
+  /** calls: the number of arguments at the CALL SITE. Only emitted for languages
+   * with overloading (Java), where a same-named sibling on the same class is
+   * otherwise indistinguishable — and picking wrong turns a delegating overload
+   * into a self-loop. */
+  argCount?: number;
 }
 
 export interface ExtractResult {
@@ -149,11 +161,44 @@ const GO_KINDS: Record<string, Kind> = {
   method_declaration: "method",
 };
 
+// Java: a record is a nominal data carrier, so it takes "struct" — the same role
+// Go's struct plays — rather than "class", which would make a service and a DTO
+// indistinguishable in a repo where DTOs are most of the type surface.
+const JAVA_KINDS: Record<string, Kind> = {
+  class_declaration: "class",
+  interface_declaration: "interface",
+  enum_declaration: "enum",
+  record_declaration: "struct",
+  annotation_type_declaration: "interface",
+  method_declaration: "method",
+  constructor_declaration: "method",
+};
+
+/** Java type declarations: they set `enclosingClass` for the methods nested in them,
+ * which "class"-only logic would miss for a record's or interface's members. */
+const JAVA_TYPE_KINDS: ReadonlySet<Kind> = new Set<Kind>(["class", "interface", "enum", "struct"]);
+
 const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
   typescript: TS_KINDS,
   tsx: TS_KINDS,
   python: PY_KINDS,
   go: GO_KINDS,
+  java: JAVA_KINDS,
+};
+
+/**
+ * The node type(s) that constitute a call site, per language.
+ *
+ * Java is the reason this is a set rather than a string: `method_invocation` and
+ * `object_creation_expression` (`new Foo()`) are separate node types, and a Java
+ * codebase's constructor calls are a large share of its real edges.
+ */
+const CALL_TYPES: Record<Language, ReadonlySet<string>> = {
+  typescript: new Set(["call_expression"]),
+  tsx: new Set(["call_expression"]),
+  python: new Set(["call"]),
+  go: new Set(["call_expression"]),
+  java: new Set(["method_invocation", "object_creation_expression"]),
 };
 
 const FUNCTION_VALUE_TYPES = new Set([
@@ -169,6 +214,7 @@ const GRAMMARS: Record<Language, unknown> = {
   tsx: TypeScript.tsx,
   python: Python,
   go: Go,
+  java: Java,
 };
 
 export interface WalkCtx {
@@ -192,6 +238,8 @@ interface DefDescriptor {
   kind: Kind;
   headerEnd: number; // char index where the signature ends (body starts)
   hashNode: Parser.SyntaxNode; // node whose text forms body_hash / span
+  arity?: number; // declared parameter count — overload disambiguation (Java)
+  variadic?: boolean; // last parameter is a vararg, so `arity` is a minimum
 }
 
 /** tree-sitter's string `parse()` fails with "Invalid argument" on any input
@@ -297,7 +345,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
-            : tsExported(node),
+            : ctx.lang === "java"
+              ? javaExported(node)
+              : tsExported(node),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -305,13 +355,22 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       summary: null,
       crux: null,
       ...(owner !== undefined ? { owner } : {}),
+      ...(desc.arity !== undefined ? { arity: desc.arity } : {}),
+      ...(desc.variadic ? { variadic: true } : {}),
     });
     // structural containment
     edges.push({ source: ctx.parentId, relation: "contains", targetId: id, file: ctx.rel });
-    // class heritage
-    if (desc.kind === "class") edges.push(...heritageEdges(node, id, ctx));
+    // class heritage — in Java an interface may also `extends`, and a record/enum
+    // may `implements`, so every type declaration is a heritage site, not just a class.
+    const javaTypeDecl = ctx.lang === "java" && JAVA_TYPE_KINDS.has(desc.kind);
+    if (desc.kind === "class" || javaTypeDecl) edges.push(...heritageEdges(node, id, ctx));
 
-    const enclosingClass = desc.kind === "class" ? desc.name : isGoMethod ? goReceiverType(node) : ctx.enclosingClass;
+    const enclosingClass =
+      desc.kind === "class" || javaTypeDecl
+        ? desc.name
+        : isGoMethod
+          ? goReceiverType(node)
+          : ctx.enclosingClass;
     const childCtx: WalkCtx = {
       ...ctx,
       scope: [...ctx.scope, idPart],
@@ -329,8 +388,8 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
   }
 
   // not a definition — capture calls/imports/references, then descend with the same context
-  const callType = ctx.lang === "python" ? "call" : "call_expression";
-  if (node.type === callType) {
+  const callTypes = CALL_TYPES[ctx.lang];
+  if (callTypes.has(node.type)) {
     const callee = calleeName(node, ctx.lang);
     if (callee) {
       const callEdge: RawEdge = {
@@ -340,6 +399,9 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         viaMember: callee.viaMember,
         file: ctx.rel,
       };
+      // Java only: the call site's argument count, to pick the right overload.
+      const argCount = ctx.lang === "java" ? javaArgCount(node) : undefined;
+      if (argCount !== undefined) callEdge.argCount = argCount;
       const recvType = resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
@@ -351,7 +413,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     return;
   } else if (
     node.type === "identifier" &&
-    !isDirectCallee(node, callType) &&
+    !isDirectCallee(node, callTypes) &&
     !isDeclarationName(node)
   ) {
     const imported = ctx.importedSymbols.get(node.text);
@@ -453,10 +515,13 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
   );
 }
 
-/** A direct invocation already emits a stronger `calls` edge. */
-function isDirectCallee(node: Parser.SyntaxNode, callType: string): boolean {
+/** A direct invocation already emits a stronger `calls` edge. Java names the callee
+ * in a `name` field (there is no `function` field on `method_invocation`), so both
+ * spellings count. */
+function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
-  return parent?.type === callType && parent.childForFieldName("function") === node;
+  if (!parent || !callTypes.has(parent.type)) return false;
+  return parent.childForFieldName("function") === node || parent.childForFieldName("name") === node;
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
@@ -469,6 +534,7 @@ function isDeclarationName(node: Parser.SyntaxNode): boolean {
  * TS arrow-consts. */
 function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
   if (ctx.lang === "go") return describeGo(node, ctx);
+  if (ctx.lang === "java") return describeJava(node, ctx);
 
   const mapped = ctx.kinds[node.type];
   if (mapped) {
@@ -543,6 +609,46 @@ function describeGo(node: Parser.SyntaxNode, _ctx: WalkCtx): DefDescriptor | nul
   return null;
 }
 
+/** Java definition shapes. Uniform in a way Go's are not: every declaration carries
+ * a `name` field and (for types and most members) a `body`, so one mapped lookup
+ * covers classes, interfaces, enums, records, methods, and constructors. Methods are
+ * lexically nested in their type, so — unlike Go — they need no receiver qualification. */
+function describeJava(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
+  const mapped = ctx.kinds[node.type];
+  if (!mapped) return null;
+  const name = node.childForFieldName("name")?.text;
+  if (!name) return null;
+  const body = node.childForFieldName("body");
+  const desc: DefDescriptor = {
+    name,
+    kind: mapped,
+    headerEnd: body ? body.startIndex : node.endIndex,
+    hashNode: node,
+  };
+  // Only callables carry arity. A record declaration also has a `parameters` node,
+  // but its components are not an overload set and must never be filtered against.
+  if (node.type === "method_declaration" || node.type === "constructor_declaration") {
+    const params = node.childForFieldName("parameters");
+    if (params) {
+      const declared = params.namedChildren.filter(
+        (c) => c.type === "formal_parameter" || c.type === "spread_parameter",
+      );
+      desc.arity = declared.length;
+      if (declared.some((c) => c.type === "spread_parameter")) desc.variadic = true;
+    }
+  }
+  return desc;
+}
+
+/** Java visibility: `public` (or `protected`) on the declaration's own modifier list.
+ * A package-private or private member is not part of the API surface. Read off the
+ * `modifiers` child's tokens, ignoring annotations, which live in the same node. */
+function javaExported(node: Parser.SyntaxNode): boolean {
+  const mods = node.namedChildren.find((c) => c.type === "modifiers");
+  if (!mods) return false;
+  return mods.children.some((c) => c.type === "public" || c.type === "protected");
+}
+
 /** The receiver's base type name for a Go method, unwrapping a pointer receiver
  * (`func (u *User) …` → `User`). Null if it can't be read. */
 function goReceiverType(node: Parser.SyntaxNode): string | null {
@@ -563,6 +669,24 @@ function goExported(name: string): boolean {
 
 function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): RawEdge[] {
   const edges: RawEdge[] = [];
+  if (ctx.lang === "java") {
+    // `superclass` holds `extends X`; `super_interfaces` holds `implements A, B`
+    // (and, on an interface declaration, `extends A, B` — which tree-sitter-java
+    // still spells `extends_interfaces`).
+    for (const child of node.namedChildren) {
+      const relation: Relation | null =
+        child.type === "superclass"
+          ? "extends"
+          : child.type === "super_interfaces" || child.type === "extends_interfaces"
+            ? "implements"
+            : null;
+      if (!relation) continue;
+      for (const t of typeIdentifiersIn(child)) {
+        edges.push({ source: classId, relation, name: t, file: ctx.rel });
+      }
+    }
+    return edges;
+  }
   if (ctx.lang === "python") {
     const supers = node.childForFieldName("superclasses"); // argument_list
     for (const c of supers?.namedChildren ?? []) {
@@ -590,10 +714,44 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
   return edges;
 }
 
+/** Every `type_identifier` under a heritage clause, so `implements A, B<C>` yields
+ * each named type rather than the clause's raw text. */
+function typeIdentifiersIn(node: Parser.SyntaxNode): string[] {
+  const out: string[] = [];
+  const visit = (n: Parser.SyntaxNode): void => {
+    if (n.type === "type_identifier") out.push(n.text);
+    for (const c of n.namedChildren) visit(c);
+  };
+  visit(node);
+  return out;
+}
+
 function calleeName(
   node: Parser.SyntaxNode,
   lang: Language,
 ): { name: string; viaMember: boolean; receiver?: string } | null {
+  // Java first: `method_invocation` has NO `function` field (it splits the callee
+  // into `object` + `name`), so the shared lookup below would return null for every
+  // Java call site and the language would extract nodes with no call edges at all.
+  if (lang === "java") {
+    if (node.type === "object_creation_expression") {
+      // `new Foo()` — the constructed type is the call target.
+      const t = node.childForFieldName("type");
+      return t ? { name: t.text, viaMember: false } : null;
+    }
+    const nameNode = node.childForFieldName("name");
+    if (!nameNode) return null;
+    const obj = node.childForFieldName("object");
+    // No `object` means an implicit-`this` call (`decorate(name)`), which in Java is a
+    // method call, not a free function — Java has none. Reporting it as a plain call
+    // would send it to the function-only resolver and drop it, losing the most common
+    // intra-class edge there is. Spelling it as a `this` member call routes it through
+    // owner-qualified resolution, which also walks the superclass chain and stays
+    // conservative: an unmatched name (e.g. a static import) resolves to nothing.
+    if (!obj) return { name: nameNode.text, viaMember: true, receiver: "this" };
+    return { name: nameNode.text, viaMember: true, receiver: javaReceiver(obj) };
+  }
+
   const fn = node.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return { name: fn.text, viaMember: false };
@@ -613,6 +771,30 @@ function calleeName(
     return p ? { name: p.text, viaMember: true, receiver: tsReceiver(fn) } : null;
   }
   return null;
+}
+
+/** The number of arguments at a Java call site (`method_invocation` or
+ * `object_creation_expression`), read off the `arguments` list. Undefined when the
+ * list is absent, which keeps resolution at its previous name-only behavior rather
+ * than filtering on a count we never established. */
+function javaArgCount(node: Parser.SyntaxNode): number | undefined {
+  const args = node.childForFieldName("arguments");
+  return args ? args.namedChildren.length : undefined;
+}
+
+/** A Java call's receiver text: a bare identifier (`repo.save()`), `this`, or
+ * `this.x` for a field access (`this.repo.save()`). A chained call or a qualified
+ * static reference yields none — there is no confident local clue to bind. */
+function javaReceiver(obj: Parser.SyntaxNode | null | undefined): string | undefined {
+  if (!obj) return undefined;
+  if (obj.type === "identifier") return obj.text;
+  if (obj.type === "this") return "this";
+  if (obj.type === "field_access") {
+    const inner = obj.childForFieldName("object");
+    const field = obj.childForFieldName("field");
+    if (inner?.type === "this" && field) return `this.${field.text}`;
+  }
+  return undefined;
 }
 
 /** py `attribute` node's receiver text: bare identifier, or `self.x` for a
@@ -645,6 +827,7 @@ function isImport(node: Parser.SyntaxNode, lang: Language): boolean {
   // Go: match the per-import leaf, so single (`import "fmt"`) and grouped
   // (`import ( … )`) forms each yield one edge as the walk recurses into the list.
   if (lang === "go") return node.type === "import_spec";
+  if (lang === "java") return node.type === "import_declaration";
   return node.type === "import_statement" || node.type === "import_from_statement";
 }
 
@@ -659,6 +842,15 @@ function importSpecifier(node: Parser.SyntaxNode, lang: Language): string | null
     // import_spec's `path` is an interpreted_string_literal, e.g. `"mymod/pkg/util"`.
     const path = node.childForFieldName("path") ?? node.namedChildren.at(-1);
     return path ? path.text.replace(/^["`]|["`]$/g, "") : null;
+  }
+  if (lang === "java") {
+    // `import a.b.C;` / `import static a.b.C.d;` / `import a.b.*;` — the fully
+    // qualified name is the scoped_identifier; a wildcard `*` is a separate token
+    // and is dropped, leaving the package as the import target.
+    const id = node.namedChildren.find(
+      (c) => c.type === "scoped_identifier" || c.type === "identifier",
+    );
+    return id?.text ?? null;
   }
   const str = node.namedChildren.find((c) => c.type === "string");
   if (!str) return null;

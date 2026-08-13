@@ -11,8 +11,30 @@ import { resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { relPosix } from "../util/paths.js";
 import { readFollowSubmodules, readIncludeDirs } from "../util/state.js";
-import { languageOf } from "./extract.js";
-import { genericLangOf } from "./generic.js";
+import { languageOf, depthExtensions } from "./extract.js";
+import { genericLangOf, genericExtensions } from "./generic.js";
+
+/** Every extension graft has a parser for (depth + breadth), sorted and de-duped —
+ * the authoritative answer to "what does `-e` actually support". */
+export function supportedExtensions(): string[] {
+  return [...new Set([...depthExtensions(), ...genericExtensions()])].sort();
+}
+
+/** Normalize a user-supplied extension: ensure a leading dot, lower-case. */
+function normExt(e: string): string {
+  const t = e.trim().toLowerCase();
+  return t.startsWith(".") ? t : `.${t}`;
+}
+
+/**
+ * The subset of user-supplied `-e` extensions that no parser claims (depth or breadth).
+ * `graft build -e ".vue"` used to accept these silently and index nothing; the CLI warns
+ * on whatever this returns so an unsupported extension is never a quiet no-op.
+ */
+export function unsupportedExtensions(exts: string[]): string[] {
+  const supported = new Set(supportedExtensions());
+  return exts.filter((e) => !supported.has(normExt(e)));
+}
 
 /**
  * The source files a graph build parses: supported languages, minus the

@@ -43,6 +43,9 @@ const FN_VALUE_TYPES = new Set(["arrow_function", "function", "function_expressi
  * same scope key extract.ts's walk will look it up with), or null if `node`
  * isn't a definition. */
 export function defName(node: Parser.SyntaxNode, lang: Language): string | null {
+  if (lang === "java") {
+    return JAVA_DEF_TYPES.has(node.type) ? (node.childForFieldName("name")?.text ?? null) : null;
+  }
   if (lang === "go") {
     if (node.type === "method_declaration") {
       const name = node.childForFieldName("name")?.text;
@@ -122,11 +125,32 @@ export function resolveRecvType(
 
 function isClassNode(node: Parser.SyntaxNode, lang: Language): boolean {
   if (lang === "python") return node.type === "class_definition";
+  if (lang === "java") return JAVA_TYPE_DECLS.has(node.type);
   if (lang === "typescript" || lang === "tsx") {
     return node.type === "class_declaration" || node.type === "abstract_class_declaration";
   }
   return false;
 }
+
+/** Java declarations that push a scope segment — mirrors extract.ts's JAVA_KINDS. */
+const JAVA_DEF_TYPES: ReadonlySet<string> = new Set([
+  "class_declaration",
+  "interface_declaration",
+  "enum_declaration",
+  "record_declaration",
+  "annotation_type_declaration",
+  "method_declaration",
+  "constructor_declaration",
+]);
+
+/** The subset of the above that owns `this.field` bindings. */
+const JAVA_TYPE_DECLS: ReadonlySet<string> = new Set([
+  "class_declaration",
+  "interface_declaration",
+  "enum_declaration",
+  "record_declaration",
+  "annotation_type_declaration",
+]);
 
 /** Pass 1 over a parsed file: collect variable->type bindings. Pure. */
 export function collectBindings(root: Parser.SyntaxNode, lang: Language): FileBindings {
@@ -169,6 +193,7 @@ function visit(
 ): void {
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
+  else if (lang === "java") handleJava(node, scope, classScope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -282,6 +307,64 @@ function handleTs(
     const typeName = tsAnnotationTypeName(node.childForFieldName("type"), aliases);
     if (typeName) bindings.set(scopePath, pattern.text, typeName);
   }
+}
+
+/**
+ * Java bindings: locals, parameters, and fields.
+ *
+ * Java looks like the easy case — it is statically typed, so a declaration states
+ * its own type with no inference needed. In practice modern Java leans on `var`,
+ * which carries no type at the declaration site, so those locals bind nothing and
+ * their calls fall back to name-only resolution exactly as in TS/Python.
+ *
+ * Fields are recorded twice: bare (`repo.save()`) and `self.`-prefixed
+ * (`this.repo.save()`), since resolveRecvType normalizes `this.` to `self.`.
+ */
+function handleJava(
+  node: Parser.SyntaxNode,
+  scope: string[],
+  classScope: string | null,
+  bindings: FileBindings,
+): void {
+  const scopePath = scope.join(".");
+
+  if (node.type === "formal_parameter") {
+    const type = javaTypeName(node.childForFieldName("type"));
+    const name = node.childForFieldName("name");
+    if (type && name?.type === "identifier") bindings.set(scopePath, name.text, type);
+    return;
+  }
+
+  if (node.type !== "local_variable_declaration" && node.type !== "field_declaration") return;
+
+  const type = javaTypeName(node.childForFieldName("type"));
+  if (!type) return; // `var` — no type at the declaration site
+  const isField = node.type === "field_declaration";
+  const target = isField ? (classScope ?? scopePath) : scopePath;
+
+  for (const d of node.namedChildren) {
+    if (d.type !== "variable_declarator") continue;
+    const name = d.childForFieldName("name");
+    if (name?.type !== "identifier") continue;
+    bindings.set(target, name.text, type);
+    if (isField) bindings.set(target, `self.${name.text}`, type);
+  }
+}
+
+/** A Java type node's bare name. `var` is the inferred-local keyword and states no
+ * type, so it binds nothing. A generic binds to its erasure (`List<Order>` → `List`),
+ * and a qualified type to its final segment (`java.util.List` → `List`). */
+function javaTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "type_identifier") return node.text === "var" ? null : node.text;
+  if (node.type === "generic_type") {
+    const base = node.namedChildren[0];
+    return base ? javaTypeName(base) : null;
+  }
+  if (node.type === "scoped_type_identifier") {
+    return node.namedChildren.at(-1)?.text ?? null;
+  }
+  return null;
 }
 
 function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {

@@ -192,11 +192,11 @@ compiler-grade layer — all `$0` and deterministic (no model, no key):
 
 - **Full-fidelity** — hand-written extractors with scope-aware, cross-file call
   and import resolution:
-  **TypeScript / JavaScript** (incl. JSX & TSX), **Python**, **Go**.
+  **TypeScript / JavaScript** (incl. JSX & TSX), **Python**, **Go**, **Java**.
 
 - **Broad** — symbols (functions, classes, methods, types, …) plus name-resolved
   call edges via a generic tree-sitter extractor, one grammar per language:
-  **Rust, Java, C, C++, C#, Ruby, PHP, Kotlin, Scala, Swift, Elixir, Solidity,
+  **Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala, Swift, Elixir, Solidity,
   OCaml, Zig, Dart**.
 
 - **Compiler-grade edges (opt-in)** — `graft build --lsp` adds precise
@@ -373,6 +373,8 @@ graft init --list-agents             # list known agent ids and exit
 
 graft version                        # print the installed + latest published npm version
 graft upgrade                        # npm install -g the latest published version
+                                     # a new version is announced automatically (checked once a day);
+                                     # after upgrading, the next session refreshes this repo's wiring itself
 
 # global
 graft --dir <path>                   # use a context dir other than <repo>/graft

@@ -5,6 +5,8 @@
 import { createInterface } from 'node:readline';
 import { TOOLS, callTool } from './tools.js';
 import { mcpInstructions } from './instructions.js';
+import { runUpkeep } from '../upkeep-run.js';
+import { runningVersion } from '../upkeep.js';
 
 function send(msg: object): void {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -24,6 +26,15 @@ function replyError(id: unknown, code: number, message: string): void {
  * lookup misses. The caller already knows it.
  */
 export function startMcpServer(root: string, dirOverride?: string, version = '0'): void {
+  // The self-maintenance pass, run once at boot. This is the ONLY channel that
+  // reaches hosts with no hook support (Cursor, and any plain MCP client): it
+  // refreshes rule files an older `graft init` wrote, and kicks off the cached
+  // registry check. Both are fail-soft, and the resulting lines ride along in
+  // `instructions` below — stdout is protocol-only, so there is nowhere else to
+  // put them. Never blocks: the registry fetch happens in a detached child.
+  const upkeep = runUpkeep(root, runningVersion()).lines;
+  for (const line of upkeep) console.error(line);
+
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on('line', (line) => {
     const text = line.trim();
@@ -44,7 +55,7 @@ export function startMcpServer(root: string, dirOverride?: string, version = '0'
           capabilities: { tools: {} },
           serverInfo: { name: 'graft', version },
           // The one channel that survives tool deferral — see ./instructions.ts.
-          instructions: mcpInstructions(),
+          instructions: upkeep.length ? `${upkeep.join('\n')}\n\n${mcpInstructions()}` : mcpInstructions(),
         });
         return;
       case 'notifications/initialized':

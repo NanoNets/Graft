@@ -187,7 +187,7 @@ test('formatPlan separates repo writes from machine-wide ones', () => {
   const globalAt = text.indexOf('affects ALL repos:');
   assert.ok(repoAt >= 0 && globalAt > repoAt, 'repo section comes first');
   assert.ok(text.includes(`~${sep}${join('.codex', 'hooks.json')}`), `plan should name the codex hooks file:\n${text}`);
-  assert.match(text, /PostToolUse: Write\|Edit\|MultiEdit/);
+  assert.match(text, /SessionStart \/ UserPromptSubmit \/ PostToolUse \/ Stop/);
   assert.match(text, /nothing was written \(--dry-run\)/);
   assert.match(text, /--no-global/);
 });

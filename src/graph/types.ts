@@ -76,6 +76,14 @@ export interface NodeV1 {
   //                 the code — not just the name/signature — is findable; never
   //                 emitted to the agent (that reads verbatim source via `--source`).
   //                 Absent on file nodes and on graphs built before this field.
+  arity?: number; // declared parameter count (method/constructor nodes). Disambiguates
+  //                 OVERLOADS, which only Java has among the languages parsed here: two
+  //                 same-named methods on one class are otherwise separable only by
+  //                 arity, and picking the wrong one turns a delegating overload into a
+  //                 self-loop. Absent on graphs built before this field, and on
+  //                 languages that do not emit it — resolution then behaves as before.
+  variadic?: boolean; // the last parameter is a vararg (`String... xs`), so the declared
+  //                 arity is a MINIMUM, not an equality. Never arity-filtered out.
 
   // meaning (Tier-2, one LLM call)
   summary_state: SummaryState;

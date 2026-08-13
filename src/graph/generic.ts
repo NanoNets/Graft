@@ -70,6 +70,11 @@ export function genericLangOf(path: string): GenericLang | null {
   return null;
 }
 
+/** Every file extension a breadth-tier (generic tree-sitter) grammar claims. */
+export function genericExtensions(): string[] {
+  return GENERIC_LANGS.flatMap((l) => l.exts);
+}
+
 // tags.scm @definition.<X>  →  graft Kind (types.ts). Unmapped → "function".
 const KIND: Record<string, Kind> = {
   function: "function", method: "method", class: "class", interface: "interface",
@@ -215,7 +220,102 @@ export function extractGeneric(rel: string, source: string, langName: string): E
   } else {
     walkExtract(tree.rootNode as TsNode, mkDef); // no tags.scm → symbols only
   }
+  // The preprocessor is invisible to tags.scm, but in C/C++ a local `#include "x.h"`
+  // IS the dependency graph — capture it as a file→file import. Likewise a Rust
+  // `use crate::…` is an in-crate module dependency.
+  if (langName === "c" || langName === "cpp") extractIncludes(tree.rootNode as TsNode, rel, rawEdges);
+  else if (langName === "rust") extractUses(tree.rootNode as TsNode, rel, rawEdges);
+  else if (langName === "php") extractPhpUses(tree.rootNode as TsNode, rel, rawEdges);
   return { nodes, rawEdges };
+}
+
+/** PHP `use App\Models\User;` → a file→class-file `imports` raw edge, one per imported
+ * name (a `{ … }` group expands to several). `use function`/`use const` are skipped —
+ * those name a symbol, not a PSR-4 class file. resolve.ts settles the fully-qualified
+ * name to the in-repo file by namespace suffix, and drops it when it can't. */
+function extractPhpUses(root: TsNode, rel: string, rawEdges: RawEdge[]): void {
+  const visit = (n: TsNode): void => {
+    if (n.type === "namespace_use_declaration") {
+      for (const fqn of phpUseNames(n.text)) rawEdges.push({ source: rel, relation: "imports", specifier: fqn, file: rel });
+    }
+    for (let i = 0; i < (n.namedChildCount ?? 0); i++) {
+      const c = n.namedChild?.(i);
+      if (c) visit(c);
+    }
+  };
+  visit(root);
+}
+
+/** The fully-qualified class names a PHP `use` declaration imports. Handles a plain
+ * `use A\B\C;`, a comma list `use A\B, C\D;`, a group `use A\B\{C, D};`, and `as` aliases;
+ * returns [] for `use function`/`use const` (symbol imports, not class files). */
+function phpUseNames(text: string): string[] {
+  let s = text.replace(/^\s*use\s+/, "").replace(/;\s*$/, "").trim();
+  if (/^(function|const)\b/.test(s)) return [];
+  const brace = s.indexOf("{");
+  if (brace >= 0) {
+    const prefix = s.slice(0, brace).replace(/\\\s*$/, "");
+    const inner = s.slice(brace + 1, s.lastIndexOf("}"));
+    return inner.split(",").map((m) => m.trim().replace(/\s+as\s+\w+$/i, "").trim()).filter(Boolean)
+      .map((m) => `${prefix}\\${m}`);
+  }
+  return s.split(",").map((c) => c.trim().replace(/\s+as\s+\w+$/i, "").trim()).filter(Boolean);
+}
+
+/** Rust `use crate::a::b::Item` → a file→module `imports` raw edge whose specifier is the
+ * crate-relative module path (`a/b`). Only in-crate imports are captured; `std::`,
+ * `super::`, `self::`, external crates, and globs are skipped — resolve.ts settles the
+ * path against the file's crate root, and drops it when it can't. */
+function extractUses(root: TsNode, rel: string, rawEdges: RawEdge[]): void {
+  const visit = (n: TsNode): void => {
+    if (n.type === "use_declaration") {
+      const spec = rustUseModule(n.text);
+      if (spec !== null) rawEdges.push({ source: rel, relation: "imports", specifier: spec ? `crate/${spec}` : "crate", file: rel });
+    }
+    for (let i = 0; i < (n.namedChildCount ?? 0); i++) {
+      const c = n.namedChild?.(i);
+      if (c) visit(c);
+    }
+  };
+  visit(root);
+}
+
+/** The crate-relative path a Rust `use crate::…` names (`::`→`/`), or null when it is not
+ * an in-crate import. The FULL path is returned — including any trailing item segment —
+ * because a single `crate::lexical` can be either a module OR a crate-root item; the
+ * resolver settles that by finding the longest prefix that is a real module file. A
+ * `{ … }` group has no single item, so its prefix (before `{`) is the path. */
+function rustUseModule(text: string): string | null {
+  let s = text.replace(/^\s*use\s+/, "").replace(/;\s*$/, "").trim();
+  const brace = s.indexOf("{");
+  if (brace >= 0) s = s.slice(0, brace).replace(/::\s*$/, "");
+  else s = s.replace(/\s+as\s+\w+$/, "");
+  s = s.trim();
+  if (s !== "crate" && !s.startsWith("crate::")) return null; // only in-crate absolute imports
+  if (s.includes("*")) return null; // glob — no single module target
+  return s.replace(/^crate::?/, "").replace(/\s+/g, "").replace(/::/g, "/"); // "" = crate root
+}
+
+/** C/C++ `#include "header.h"` → a file→file `imports` raw edge. Only LOCAL includes
+ * (quoted) are captured; system includes (`<stdio.h>`) are skipped — high volume, and
+ * there is no in-repo target to navigate to. resolve.ts settles the quoted path to an
+ * in-repo header (relative to the including file, else a unique path-suffix match), and
+ * keeps it as an external string when it cannot — never a guessed edge. */
+function extractIncludes(root: TsNode, rel: string, rawEdges: RawEdge[]): void {
+  const visit = (n: TsNode): void => {
+    if (n.type === "preproc_include") {
+      const raw = n.childForFieldName?.("path")?.text ?? "";
+      if (raw.startsWith('"')) {
+        const spec = raw.replace(/^"|"$/g, "").trim();
+        if (spec) rawEdges.push({ source: rel, relation: "imports", specifier: spec, file: rel });
+      }
+    }
+    for (let i = 0; i < (n.namedChildCount ?? 0); i++) {
+      const c = n.namedChild?.(i);
+      if (c) visit(c);
+    }
+  };
+  visit(root);
 }
 
 /** tags.scm path: @definition.<kind> → nodes, @reference.call/@reference.send →
@@ -235,6 +335,7 @@ function tagsExtract(
   // producing bogus self-loops (foo→foo). Skip any call at a definition's name token.
   const defNameAt = new Set<number>();
   const calls: Array<{ name: string; at: number }> = [];
+  const refs: Array<{ name: string; at: number }> = [];
   for (const m of matches) {
     const cap: Record<string, TsNode> = {};
     for (const c of m.captures) cap[c.name] = c.node;
@@ -245,13 +346,32 @@ function tagsExtract(
     }
     if (("reference.call" in cap || "reference.send" in cap) && cap.name)
       calls.push({ name: cap.name.text, at: cap.name.startIndex });
+    // Structural references the grammar already marks: a supertype (extends), an
+    // implemented interface, an object creation (`new Foo`), a module alias. Grammars
+    // label these @reference.class/.interface/.implementation/.module — heterogeneous
+    // syntactically but all "names this symbol without calling it". They become
+    // `references` edges the same precision-first resolver settles to a type-like def
+    // (same-file certain, unique cross-file inferred, ambiguous dropped), so a data
+    // class that's only ever extended or instantiated stops being an orphan.
+    if (("reference.class" in cap || "reference.interface" in cap ||
+         "reference.implementation" in cap || "reference.module" in cap) && cap.name)
+      refs.push({ name: cap.name.text, at: cap.name.startIndex });
   }
+  // innermost enclosing definition of a token at byte offset `at`
+  const enclosing = (at: number) =>
+    defs
+      .filter((d) => d.startIndex <= at && at < d.endIndex)
+      .sort((a, b) => (a.endIndex - a.startIndex) - (b.endIndex - b.startIndex))[0];
   for (const c of calls) {
     if (defNameAt.has(c.at)) continue;
-    const enc = defs
-      .filter((d) => d.startIndex <= c.at && c.at < d.endIndex)
-      .sort((a, b) => (a.endIndex - a.startIndex) - (b.endIndex - b.startIndex))[0];
+    const enc = enclosing(c.at);
     rawEdges.push({ source: enc ? enc.id : rel, relation: "calls", file: rel, name: c.name });
+  }
+  for (const r of refs) {
+    if (defNameAt.has(r.at)) continue;
+    const enc = enclosing(r.at);
+    if (!enc) continue; // a reference with no enclosing definition has no sound source
+    rawEdges.push({ source: enc.id, relation: "references", file: rel, name: r.name });
   }
 }
 

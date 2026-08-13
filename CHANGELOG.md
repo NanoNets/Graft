@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.11.0
+
+### Fixed
+
+- **`npm install -g @nanonets/graft@latest` could silently do nothing.** The
+  generated shims (`.claude/helpers/graft-*.cjs`, and Codex's
+  `~/.codex/hooks/graft/`) locate the installed package at runtime from four
+  candidates, and took the *first* one that existed. The first is the absolute
+  `dist/claude` path graft happened to be running from when `graft init` ran, so
+  switching Node versions (nvm/volta) or moving the install left that directory
+  on disk — still first, still winning — and the upgrade replaced a directory
+  the shim never looked at. The upgrade appeared to succeed and changed nothing.
+  The shims now read each candidate's `package.json` and load the
+  **highest-versioned** one. The `npm root -g` subprocess is still reached only
+  when all three cheap candidates miss, so hook latency is unchanged.
+
+### Added
+
+- **The wiring now follows the binary.** `graft init` writes files *into* a repo
+  (hooks, shims, skill, rule files) and into `~/.codex`; upgrading the npm
+  package replaced the binary and touched none of them, so a repo wired by 0.7
+  kept 0.7's prompts and 0.7's hook timeouts indefinitely — and nothing
+  agent-facing ever mentions `graft init`, so no agent would think to re-run it.
+  `graft init` now records a stamp (version, hosts, flags) in
+  `graft/.cache/wiring-stamp.json`; every entry point compares it against the
+  running binary and re-runs the writes on a mismatch. Hosts come from the union
+  of the stamp and what's on disk, so a rule file that went missing is restored
+  rather than dropped from all future refreshes. The init flags are replayed, so
+  a repo wired with `--no-global` or `--no-hooks` keeps that choice. The refresh
+  never builds the graph (it runs at session start, where a rebuild would stall
+  the first turn) and is fail-soft throughout.
+- **An upgrade nudge.** A machine-global 24h cache
+  (`~/.graft/update-check.json` — one registry request a day per machine, not
+  per repo), filled by a detached `graft _update-check` child, feeds a one-line
+  "newer version available" notice. Hooks only ever *read* that cache; the CLI
+  and the MCP server are the fillers, because a hook that shelled out to
+  `npm view` would spend its whole timeout on the network.
+- Both run from one shared code path, called at three entry points so no host
+  is left out: Claude Code's `SessionStart` hook, the MCP server's `initialize`
+  (the only channel that reaches Cursor, which has no hooks — the lines ride in
+  `instructions`, since stdout carries protocol messages only), and a CLI
+  `preAction` hook for every command except `version`, `upgrade`, `mcp` and
+  `_update-check`.
+
 ## 0.9.0
 
 ### Added
