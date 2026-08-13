@@ -22,7 +22,7 @@
  * LLM and without re-reading every node body.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import matter from "gray-matter";
 import { contentHash, normalizeName } from "../util/id.js";
 import { relPosix, stripTrailingSlashes } from "../util/paths.js";
@@ -99,9 +99,18 @@ export function digestSources(sources: SourceRef[]): string {
 
 /** Absolute path of the `graft/` directory for a repo root. Visible (not
  * dot-prefixed) on purpose: default ripgrep skips hidden dirs, so the agent's
- * grep/ls/find reflex must be able to land on the graph. */
+ * grep/ls/find reflex must be able to land on the graph.
+ *
+ * The override is `resolve`d because the return value is contractually absolute and
+ * every consumer relies on it being so: `listSourceFiles` excludes the output dir
+ * with `f.startsWith(outDir)` against absolute walk results, and `ensureGitignored`
+ * / `ensureSearchable` decide whether the dir is even inside the repo via
+ * `relPosix(root, contextDir)`. Hand a relative `--dir`/`GRAFT_DIR` (and
+ * `.env.example` suggests exactly one) straight through and both silently invert:
+ * the prefix test never matches, so graft indexes its own output, and the ignore
+ * files get written for a path relative to the process's cwd rather than the repo. */
 export function contextDirFor(root: string, override?: string): string {
-  if (override) return override;
+  if (override) return resolve(override);
   return join(root, "graft");
 }
 

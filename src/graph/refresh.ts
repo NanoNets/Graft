@@ -31,7 +31,7 @@
  * too — it copies the parent checkout's graph in (`./seed.ts`) and then treats the
  * difference between the two checkouts as ordinary drift, which is exactly what it is.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { acquireLockIn, releaseLockIn } from "../util/state.js";
@@ -103,11 +103,64 @@ export function releaseOnSignal(cache: string): () => void {
   };
 }
 
+/**
+ * The lock file `acquireLockIn` writes. Duplicated from `util/state.ts` rather than
+ * exported from it because only this file has a reason to look *inside* the lock.
+ */
+const LOCK_FILE = ".sync.lock";
+
+/**
+ * Drop a lock whose owning process is gone. Returns true when one was reclaimed.
+ *
+ * `releaseOnSignal` above is the happy path, and it does not cover Windows: the OS
+ * has no SIGTERM, so `child.kill('SIGTERM')` terminates the process outright and
+ * neither the signal handler nor `process.on('exit')` ever runs — verified on Win11
+ * / Node 22, where the file the child created was still there afterwards. A hard
+ * kill (`SIGKILL`, a crash, a laptop that lost power mid-build) does the same thing
+ * on every platform. Either way the lock outlives its owner, and until it ages out
+ * at `LOCK_STALE_MS` — five minutes — every query waits `LOCK_WAIT_MS` and then
+ * answers stale with "a graph rebuild is already in flight". One timed-out prompt
+ * hook was enough to cost five minutes of degraded answers.
+ *
+ * `acquireLockIn` already records `{pid, at}`, so the ownership question is
+ * answerable without waiting: signal 0 checks for a live process without touching
+ * it. Everything unknown is read as "still alive" and left to the mtime rule —
+ * EPERM (a live process we don't own), a malformed file, a pid from another machine
+ * on a shared filesystem. Reclaiming a lock we shouldn't would let two builds write
+ * the same graph at once; declining to reclaim one only costs the old five minutes.
+ */
+export function reclaimDeadLock(cache: string): boolean {
+  const p = join(cache, LOCK_FILE);
+  let pid: unknown;
+  try {
+    pid = (JSON.parse(readFileSync(p, "utf8")) as { pid?: unknown }).pid;
+  } catch {
+    return false; // no lock, or one written by a version that didn't record a pid
+  }
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return false; // ours; releasing it here would be a bug
+  try {
+    process.kill(pid, 0);
+    return false; // answered => alive
+  } catch (e: any) {
+    if (e?.code !== "ESRCH") return false; // EPERM and friends: alive, just not ours
+  }
+  try {
+    rmSync(p);
+    return true;
+  } catch {
+    return false; // another process reclaimed it first — either way it's gone
+  }
+}
+
 /** Wait out someone else's rebuild, then take the lock. False when we couldn't. */
 async function waitForLock(cache: string): Promise<boolean> {
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     if (acquireLockIn(cache)) return true;
+    // Only after a failed acquire, so the common path (no lock at all) never reads
+    // the file. Re-checked every poll: the holder can die inside our wait window.
+    if (reclaimDeadLock(cache) && acquireLockIn(cache)) return true;
     if (Date.now() >= deadline) return false;
     await sleep(LOCK_POLL_MS);
   }

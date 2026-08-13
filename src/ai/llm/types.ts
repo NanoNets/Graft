@@ -91,6 +91,16 @@ export interface ChatRequest {
   temperature?: number;
   /** Max output tokens. Required by Anthropic; adapters supply a default. */
   maxTokens?: number;
+  /**
+   * Extended reasoning, when the provider has it. Omitting this inherits the
+   * provider's own default, which on current Claude models is ADAPTIVE thinking —
+   * and thinking is billed against the same `maxTokens` as the answer. A caller
+   * asking for structured extraction under a tight budget must say
+   * `{ kind: "disabled" }` explicitly or risk spending the whole budget on
+   * reasoning and getting an empty turn back. Providers with no thinking mode
+   * (the OpenAI wire format) ignore this.
+   */
+  thinking?: { kind: "disabled" } | { kind: "enabled"; budgetTokens: number };
 }
 
 export interface ChatResponse {
@@ -101,6 +111,25 @@ export interface ChatResponse {
   stopReason: string | null;
   /** The assistant turn as a neutral message — push straight back into `messages`. */
   assistant: Message;
+}
+
+/**
+ * The wire values that mean "I ran out of output budget mid-answer": `length` on
+ * the OpenAI wire format, `max_tokens` on the Messages API and the Claude CLI.
+ */
+const TRUNCATED_STOP_REASONS = new Set(["length", "max_tokens"]);
+
+/**
+ * Did the model get cut off before it finished?
+ *
+ * Every engine op MUST ask, because a truncated turn is not a cheap failure: the
+ * partial (often empty) text gets written into the content-hash cache and is
+ * replayed as a hit forever, and a turn cut before its `tool_use` block parses as
+ * "the model had nothing to say" rather than as an error. Both look like success
+ * at the call site and neither is ever retried.
+ */
+export function isTruncated(res: ChatResponse): boolean {
+  return res.stopReason !== null && TRUNCATED_STOP_REASONS.has(res.stopReason);
 }
 
 /**

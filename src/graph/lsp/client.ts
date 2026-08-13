@@ -28,6 +28,27 @@ export interface CallHierarchyItem {
 
 const uriOf = (abs: string): string => pathToFileURL(abs).toString();
 
+/**
+ * Windows cannot `CreateProcess` a `.cmd`/`.bat` file, and since the
+ * CVE-2024-27980 patch Node refuses to try (EINVAL) — so the two servers that
+ * install through npm, `typescript-language-server` and `pyright-langserver`, could
+ * not be spawned at all on the platform even once the registry started finding
+ * them. Running the shim as a `cmd.exe` command line is the supported route.
+ *
+ * `shell: true` is deliberately NOT the fix: it would re-parse a path that may
+ * contain spaces (`C:\Program Files\…`) and the server's own args. Quoting each
+ * argument exactly once, ourselves, is what keeps that safe — the same shape
+ * `ai/llm/claude-cli.ts` uses for the `claude` shim.
+ */
+function spawnArgv(command: string, args: string[]): { file: string; argv: string[]; verbatim: boolean } {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(command)) {
+    return { file: command, argv: args, verbatim: false };
+  }
+  const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const line = [quote(command), ...args.map(quote)].join(" ");
+  return { file: process.env.ComSpec ?? "cmd.exe", argv: ["/d", "/s", "/c", `"${line}"`], verbatim: true };
+}
+
 export class LspClient {
   private proc: ChildProcessWithoutNullStreams;
   private conn: MessageConnection;
@@ -42,7 +63,13 @@ export class LspClient {
     private readonly languageId: string,
     private readonly callTimeoutMs = 15000,
   ) {
-    this.proc = spawn(command, args, { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
+    const launch = spawnArgv(command, args);
+    this.proc = spawn(launch.file, launch.argv, {
+      cwd: root,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: launch.verbatim,
+      windowsHide: true,
+    });
     // ENOENT (bad path) OR an immediate exit (e.g. a rustup shim whose component
     // isn't installed) must fail fast, not hang a request for the full timeout.
     this.proc.on("error", () => { this.spawnFailed = true; });

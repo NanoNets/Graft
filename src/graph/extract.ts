@@ -192,10 +192,17 @@ const KINDS_BY_LANG: Record<Language, Record<string, Kind>> = {
  * Java is the reason this is a set rather than a string: `method_invocation` and
  * `object_creation_expression` (`new Foo()`) are separate node types, and a Java
  * codebase's constructor calls are a large share of its real edges.
+ *
+ * `new_expression` is here for the same reason Java's `object_creation_expression` is:
+ * `new Foo()` is how a TS/JS module actually depends on a class, and it is NOT a
+ * `call_expression`, so before this no raw edge existed for it at all. The only path
+ * left was `references`, which needs a NAMED import — meaning a class instantiated in
+ * its own file was invisible, and instantiating an imported class produced a weaker
+ * edge than calling a function from the same module did.
  */
 const CALL_TYPES: Record<Language, ReadonlySet<string>> = {
-  typescript: new Set(["call_expression"]),
-  tsx: new Set(["call_expression"]),
+  typescript: new Set(["call_expression", "new_expression"]),
+  tsx: new Set(["call_expression", "new_expression"]),
   python: new Set(["call"]),
   go: new Set(["call_expression"]),
   java: new Set(["method_invocation", "object_creation_expression"]),
@@ -269,7 +276,13 @@ export function extractFile(rel: string, source: string, lang: Language): Extrac
       exported: true,
       origin: "ast",
       body_hash: contentHash(source),
-      chars: source.length,
+      // BYTES, not UTF-16 code units. types.ts documents `chars` as "byte length of the
+      // WHOLE file" and generic.ts writes `Buffer.byteLength`, so `source.length` here
+      // made the same field mean two different things across the two tiers. The `ask`
+      // savings estimate divides it by 4 for a token count and compares tiers directly:
+      // an accented or CJK-heavy .py file under-reported against an equivalent .rs one.
+      // ASCII source is identical either way, which is exactly why it went unnoticed.
+      chars: Buffer.byteLength(source),
       summary_state: "pending",
       summary: null,
       crux: null,
@@ -363,7 +376,14 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // class heritage — in Java an interface may also `extends`, and a record/enum
     // may `implements`, so every type declaration is a heritage site, not just a class.
     const javaTypeDecl = ctx.lang === "java" && JAVA_TYPE_KINDS.has(desc.kind);
-    if (desc.kind === "class" || javaTypeDecl) edges.push(...heritageEdges(node, id, ctx));
+    // A TS `interface X extends Y` is a heritage site too. Gating on `class` alone left
+    // interface hierarchies — the actual type backbone of a typed TS codebase — with no
+    // `extends` edges at all, while Java's and Python's had them.
+    const tsInterfaceDecl =
+      (ctx.lang === "typescript" || ctx.lang === "tsx") && desc.kind === "interface";
+    if (desc.kind === "class" || javaTypeDecl || tsInterfaceDecl) {
+      edges.push(...heritageEdges(node, id, ctx));
+    }
 
     const enclosingClass =
       desc.kind === "class" || javaTypeDecl
@@ -402,6 +422,18 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       // Java only: the call site's argument count, to pick the right overload.
       const argCount = ctx.lang === "java" ? javaArgCount(node) : undefined;
       if (argCount !== undefined) callEdge.argCount = argCount;
+      // When the callee is a NAMED IMPORT, the source states exactly which module and
+      // which exported name it meant — so hand both to the resolver instead of making it
+      // guess from the bare name. This is what keeps `new Repo()` on an imported class
+      // from being dropped the moment some other `Repo` exists elsewhere in the repo:
+      // bare-name resolution treats a globally ambiguous name as unknowable, and here it
+      // isn't. Member calls are excluded — the name is a property of a receiver, not the
+      // imported binding itself.
+      const importedCallee = callee.viaMember ? undefined : ctx.importedSymbols.get(callee.name);
+      if (importedCallee) {
+        callEdge.name = importedCallee.name;
+        callEdge.specifier = importedCallee.specifier;
+      }
       const recvType = resolveRecvType(callee.receiver, ctx);
       edges.push(recvType ? { ...callEdge, recvType } : callEdge);
     }
@@ -521,12 +553,25 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
   if (!parent || !callTypes.has(parent.type)) return false;
-  return parent.childForFieldName("function") === node || parent.childForFieldName("name") === node;
+  return (
+    parent.childForFieldName("function") === node ||
+    parent.childForFieldName("name") === node ||
+    // TS `new Foo()` spells its callee in a `constructor` field; without this the same
+    // instantiation would emit both a `calls` and a `references` edge for one syntax.
+    parent.childForFieldName("constructor") === node
+  );
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
+  // A JSX element's TAG is its parent's `name` field — `<Button />` is a
+  // `jsx_self_closing_element` whose `name` is the identifier `Button` — so the field
+  // test below classified the single most common use of an imported symbol in a .tsx
+  // file as a declaration and silently dropped it. `<Button/>` is not a call_expression
+  // either, so nothing else picked it up: in a React/Next app that meant most real
+  // inter-file dependencies were missing and every component looked like an orphan.
+  if (parent?.type.startsWith("jsx_")) return false;
   return parent?.childForFieldName("name") === node;
 }
 
@@ -706,12 +751,50 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
           : null;
     if (!relation) continue;
     for (const t of clause.namedChildren) {
-      if (t.type === "identifier" || t.type === "type_identifier") {
-        edges.push({ source: classId, relation, name: t.text, file: ctx.rel });
-      }
+      const name = heritageNameOf(t);
+      if (name) edges.push({ source: classId, relation, name, file: ctx.rel });
+    }
+  }
+  // An interface's supertypes do NOT live under a `class_heritage`: tree-sitter-typescript
+  // hangs an `extends_type_clause` directly off the `interface_declaration`, so looking
+  // only for `class_heritage` above found nothing for every interface in the repo.
+  for (const clause of node.namedChildren) {
+    if (clause.type !== "extends_type_clause") continue;
+    for (const t of clause.namedChildren) {
+      const name = heritageNameOf(t);
+      if (name) edges.push({ source: classId, relation: "extends", name, file: ctx.rel });
     }
   }
   return edges;
+}
+
+/**
+ * The type a heritage-clause element names, or null when it doesn't name one plainly.
+ *
+ * tree-sitter spells the same supertype differently by clause: an `extends_clause` on a
+ * class holds an EXPRESSION (`identifier`), while `implements_clause` and
+ * `extends_type_clause` hold TYPES (`type_identifier`) — so both spellings count.
+ *
+ * `Foo<T>` arrives as a `generic_type`, which matched neither and so dropped the whole
+ * supertype: `implements Repository<User>` had no edge, and generic base types are the
+ * norm in the TS code that has interfaces at all. Only the base name is taken — the type
+ * ARGUMENTS are not supertypes, and emitting `User` there would be a fabricated edge.
+ *
+ * An expression form (`class A extends mixin(Base)`) stays null on purpose: which of the
+ * names in it is the supertype is a guess, and this extractor does not guess.
+ */
+function heritageNameOf(node: Parser.SyntaxNode): string | null {
+  if (node.type === "identifier" || node.type === "type_identifier") return node.text;
+  if (node.type === "generic_type") {
+    const base = node.childForFieldName("name");
+    return base ? heritageNameOf(base) : null;
+  }
+  if (node.type === "nested_type_identifier") {
+    // `extends ns.Base` — the trailing segment is the type; the namespace is not.
+    const last = node.namedChildren.at(-1);
+    return last?.type === "type_identifier" ? last.text : null;
+  }
+  return null;
 }
 
 /** Every `type_identifier` under a heritage clause, so `implements A, B<C>` yields
@@ -750,6 +833,21 @@ function calleeName(
     // conservative: an unmatched name (e.g. a static import) resolves to nothing.
     if (!obj) return { name: nameNode.text, viaMember: true, receiver: "this" };
     return { name: nameNode.text, viaMember: true, receiver: javaReceiver(obj) };
+  }
+
+  // TS/JS `new Foo()` — the constructed type is the target, and it lives in a
+  // `constructor` field rather than the `function` field the shared lookup below reads.
+  // `new pkg.Foo()` yields the trailing segment; anything more exotic (`new klass()` on
+  // a variable, `new (pick())()`) names no type we can stand behind, so it drops.
+  if (node.type === "new_expression") {
+    const ctor = node.childForFieldName("constructor");
+    if (!ctor) return null;
+    if (ctor.type === "identifier") return { name: ctor.text, viaMember: false };
+    if (ctor.type === "member_expression") {
+      const prop = ctor.childForFieldName("property");
+      return prop ? { name: prop.text, viaMember: false } : null;
+    }
+    return null;
   }
 
   const fn = node.childForFieldName("function");

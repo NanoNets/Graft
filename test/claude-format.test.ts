@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderStatusline, incomingEdges, formatBlastRadius, formatRetrieval, formatOrientation, renderSubagent, relevantRetrieval, INJECT_MIN_COVERAGE, NUDGE_CAP } from '../src/claude/format.js';
-import { emptyStats } from '../src/claude/state.js';
+import { emptyStats, type SessionState } from '../src/claude/state.js';
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -93,7 +93,10 @@ const gateAsk = (over: Record<string, unknown> = {}) => ({
   ],
   ...over,
 }) as any;
-const freshSession = () => ({ lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [] as string[] });
+// Typed as SessionState, not inferred: `nudges` is deliberately absent so these
+// tests also cover a session file written before that field existed, and only the
+// annotation proves the rest of the fixture still matches what the hook reads.
+const freshSession = (): SessionState => ({ lastQuery: null, perAgentQuery: {}, graftReads: 0, sourceReads: 0, savedTokens: 0, injectedPointers: [] });
 
 test('relevantRetrieval injects on good coverage and records pointers', () => {
   const s = freshSession();
@@ -186,7 +189,7 @@ test('formatOrientation prepends a staleness banner when one is supplied', () =>
 });
 
 test('renderSubagent shows agent name and its last query', () => {
-  const out = strip(renderSubagent('Explore', { lastQuery: null, perAgentQuery: { Explore: 'pkce flow' }, graftReads: 0, sourceReads: 0 }));
+  const out = strip(renderSubagent('Explore', { ...freshSession(), perAgentQuery: { Explore: 'pkce flow' } }));
   assert.match(out, /Explore/);
   assert.match(out, /pkce flow/);
 });

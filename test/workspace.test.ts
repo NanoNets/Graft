@@ -19,8 +19,10 @@ import {
   federateGrep,
   isWorkspaceBuildRoot,
 } from "../src/graph/workspace.js";
+import { keepGoingOnChildFailure } from "../src/graph/workspace-cli.js";
 import { formatAsk } from "../src/ask/ask.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 /** A parent dir with git children (each a `.git` dir + one source file). */
 function workspaceFx(children: Record<string, Record<string, string>>): string {
@@ -59,14 +61,14 @@ function pad(n: number): string {
 test("isWorkspaceBuildRoot: ≥2 git children, no own .git → workspace", () => {
   const p = workspaceFx(REPOS);
   assert.equal(isWorkspaceBuildRoot(p), true);
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("isWorkspaceBuildRoot: own .git (submodules) → NOT a workspace", () => {
   const p = workspaceFx(REPOS);
   mkdirSync(join(p, ".git"), { recursive: true });
   assert.equal(isWorkspaceBuildRoot(p), false);
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("child built via parent is byte-identical to building it standalone", async () => {
@@ -76,12 +78,12 @@ test("child built via parent is byte-identical to building it standalone", async
   const viaParent = readFileSync(wiringPath(childGraft), "utf8");
 
   // Rebuild the same child standalone — deterministic writer, same source.
-  rmSync(childGraft, { recursive: true, force: true });
+  rmDir(childGraft);
   await buildGraph(join(p, "repoA"));
   const standalone = readFileSync(wiringPath(childGraft), "utf8");
 
   assert.equal(viaParent, standalone);
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("workspace.json lists both children; parent holds no mega-graph", async () => {
@@ -92,7 +94,7 @@ test("workspace.json lists both children; parent holds no mega-graph", async () 
   // Parent graft holds ONLY workspace.json — no .graph/wiring.json.
   assert.equal(existsSync(wiringPath(contextDirFor(p))), false);
   assert.equal(existsSync(join(contextDirFor(p), "workspace.json")), true);
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("ask at the parent federates hits from both children, labeled <child>/", async () => {
@@ -105,7 +107,7 @@ test("ask at the parent federates hits from both children, labeled <child>/", as
   // Pointers are child-prefixed so they open from the parent.
   assert.ok(r.hits.some((h) => h.pointer.startsWith("repoA/")));
   assert.ok(r.hits.some((h) => h.pointer.startsWith("repoB/")));
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("ask inside a single child = standalone (no federation scopes)", async () => {
@@ -116,7 +118,7 @@ test("ask inside a single child = standalone (no federation scopes)", async () =
   assert.equal(r.scopes, undefined); // single-scope repo → no scope labels
   assert.ok(r.hits.length > 0);
   assert.ok(!r.hits.some((h) => h.pointer.startsWith("repoA/"))); // paths are child-relative
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("migration: mega-graph parent split → .graph removed, workspace.json written, exact note", async () => {
@@ -139,7 +141,7 @@ test("migration: mega-graph parent split → .graph removed, workspace.json writ
     migrationNote(["repoA", "repoB"]),
     "⚠ this folder contains 2 separate git repos — splitting: each repo now gets its own committable graft/ (repoA/graft/, repoB/graft/); the combined graph here is replaced by a workspace index. Queries from here now search all repos, fairly.",
   );
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("check federation: OK when all in sync, STALE + not-ok when a child drifts", async () => {
@@ -156,7 +158,7 @@ test("check federation: OK when all in sync, STALE + not-ok when a child drifts"
   const drifted = await federateCheck(p);
   assert.equal(drifted.ok, false);
   assert.ok(drifted.text.includes("repoA/: STALE"));
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("callers federation resolves a symbol per child, grouped", async () => {
@@ -165,7 +167,7 @@ test("callers federation resolves a symbol per child, grouped", async () => {
   const { text, found } = federateCallers(p, undefined, "helperThing", {});
   assert.equal(found, true);
   assert.ok(text.includes("## repoA/"));
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("grep federation merges groups across children with child-prefixed paths", async () => {
@@ -176,7 +178,54 @@ test("grep federation merges groups across children with child-prefixed paths", 
   const paths = result.groups.map((g) => g.path);
   assert.ok(paths.some((p) => p.startsWith("repoA/")));
   assert.ok(paths.some((p) => p.startsWith("repoB/")));
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
+});
+
+test("grep federation applies --in: one child, and a path prefix inside it", async () => {
+  const p = workspaceFx({
+    repoA: {
+      "src/a.ts": "export function alphaHandler() { return 1; }\n",
+      "tests/a.test.ts": "export function alphaHandlerSpec() { return 1; }\n",
+    },
+    repoB: { "b.ts": "export function betaHandler() { return 2; }\n" },
+  });
+  await buildWorkspace(p);
+
+  // Federation forwarded ignoreCase/fixed only, so `--in repoA` searched repoB
+  // too — and every path came back child-prefixed, which made the wider answer
+  // look deliberate rather than wrong.
+  const scoped = federateGrep(p, undefined, "Handler", { ignoreCase: true, in: "repoA" });
+  const paths = scoped.result.groups.map((g) => g.path);
+  assert.ok(paths.length > 0, JSON.stringify(paths));
+  assert.ok(paths.every((x) => x.startsWith("repoA/")), JSON.stringify(paths));
+
+  // Past the first segment the rest is that child's own path prefix — the same
+  // spelling `federateAsk --in` takes.
+  const inner = federateGrep(p, undefined, "Handler", { ignoreCase: true, in: "repoA/src" });
+  assert.deepEqual(inner.result.groups.map((g) => g.path), ["repoA/src/a.ts"]);
+
+  // A first segment naming no child is a caller mistake, not an empty result.
+  assert.throws(() => federateGrep(p, undefined, "Handler", { in: "nope" }), /no workspace repo "nope"/);
+  rmDir(p);
+});
+
+test("grep federation spends ONE hit budget and one clock across the children", async () => {
+  const p = workspaceFx(REPOS);
+  await buildWorkspace(p);
+
+  // Each child used to be handed the full cap, so a workspace could return
+  // maxHits × children — from a cap whose whole job is bounding one answer.
+  const capped = federateGrep(p, undefined, "Handler", { ignoreCase: true, maxHits: 1 });
+  assert.equal(capped.result.totalHits, 1);
+  assert.ok(capped.result.truncated.hits >= 1, JSON.stringify(capped.result.truncated));
+
+  // And an exhausted wall clock is reported, not lost: `truncated` was rebuilt as
+  // `{files, hits}` on this path, so a federated scan that gave up looked exactly
+  // like one that had searched everything and found nothing.
+  const outOfTime = federateGrep(p, undefined, "Handler", { ignoreCase: true, budgetMs: 0 });
+  assert.equal(outOfTime.result.truncated.timeout, true);
+  assert.equal(outOfTime.result.totalHits, 0);
+  rmDir(p);
 });
 
 test("one unbuilt child is surfaced, not silently skipped", async () => {
@@ -186,7 +235,7 @@ test("one unbuilt child is surfaced, not silently skipped", async () => {
   });
   await buildWorkspace(p);
   // Simulate repoC never having been built.
-  rmSync(contextDirFor(join(p, "repoC")), { recursive: true, force: true });
+  rmDir(contextDirFor(join(p, "repoC")));
 
   const wg = loadWorkspaceGraphs(p);
   assert.deepEqual(wg.loaded.map((l) => l.child), ["repoA", "repoB"]);
@@ -195,7 +244,7 @@ test("one unbuilt child is surfaced, not silently skipped", async () => {
     coverageNote(wg),
     "2 of 3 workspace repos have graphs; run graft build to cover repoC",
   );
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 const JUNK = {
@@ -214,7 +263,7 @@ test("federated ask: a junk-body-token child is gated out of the ranking, into a
   assert.ok(!titles.some((t) => t.startsWith("renderPanel")), `junk hit must NOT federate:\n${titles.join("\n")}`);
   assert.ok(r.hits.every((h) => h.scope!.startsWith("repoA")), "only repoA federates");
   assert.deepEqual(r.scopes?.alsoMatched.map((m) => m.scope), ["repoB"], "junk child reported in alsoMatched");
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("federated ask: a genuinely-shared query still federates both children", async () => {
@@ -223,7 +272,7 @@ test("federated ask: a genuinely-shared query still federates both children", as
   const r = federateAsk(p, undefined, "handler", { limit: 8 });
   const scopeSet = new Set(r.hits.map((h) => h.scope!.split("/")[0]));
   assert.ok(scopeSet.has("repoA") && scopeSet.has("repoB"), "both children federate a shared term");
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("federated ask: --in <child> narrows to that child; --in <unknown> errors listing repos", async () => {
@@ -238,7 +287,7 @@ test("federated ask: --in <child> narrows to that child; --in <unknown> errors l
     () => federateAsk(p, undefined, "handler", { in: "nope" }),
     /no workspace repo "nope".*repoA.*repoB/s,
   );
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("federated ask: explicit --in <weak child> bypasses the cross-child gate (footer hint is reachable)", async () => {
@@ -258,12 +307,14 @@ test("federated ask: explicit --in <weak child> bypasses the cross-child gate (f
   const scoped = federateAsk(p, undefined, "scrollbar overlay position", { limit: 8, in: "repoJunk" });
   assert.ok(scoped.hits.length > 0, "explicit --in on a gate-weak child must not return empty");
   assert.ok(scoped.hits.every((h) => h.scope!.startsWith("repoJunk")), "--in repoJunk stays in repoJunk");
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 for (const padN of [0, 200]) {
   test(`strength gate: body-only junk (\`position\`) gated out at ${padN ? "~200" : "~30"}-node scale`, async () => {
-    const strongPad = padN ? { "pad.ts": pad(padN) } : {};
+    // Annotated: the inferred type of the branch is `{ "pad.ts"?: undefined }` on
+    // the 0 side, which is not a valid file map to spread into a child's fixture.
+    const strongPad: Record<string, string> = padN ? { "pad.ts": pad(padN) } : {};
     const p = workspaceFx({
       repoStrong: { "m.ts": "export function scrollbarOverlay() { return computeThumb(); }\nfunction computeThumb() { return 1; }\n", ...strongPad },
       repoJunk: { "m.ts": "export function drawFrame() { const position = 0; return position; }\nfunction helper() { return 1; }\n", ...strongPad },
@@ -275,7 +326,7 @@ for (const padN of [0, 200]) {
     assert.ok(!titles.some((t) => t.startsWith("drawFrame")), `body-only junk must NOT federate:\n${titles.join("\n")}`);
     assert.ok(r.hits.every((h) => h.scope!.startsWith("repoStrong")), "only the strong child federates");
     assert.deepEqual(r.scopes?.alsoMatched.map((m) => m.scope), ["repoJunk"], "junk reported in alsoMatched");
-    rmSync(p, { recursive: true, force: true });
+    rmDir(p);
   });
 }
 
@@ -291,7 +342,7 @@ test("strength gate: 3-child payment/gateway/refund — strong + mid federate, i
   assert.ok(scopes.has("repoStrong") && scopes.has("repoMid"), "genuine name matches federate");
   assert.ok(!scopes.has("repoJunk"), "incidental-var junk excluded from the ranking");
   assert.ok(r.scopes?.alsoMatched.some((m) => m.scope === "repoJunk"), "junk reported in alsoMatched");
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 test("strength gate: a legit COMMON-term (low-idf) name match is NOT overcorrected out", async () => {
@@ -304,7 +355,7 @@ test("strength gate: a legit COMMON-term (low-idf) name match is NOT overcorrect
   await buildWorkspace(p);
   const r = federateAsk(p, undefined, "config loader", { limit: 8 });
   assert.ok(r.hits.some((h) => h.scope!.startsWith("repoConfig")), "real partial-relevance (low-idf name hit) must still federate");
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });
 
 for (const [kind, junkFiles] of [
@@ -321,9 +372,46 @@ for (const [kind, junkFiles] of [
     assert.ok(r.hits[0]?.title.startsWith("paymentGatewayRefund"), `strong repo's real hit must be #1, got: ${r.hits[0]?.title}`);
     assert.ok(!r.hits.some((h) => h.scope!.startsWith("repoJunk")), "coincidental path-name junk must NOT federate");
     assert.ok(r.scopes?.alsoMatched.some((m) => m.scope === "repoJunk"), "junk reported in alsoMatched");
-    rmSync(p, { recursive: true, force: true });
+    rmDir(p);
   });
 }
+
+// One child failing used to reject splitWorkspace's await chain, reach
+// parseAsync().catch → process.exit(1), and leave every LATER child unbuilt. The
+// failures that really happen here (expired key, 429) hit every child alike, so
+// that is the worst possible moment to abandon the queue.
+test("a failing child is reported and skipped — the rest of the workspace still builds", async () => {
+  const p = workspaceFx({
+    repoA: { "a.ts": "export const a = 1;\n" },
+    repoB: { "b.ts": "export const b = 2;\n" },
+    repoC: { "c.ts": "export const c = 3;\n" },
+  });
+  const built: string[] = [];
+  const failed: string[] = [];
+  const errs: string[] = [];
+  const realError = console.error;
+  console.error = (msg?: unknown) => void errs.push(String(msg));
+  try {
+    const { children } = await splitWorkspace(
+      p,
+      undefined,
+      keepGoingOnChildFailure(async (_childDir, name) => {
+        if (name === "repoB") throw new Error("429 rate limited");
+        built.push(name);
+      }, failed),
+    );
+    assert.deepEqual(children, ["repoA", "repoB", "repoC"]);
+    assert.deepEqual(built, ["repoA", "repoC"], "repoC is queued AFTER the failure and must still be built");
+    assert.deepEqual(failed, ["repoB"], "recorded, so the caller can still exit non-zero");
+    assert.ok(
+      errs.some((e) => e.includes("repoB") && e.includes("429")),
+      `the reason must reach the user, got ${JSON.stringify(errs)}`,
+    );
+  } finally {
+    console.error = realError;
+    rmDir(p);
+  }
+});
 
 test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   const p = mkdtempSync(join(tmpdir(), "ws-"));
@@ -332,5 +420,5 @@ test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   assert.equal(readWorkspace(p), null);
   writeWorkspace(p, { version: 1, children: ["x", "a"] });
   assert.deepEqual(readWorkspace(p), { version: 1, children: ["a", "x"] });
-  rmSync(p, { recursive: true, force: true });
+  rmDir(p);
 });

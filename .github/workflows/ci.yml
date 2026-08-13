@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
     # Windows is not redundant coverage here: graft stores repo-relative paths and
     # parses them with `/` by hand, so a platform-separator leak matches nothing
     # rather than erroring. That class of bug is invisible to a posix-only matrix
@@ -19,11 +19,67 @@ jobs:
     # earned it immediately — it caught npx detection never firing on Windows and a
     # seeded worktree silently losing its freshness record. `fail-fast: false` so a
     # Windows-only failure still reports the Linux result.
+    #
+    # The Node dimension used to be pinned to a single '20' while engines said
+    # ">=20" (open-ended) and @types/node is ^26 — tsc happily accepts an API that
+    # only exists in a newer runtime, so what most users actually run (22/24) was
+    # never executed. Pull requests run the FLOOR only (that is where an
+    # engines/dependency break shows up, and it keeps the PR bill at two legs);
+    # push to main fans out to the whole supported range before anything can be
+    # published from it.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node: ${{ fromJSON(github.event_name == 'push' && '["20","22","24"]' || '["20"]') }}
     runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Guards the promise in engines.node. `commander@15` (node >=22.12) sat in a
+      # package declaring ">=20" for a full release; on an .npmrc with
+      # engine-strict=true that is an install failure, not a warning.
+      - name: Check engine contract
+        run: npm run check:engines
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # test/ was never type-checked (tsx strips types without checking), so it
+      # starts with a real backlog — 31 errors when this was switched on. Reported,
+      # not gating, until that reaches zero; flipping it to a gate is a one-line
+      # change once it does.
+      - name: Typecheck tests (non-blocking)
+        continue-on-error: true
+        run: npm run typecheck:tests
+
+  package:
+    # Nothing in `test` ever runs the *packaged* artifact: the suite imports src/
+    # through tsx, so anything that only exists in dist/ is untested until after a
+    # publish. That is worst for the breadth tier's .scm queries, which
+    # build-viewer.mjs copies by hand — src/graph/generic.ts falls back to
+    # src/graph/queries when dist/ lacks them, so from a checkout the query is
+    # ALWAYS found, and an installed user just silently loses every generic-tier
+    # language ("degrades to a file node only, never throws"). This job installs
+    # the tarball into a clean prefix and proves the breadth tier still produces
+    # nodes for a language (Rust) that exists only there.
+    name: packaged artifact
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -39,5 +95,64 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test
-        run: npm test
+      - name: Build
+        run: npm run build
+
+      - name: Assert the tarball carries every runtime asset
+        run: npm run check:package
+
+      - name: Pack and install into a clean prefix
+        run: |
+          npm pack
+          mkdir -p "$RUNNER_TEMP/prefix"
+          npm i -g --prefix "$RUNNER_TEMP/prefix" ./nanonets-graft-*.tgz
+          echo "$RUNNER_TEMP/prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Smoke the installed binary on a generic-tier language
+        run: |
+          graft --version
+          mkdir -p "$RUNNER_TEMP/fixture/src"
+          cat > "$RUNNER_TEMP/fixture/src/lib.rs" <<'RS'
+          pub struct Config { pub name: String }
+          pub fn load() -> Config { parse(); Config { name: String::new() } }
+          fn parse() -> String { String::new() }
+          RS
+          cd "$RUNNER_TEMP/fixture"
+          graft build .
+          node -e '
+            const g = JSON.parse(require("fs").readFileSync("graft/.graph/wiring.json", "utf8"));
+            const rust = g.nodes.filter((n) => n.path.endsWith(".rs") && n.kind !== "file");
+            if (rust.length === 0) {
+              console.error("✗ the packaged build produced no Rust symbols — dist/graph/queries is incomplete");
+              process.exit(1);
+            }
+            console.log(`✓ ${rust.length} Rust symbols from the installed package`);
+          '
+
+  quality:
+    # scripts/graph-quality.mjs advertised itself as a "CI gate" while no workflow
+    # ran it. Dogfooding graft on graft is the cheapest deterministic oracle we
+    # have: a malformed span, a dangling edge or a kind the extractor invented
+    # fails here instead of in a user's graph.
+    name: graph quality (dogfood)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build graft's own graph
+        run: npx tsx src/cli.ts build .
+
+      - name: Assert graph invariants
+        run: node scripts/graph-quality.mjs . --strict

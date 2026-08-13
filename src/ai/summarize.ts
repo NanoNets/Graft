@@ -1,4 +1,4 @@
-import type { ChatModel } from "./llm/types.js";
+import { isTruncated, type ChatModel } from "./llm/types.js";
 
 /**
  * Turns one source-code file into a short prose summary for the knowledge graph.
@@ -41,11 +41,21 @@ export class ChatSummarizer implements Summarizer {
     const res = await this.model.create({
       temperature: 0,
       maxTokens: 2048,
+      // 2048 tokens is a generous budget for 3-8 sentences of prose and a very
+      // thin one for reasoning. Left unset, current Claude models think first and
+      // can burn the whole budget before writing a word.
+      thinking: { kind: "disabled" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userContent(code, opts.path) },
       ],
     });
+    // A cut-off turn must throw, not return its prefix: the caller caches this
+    // string by content hash, so a half-summary (or the empty string) would be
+    // replayed as a cache hit on every future build of an unchanged file.
+    if (isTruncated(res)) {
+      throw new Error(`summary truncated at maxTokens (stop_reason=${res.stopReason}) — raise the budget or shrink the file`);
+    }
     return res.text.trim();
   }
 }

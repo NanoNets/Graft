@@ -24,6 +24,16 @@ export interface OpenAIChatModelOptions {
   label?: string;
   /** Extra default headers (e.g. OpenRouter's `X-Title`). */
   headers?: Record<string, string>;
+  /**
+   * Per-request wall clock in ms. The SDK's own default is 10 MINUTES, which for
+   * a repo-wide `--deep` means one stalled endpoint can pin a worker for ten
+   * minutes per file — the run looks hung rather than failed.
+   */
+  timeoutMs?: number;
+  /** Retries after a failed request (SDK default 2). The SDK honours the
+   * endpoint's `Retry-After` between them, which is what makes raising this the
+   * right answer to a rate-limited key rather than a way to hammer it harder. */
+  maxRetries?: number;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: OpenAI;
 }
@@ -98,6 +108,8 @@ export class OpenAIChatModel implements ChatModel {
         apiKey: opts.apiKey,
         baseURL: opts.baseUrl,
         defaultHeaders: opts.headers,
+        ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+        ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
       });
   }
 

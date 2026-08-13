@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { TOOLS, callTool, canonicalToolName } from '../src/mcp/tools.js';
+import { TOOLS, callTool, canonicalToolName, parseDepth } from '../src/mcp/tools.js';
+import { rmDir } from "./helpers.js";
 
 function builtRepo(): string {
   const d = mkdtempSync(join(tmpdir(), 'graft-mcptools-'));
@@ -70,6 +71,25 @@ function multiDirRepo(): string {
   }
   execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', d], { stdio: 'pipe' });
   return d;
+}
+
+/** A WORKSPACE root (two git children, no .git of its own), so `callTool`
+ * takes the federated path. repoA carries the compute -> sub -> add chain the
+ * depth assertions need; both children carry a NEEDLE so a federated grep has
+ * something from each. */
+function workspaceChainFx(): string {
+  const p = mkdtempSync(join(tmpdir(), 'graft-mcptools-ws-'));
+  mkdirSync(join(p, 'repoA', '.git'), { recursive: true });
+  mkdirSync(join(p, 'repoB', '.git'), { recursive: true });
+  writeFileSync(
+    join(p, 'repoA', 'a.ts'),
+    'export function add(a: number, b: number): number {\n  return a + b; // NEEDLE\n}\n' +
+      'export function sub(a: number, b: number): number {\n  return add(a, -b);\n}\n' +
+      'export function compute(a: number, b: number): number {\n  return sub(a, b);\n}\n',
+  );
+  writeFileSync(join(p, 'repoB', 'b.ts'), 'export function beta(): number {\n  return 2; // NEEDLE\n}\n');
+  execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'build', p], { stdio: 'pipe' });
+  return p;
 }
 
 test('TOOLS lists the six tools with schemas', async () => {
@@ -194,6 +214,61 @@ test('graft_trace_calls: depth param is honored (depth 2 reaches further than de
   assert.match(deeper.text, /\[depth 1\]/);
   assert.match(deeper.text, /← compute \(/);
   assert.match(deeper.text, /\[depth 2\]/);
+});
+
+test('parseDepth: "all"/"full" mean the whole closure, anything unusable means 1', () => {
+  assert.equal(parseDepth('all'), Number.POSITIVE_INFINITY);
+  assert.equal(parseDepth('full'), Number.POSITIVE_INFINITY);
+  assert.equal(parseDepth(3), 3);
+  assert.equal(parseDepth(2.7), 2);
+  // Below 1, non-finite, wrong type, absent -> the documented default.
+  for (const v of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '2', null, undefined, {}])
+    assert.equal(parseDepth(v), 1, `parseDepth(${String(v)})`);
+});
+
+test('graft_trace_calls: depth "all" walks the whole closure in a WORKSPACE, not silently depth 1', async () => {
+  const p = workspaceChainFx();
+  // Direct callers only — `sub` is reachable at depth 1, `compute` is not.
+  const shallow = await callTool(p, 'graft_trace_calls', { symbol: 'add' });
+  assert.equal(shallow.isError, false);
+  assert.match(shallow.text, /← sub \(/);
+  assert.doesNotMatch(shallow.text, /compute/);
+
+  // "all" is documented in the tool's own schema. The workspace path used to
+  // test `typeof depth === 'number'` first, so 'all' became undefined and the
+  // federated walk quietly ran at depth 1 — the blast radius came back short
+  // for exactly the monorepo user who most needs it complete.
+  const closure = await callTool(p, 'graft_trace_calls', { symbol: 'add', depth: 'all' });
+  assert.equal(closure.isError, false);
+  assert.match(closure.text, /← sub \(/);
+  assert.match(closure.text, /← compute \(/);
+  assert.match(closure.text, /\[depth 2\]/);
+  rmDir(p);
+});
+
+test('graft_find_all: `in` at a workspace root is applied, never silently ignored', async () => {
+  const p = workspaceChainFx();
+  // Without `in`, federation legitimately searches every child.
+  const all = await callTool(p, 'graft_find_all', { pattern: 'NEEDLE' });
+  assert.equal(all.isError, false);
+  assert.match(all.text, /repoA\//);
+  assert.match(all.text, /repoB\//);
+
+  // `federateGrep` can honor `in` now (it narrows to the named child, and past the
+  // first segment to a path prefix inside it), so this tool no longer has to refuse
+  // the arg its own schema advertises. What must never happen is the third
+  // outcome — accepting it, searching everything, and answering as if it had been
+  // applied — so the assertion is on repoB being ABSENT, not merely on success.
+  const scoped = await callTool(p, 'graft_find_all', { pattern: 'NEEDLE', in: 'repoA' });
+  assert.equal(scoped.isError, false, scoped.text);
+  assert.match(scoped.text, /repoA\//);
+  assert.doesNotMatch(scoped.text, /repoB\//);
+
+  // An unknown child is still a loud caller mistake rather than an empty answer.
+  const bogus = await callTool(p, 'graft_find_all', { pattern: 'NEEDLE', in: 'repoZ' });
+  assert.equal(bogus.isError, true);
+  assert.match(bogus.text, /no workspace repo "repoZ"/);
+  rmDir(p);
 });
 
 test('graft_trace_calls depth>1 on a file aggregates dependents that call into a symbol the file defines, not just file-level imports', async () => {

@@ -18,9 +18,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { join, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { normalizePathPrefix, relPosix, stripTrailingSlashes, toPosixPath } from "../src/util/paths.js";
 import { pathUnderPrefix } from "../src/graph/scopes.js";
+import { contextDirFor } from "../src/context/node-file.js";
 
 test("toPosixPath: identity on an already-posix path, and idempotent", () => {
   assert.equal(toPosixPath("src/graph/build.ts"), "src/graph/build.ts");
@@ -74,6 +75,24 @@ test("stripTrailingSlashes: linear-time, and leaves interior slashes alone", () 
   // The regex this replaces was a polynomial-ReDoS shape (js/polynomial-redos):
   // a long run of trailing slashes must stay cheap, not quadratic.
   assert.equal(stripTrailingSlashes("a" + "/".repeat(50_000)), "a");
+});
+
+test("contextDirFor: the --dir/GRAFT_DIR override is absolute, whatever was passed", () => {
+  const root = sep === "/" ? "/repo" : "C:\\repo";
+  // The default is absolute by construction; the override used to be returned
+  // verbatim, so `GRAFT_DIR=.context` (which `.env.example` suggests) produced a
+  // relative context dir. Every consumer treats this value as absolute:
+  // `listSourceFiles` skips the output dir with `f.startsWith(outDir)` against
+  // absolute paths, so a relative one matched nothing and graft indexed its own
+  // graph back into itself.
+  assert.ok(isAbsolute(contextDirFor(root)));
+  assert.ok(isAbsolute(contextDirFor(root, ".context")), "a relative override is resolved");
+  assert.ok(isAbsolute(contextDirFor(root, join("..", "shared", "graft"))));
+  // An absolute override still comes back untouched — the overwhelmingly common
+  // case, and what every existing caller passes.
+  const abs = join(root, "elsewhere");
+  assert.equal(contextDirFor(root, abs), abs);
+  assert.equal(contextDirFor(root, ".context"), resolve(".context"));
 });
 
 test("pathUnderPrefix: segment-aware, so a prefix is not a substring", () => {

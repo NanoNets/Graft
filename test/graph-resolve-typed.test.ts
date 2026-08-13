@@ -133,6 +133,68 @@ test("unresolved member calls cannot inflate map hubs and hotspots (#35)", () =>
   assert.equal(set?.inDegree, 1, "only the owner-qualified FileBindings.set call contributes");
 });
 
+/**
+ * `classParents` used to be keyed by the declaring class's BARE NAME, which fuses the
+ * hierarchies of two same-named classes in different packages: `a/Base` extending `Foo`
+ * and `b/Base` extending `Bar` became `Base → [Foo, Bar]`. A `base.handle()` in package
+ * a then climbed into package b's `Bar.handle` and shipped it as an `inferred` call
+ * edge. `Base`, `Client`, `Config`, `Handler` repeated across modules is ordinary, and
+ * crossing between them silently is exactly the guess the rest of resolve.ts refuses.
+ */
+test("homonymous classes in different packages do not share an inheritance chain", () => {
+  const nodes = [
+    n("a/Base.java", "file"), n("a/Base.java#Base", "class"),
+    n("a/Foo.java", "file"), n("a/Foo.java#Foo", "class"), n("a/Foo.java#Foo.handle", "method"),
+    n("b/Base.java", "file"), n("b/Base.java#Base", "class"),
+    n("b/Bar.java", "file"), n("b/Bar.java#Bar", "class"), n("b/Bar.java#Bar.handle", "method"),
+    n("a/Use.java", "file"), n("a/Use.java#use", "method"),
+  ];
+  const raw: RawEdge[] = [
+    { source: "a/Base.java#Base", relation: "extends", name: "Foo", file: "a/Base.java" },
+    { source: "b/Base.java#Base", relation: "extends", name: "Bar", file: "b/Base.java" },
+    // The call site is in package a, but `Base` is ambiguous across the repo, so there
+    // is no honest answer about whose hierarchy to climb.
+    { source: "a/Use.java#use", relation: "calls", name: "handle", viaMember: true, recvType: "Base", file: "a/Use.java" },
+  ];
+  const calls = resolveEdges(nodes, raw).filter((e) => e.relation === "calls");
+  assert.deepEqual(calls, [], "an ambiguous receiver type must stop the climb, not pick a package");
+});
+
+test("an unambiguous inherited method still resolves through a same-file superclass", () => {
+  // The guard above must not cost recall: when the receiver type resolves to exactly
+  // one class, its own `extends` chain is walked exactly as before.
+  const nodes = [
+    n("a/Base.java", "file"), n("a/Base.java#Base", "class"),
+    n("a/Foo.java", "file"), n("a/Foo.java#Foo", "class"), n("a/Foo.java#Foo.handle", "method"),
+    n("a/Use.java", "file"), n("a/Use.java#use", "method"),
+  ];
+  const raw: RawEdge[] = [
+    { source: "a/Base.java#Base", relation: "extends", name: "Foo", file: "a/Base.java" },
+    { source: "a/Use.java#use", relation: "calls", name: "handle", viaMember: true, recvType: "Base", file: "a/Use.java" },
+  ];
+  const call = resolveEdges(nodes, raw).find((e) => e.relation === "calls");
+  assert.equal(call?.target, "a/Foo.java#Foo.handle");
+});
+
+test("a homonym beside the CALLER cannot hijack an inherited method", () => {
+  // `pkg/Widget` extends `Base`; the call site lives in another package that declares
+  // its own unrelated `Base`. Climbing to the "same file as the caller" candidate would
+  // hand back `other`'s `draw` for a receiver that has nothing to do with it. Two
+  // `Base`s and no way to tell which one `Widget` meant is a drop, not a coin toss.
+  const nodes = [
+    n("pkg/Widget.java", "file"), n("pkg/Widget.java#Widget", "class"),
+    n("pkg/Base.java", "file"), n("pkg/Base.java#Base", "class"), n("pkg/Base.java#Base.draw", "method"),
+    n("other/Use.java", "file"), n("other/Use.java#Base", "class"), n("other/Use.java#Base.draw", "method"),
+    n("other/Use.java#use", "method"),
+  ];
+  const raw: RawEdge[] = [
+    { source: "pkg/Widget.java#Widget", relation: "extends", name: "Base", file: "pkg/Widget.java" },
+    { source: "other/Use.java#use", relation: "calls", name: "draw", viaMember: true, recvType: "Widget", file: "other/Use.java" },
+  ];
+  const calls = resolveEdges(nodes, raw).filter((e) => e.relation === "calls");
+  assert.deepEqual(calls.map((e) => e.target), [], "the caller's own Base is not evidence about Widget's");
+});
+
 // A2: resolve.ts used to derive ownerMethod/classParents keys by slicing `n.id`,
 // which breaks once ids can carry a dedup ordinal (A3). extract.ts now stamps a
 // `owner` field at mint time instead; these tests pin the field's contract and

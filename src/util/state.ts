@@ -74,6 +74,12 @@ export interface BuildConfig {
    * no-flag build — and the fingerprint/refresh path, which never sees CLI
    * flags at all — behave identically to the invocation that set it. */
   includeDirs?: string[];
+  /** `graft build -e` extensions, persisted for the same reason and it matters
+   * more here: `-e` NARROWS the indexed set, and the freshness probe enumerates
+   * the tree with no flags at all. Unpersisted, every excluded file read as new
+   * on the next query, which rebuilt the graph wide again — so the narrowing
+   * lasted exactly until someone ran `graft ask`. Empty means "no override". */
+  extensions?: string[];
 }
 
 /** Local, Git-ignored repository configuration. Kept outside generated
@@ -100,9 +106,15 @@ function ensureBuildConfigIgnored(d: string): void {
 }
 
 export function readBuildConfig(d: string): BuildConfig | null { return readJson<BuildConfig>(buildConfigPath(d)); }
+
+/** Merged over what is already on disk, never replacing it: the fields are set by
+ * different flags of the same command (`--include-dir`, `-e`), so a plain write
+ * would let `graft build --include-dir build` silently drop a persisted `-e`. An
+ * explicit empty array still clears its own field — that is how `--no-include-dir`
+ * and `--no-extensions` undo themselves. */
 export function writeBuildConfig(d: string, c: BuildConfig): void {
   ensureBuildConfigIgnored(d);
-  writeJsonAtomic(buildConfigPath(d), c);
+  writeJsonAtomic(buildConfigPath(d), { ...(readBuildConfig(d) ?? {}), ...c });
 }
 
 /** The persisted `--include-dir` override for repo `d`, as a Set — `undefined`
@@ -113,6 +125,15 @@ export function writeBuildConfig(d: string, c: BuildConfig): void {
 export function readIncludeDirs(d: string): Set<string> | undefined {
   const dirs = readBuildConfig(d)?.includeDirs;
   return dirs && dirs.length ? new Set(dirs) : undefined;
+}
+
+/** The persisted `-e/--extensions` narrowing for repo `d`, or undefined when there
+ * is none. Same contract as {@link readIncludeDirs}: read inside `listSourceFiles`
+ * rather than threaded from the CLI, so the build, the freshness probe, `check`
+ * and the hooks/refresh path enumerate one identical file set. */
+export function readExtensions(d: string): string[] | undefined {
+  const exts = readBuildConfig(d)?.extensions;
+  return exts && exts.length ? exts : undefined;
 }
 // Best-effort read-modify-write; not atomic across concurrent processes, but acceptable
 // for episodic hook writes (worst case is a lost update, not corruption).

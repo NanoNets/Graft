@@ -19,6 +19,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { writeBuildConfig } from "../src/util/state.js";
 import type { GraphV1 } from "../src/graph/types.js";
+import { rmDir } from "./helpers.js";
 
 function workspaceWithBuildDirs(): string {
   const parent = mkdtempSync(join(tmpdir(), "ws-include-dir-"));
@@ -60,7 +61,7 @@ test("A5: --include-dir on a workspace build reaches every child, which persists
       "child's own persisted include-dir state must survive a no-flag rebuild",
     );
   } finally {
-    rmSync(parent, { recursive: true, force: true });
+    rmDir(parent);
   }
 });
 
@@ -80,6 +81,6 @@ test("A5: a skipped-name workspace child remains discoverable on a later no-flag
     assert.deepEqual(workspace.children, ["app", "build"]);
     assert.equal(readFileSync(join(parent, ".graft", "config.json"), "utf8").includes("build"), true);
   } finally {
-    rmSync(parent, { recursive: true, force: true });
+    rmDir(parent);
   }
 });

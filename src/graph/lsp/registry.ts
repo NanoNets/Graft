@@ -3,7 +3,8 @@
  * Only servers whose binary is actually on PATH are eligible; a missing binary
  * simply means that language gets no LSP enrichment (the AST graph stands alone).
  */
-import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 
 export interface LspServer {
   /** graft language names (as produced by languageLabelOf/genericLangOf) this serves. */
@@ -24,16 +25,53 @@ export const LSP_SERVERS: readonly LspServer[] = [
 ];
 
 const resolved = new Map<string, string | null>();
-/** Resolve a command to its ABSOLUTE path via the login shell's PATH. `spawn`
- * resolves against `process.env.PATH`, which often omits `~/.cargo/bin`,
- * `~/go/bin`, etc. where these servers live — so `command -v` can find a server
- * that `spawn(cmd)` then can't. Spawning the absolute path avoids that mismatch. */
+
+/**
+ * Resolve a command to its ABSOLUTE path by walking PATH ourselves.
+ *
+ * This was `execSync("command -v " + cmd)`, which is a POSIX shell builtin. On
+ * Windows `execSync` goes through `cmd.exe`, which answers "'command' is not
+ * recognized" and throws — so every language resolved to null, `pickServer` returned
+ * null for every language, and `graft build --lsp` was a silent no-op across the
+ * entire platform. Cached in `resolved`, so not even a retry.
+ *
+ * Nothing is lost by dropping the shell. The comment this replaces claimed `command
+ * -v` searched "the login shell's PATH" and so could find servers in `~/.cargo/bin`
+ * that `spawn` would miss — but `execSync` runs `sh -c`, not a login shell, and
+ * inherits `process.env.PATH` exactly like `spawn` does. The real reason to resolve
+ * at all is the absolute path, which this returns.
+ *
+ * PATHEXT matters here as much as it does for `graft` itself: the servers that ship
+ * as npm packages (`typescript-language-server`, `pyright-langserver`) install as
+ * `.cmd` shims, and Node only ever appends `.exe` on its own.
+ */
 function resolveCommand(cmd: string): string | null {
   if (resolved.has(cmd)) return resolved.get(cmd)!;
-  let abs: string | null = null;
-  try { abs = execSync(`command -v ${cmd}`, { encoding: "utf8" }).trim() || null; } catch { abs = null; }
+  const abs = lookPath(cmd);
   resolved.set(cmd, abs);
   return abs;
+}
+
+function lookPath(cmd: string): string | null {
+  // An explicitly-pathed command answers for itself; PATH is not consulted.
+  if (cmd.includes("/") || cmd.includes("\\")) return isAbsolute(cmd) && existsSync(cmd) ? cmd : null;
+  // .EXE first: it spawns without the cmd.exe wrapper `client.ts` has to build for
+  // a shim, so prefer it whenever both forms exist.
+  const exts = process.platform === "win32" ? [".EXE", ".CMD", ".BAT", ".COM", ""] : [""];
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const base = dir.replace(/^"|"$/g, ""); // quoted PATH entries are common on Windows
+    for (const ext of exts) {
+      const p = join(base, cmd + ext);
+      if (existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+/** Test seam: drop the memoized lookups so a test can flip PATH. */
+export function resetResolvedCommands(): void {
+  resolved.clear();
 }
 
 /** Pick the highest-priority installed server that covers at least one of the

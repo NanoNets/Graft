@@ -1,0 +1,24 @@
+{
+  // Type-checks test/ together with src/, which the build config cannot do: it
+  // emits into dist/ with "rootDir": "./src", so adding test/**/* there fails with
+  // TS6059 ("not under rootDir"). The tests run through tsx, which only strips
+  // types — nothing ever checked that a fixture still matches NodeV1 or that a
+  // helper still matches the Summarizer signature it imports, so a stale fixture
+  // could keep "passing" against the wrong shape. Check-only: rootDir and every
+  // emit-shaped option from the base are dropped, since noEmit makes them
+  // meaningless (and declaration + noEmit is an error).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Tests that cover the build/CI scripts import them straight from scripts/*.mjs;
+    // without allowJs every one of those imports is a "no declaration file" error
+    // that has nothing to do with the test's own types.
+    "allowJs": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist", "examples"]
+}

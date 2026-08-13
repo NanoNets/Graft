@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 process.env.GRAFT_MCP_NPX = '1';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { registerMcpConfigs, serverEntry } from '../src/hosts/mcp-config.js';
+import { delimiter, join } from 'node:path';
+import { registerMcpConfigs, resetGraftOnPathCache, serverEntry } from '../src/hosts/mcp-config.js';
 
 function fresh(): string { return mkdtempSync(join(tmpdir(), 'graft-mcpcfg-')); }
 
@@ -58,6 +58,26 @@ test('agents id: codex TOML + opencode JSON, gated on home dirs', () => {
   assert.deepEqual(again.map((x) => x.action).sort(), ['unchanged', 'unchanged']);
 });
 
+test("global: 'if-present' never creates out-of-repo config, but still wires the repo", () => {
+  // What an unsolicited refresh gets (see upkeep.ts#refreshOpts). ~/.codex/config.toml
+  // is machine-wide; the repo's own opencode.json is part of the wiring being
+  // refreshed, so the mode must not swallow that one too.
+  const repo = fresh(); const home = fresh();
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+
+  const w = registerMcpConfigs(repo, ['agents'], { home, global: 'if-present' });
+  const byId = new Map(w.map((x) => [x.id, x.action]));
+  assert.equal(byId.get('codex'), 'skipped-absent', 'the machine-wide file is left alone');
+  assert.equal(existsSync(join(home, '.codex', 'config.toml')), false);
+  assert.equal(byId.get('opencode'), 'created', 'the repo-scoped file is still written');
+
+  // Once graft IS registered there, the same mode reports it as ours and current.
+  writeFileSync(join(home, '.codex', 'config.toml'), '[mcp_servers.graft]\ncommand = "graft"\n');
+  const present = registerMcpConfigs(repo, ['agents'], { home, global: 'if-present' });
+  assert.equal(new Map(present.map((x) => [x.id, x.action])).get('codex'), 'unchanged');
+});
+
 test('codex TOML append preserves existing content', () => {
   const repo = fresh(); const home = fresh();
   mkdirSync(join(home, '.codex'), { recursive: true });
@@ -98,4 +118,59 @@ test('serverEntry prefers the installed binary and falls back to npx', () => {
 test('GRAFT_MCP_NPX overrides an installed binary', () => {
   process.env.GRAFT_MCP_NPX = '1';
   assert.equal(serverEntry({ onPath: true }).command, 'npx', 'the escape hatch wins');
+});
+
+// --- the PATH detection itself ---
+//
+// The detection used to spawn `graft --version`, which on Windows meant ENOENT
+// against the `graft.cmd` shim npm installs: BIN_LAUNCH was unreachable on the whole
+// platform and every init committed the slow `npx` form into `.mcp.json`. It also
+// paid a process spawn per call, five call sites deep in the init path.
+
+/** Install a fake `graft` on PATH under whatever name this platform resolves. */
+function stubGraftDir(): string {
+  const dir = fresh();
+  // Contents are irrelevant — the resolver asks whether the name resolves, not
+  // whether the binary runs. `.cmd` is what `npm i -g` leaves on Windows.
+  writeFileSync(join(dir, process.platform === 'win32' ? 'graft.cmd' : 'graft'), '');
+  return dir;
+}
+
+function withEnv(path: string, fn: () => void): void {
+  const savedPath = process.env.PATH;
+  const savedNpx = process.env.GRAFT_MCP_NPX;
+  delete process.env.GRAFT_MCP_NPX;
+  process.env.PATH = path;
+  resetGraftOnPathCache();
+  try {
+    fn();
+  } finally {
+    process.env.PATH = savedPath;
+    if (savedNpx !== undefined) process.env.GRAFT_MCP_NPX = savedNpx;
+    else delete process.env.GRAFT_MCP_NPX;
+    resetGraftOnPathCache();
+  }
+}
+
+test('serverEntry finds an installed graft on PATH (Windows: the .cmd shim)', () => {
+  withEnv(stubGraftDir(), () => {
+    assert.deepEqual(serverEntry(), { command: 'graft', args: ['mcp'] });
+  });
+});
+
+test('serverEntry falls back to npx when nothing named graft is on PATH', () => {
+  withEnv(fresh(), () => {
+    assert.deepEqual(serverEntry(), { command: 'npx', args: ['-y', '@nanonets/graft', 'mcp'] });
+  });
+});
+
+test('the PATH lookup happens once, not once per call site', () => {
+  // `planInit` fans `serverEntry` out per host and per workspace child; the old
+  // implementation paid a 5s-ceiling spawn for every one of them. Emptying PATH
+  // mid-run and still getting the binary form is the observable proof it is cached.
+  withEnv(stubGraftDir(), () => {
+    assert.equal(serverEntry().command, 'graft');
+    process.env.PATH = '';
+    assert.equal(serverEntry().command, 'graft', 'resolved once and remembered');
+  });
 });

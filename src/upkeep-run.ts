@@ -36,13 +36,34 @@ export interface UpkeepResult {
  * safe to replay — `installCodexHooks` no-ops when `~/.codex` is absent, rewrites
  * only its own entry (matched on `graft-hooks.cjs`), and reports `unchanged` when
  * the bytes match. A user who declined them at init time is honoured via
- * `opts.global`/`opts.hooks`, replayed from the stamp.
+ * `opts.global`/`opts.hooks`, replayed from the stamp (or, when the stamp went with
+ * a `graft/` that is git-ignored, from the machine-global memo beside it).
+ *
+ * Returns init's warnings rather than dropping them: this path — not the CLI — is
+ * how most repos get re-inited, so a warning only the CLI printed (say, "your
+ * settings.json is not valid JSON, left untouched") would never reach the one
+ * person who needs it.
  */
-function rewriteWiring(repo: string, hosts: string[], opts: WiringOpts): void {
-  if (hosts.includes('claude')) runInit(repo, { build: false, cliPath: graftCliPath() });
+function rewriteWiring(
+  repo: string,
+  hosts: string[],
+  opts: WiringOpts,
+): { warnings: string[]; offeredAllow?: string[] } {
+  const warnings: string[] = [];
+  let offeredAllow: string[] | undefined;
+  if (hosts.includes('claude')) {
+    const r = runInit(repo, { build: false, cliPath: graftCliPath() });
+    warnings.push(...r.warnings);
+    // Handed back so `reconcileWiring` can put it in the stamp it writes right
+    // after this returns: that stamp is the only record of which permissions were
+    // ever offered here, and without it the next refresh re-adds the ones the user
+    // deleted — into a file the whole team pulls.
+    offeredAllow = r.offeredAllow;
+  }
   const others = hosts.filter((h) => h !== 'claude');
   if (others.length)
     runHostsInit(repo, { agents: others, global: opts.global, mcp: opts.mcp, hooks: opts.hooks });
+  return { warnings, offeredAllow };
 }
 
 /**
@@ -58,9 +79,18 @@ export function runUpkeep(
 ): UpkeepResult {
   const lines: string[] = [];
   try {
-    const refreshed = reconcileWiring(repo, current, { rewrite: rewriteWiring });
+    const warnings: string[] = [];
+    const refreshed = reconcileWiring(repo, current, {
+      rewrite: (r, h, o) => {
+        const res = rewriteWiring(r, h, o);
+        warnings.push(...res.warnings);
+        return { offeredAllow: res.offeredAllow };
+      },
+      home: opts.home,
+    });
     const refreshLine = formatWiringRefresh(refreshed);
     if (refreshLine) lines.push(refreshLine);
+    for (const w of warnings) lines.push(`⚠ ${w}`);
   } catch { /* fail-soft: wiring refresh is never worth breaking a session for */ }
   try {
     if (opts.background !== false) maybeRefreshInBackground(opts.home);

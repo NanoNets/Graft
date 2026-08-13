@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DEFAULT_WIRING_OPTS,
@@ -11,16 +11,24 @@ import {
   isNewer,
   needsRefresh,
   readStamp,
+  readWiringMemo,
   reconcileWiring,
+  refreshOpts,
   runningVersion,
   stampPath,
   updateCachePath,
   wiredHostIds,
+  wiringMemoPath,
   wiringOpts,
   writeStamp,
   type WiringOpts,
 } from '../src/upkeep.js';
-import { tmpRepo } from './helpers.js';
+import { tmpRepo, rmDir } from './helpers.js';
+
+/** Scratch home for the machine-global half of the stamp, so no test writes the
+ * real `~/.graft/wiring/`. Shared: the memo is keyed by repo path, and every test
+ * below builds its own repo. */
+const HOME = tmpRepo('upkeep-home');
 
 test('compareVersions orders releases numerically, not lexically', () => {
   assert.equal(compareVersions('0.9.1', '0.10.0'), -1); // the lexical trap
@@ -75,7 +83,7 @@ test('runningVersion resolves this package, not the caller depth', () => {
 test('the stamp round-trips under graft/.cache/', () => {
   const repo = tmpRepo('upkeep-stamp');
   assert.equal(readStamp(repo), null);
-  writeStamp(repo, '1.2.3', ['cursor', 'claude'], {}, '2026-01-01T00:00:00.000Z');
+  writeStamp(repo, '1.2.3', ['cursor', 'claude'], {}, '2026-01-01T00:00:00.000Z', HOME);
   assert.equal(stampPath(repo), join(repo, 'graft', '.cache', 'wiring-stamp.json'));
   assert.deepEqual(readStamp(repo), {
     version: '1.2.3',
@@ -98,11 +106,12 @@ test('wiringOpts defaults an older stamp to what plain `graft init` does', () =>
 
 test('a refresh replays the flags init was given, including --no-global', () => {
   const repo = tmpRepo('upkeep-replay');
-  writeStamp(repo, '1.0.0', ['agents'], { global: false, hooks: false });
+  writeStamp(repo, '1.0.0', ['agents'], { global: false, hooks: false }, undefined, HOME);
   let seen: WiringOpts | null = null;
   const r = reconcileWiring(repo, '2.0.0', {
     wired: () => ['agents'],
     rewrite: (_repo, _hosts, opts) => { seen = opts; },
+    home: HOME,
   });
   // The user said "keep out of ~/.codex" — a later session must not overrule that.
   assert.deepEqual(seen, { global: false, mcp: true, hooks: false });
@@ -114,14 +123,77 @@ test('by default a refresh DOES reach ~/.codex — nothing else ever would', () 
   // No skill, rule file, or MCP instruction tells an agent to run `graft init`,
   // so skipping the out-of-repo writes means a Codex user never gets them.
   const repo = tmpRepo('upkeep-global');
-  writeStamp(repo, '1.0.0', ['agents']);
+  writeStamp(repo, '1.0.0', ['agents'], {}, undefined, HOME);
   let seen: WiringOpts | null = null;
   const r = reconcileWiring(repo, '2.0.0', {
     wired: () => ['agents'],
     rewrite: (_repo, _hosts, opts) => { seen = opts; },
+    home: HOME,
   });
   assert.deepEqual(seen, DEFAULT_WIRING_OPTS);
   assert.equal(r?.global, true);
+});
+
+test('the memo keeps the flags outside the repo, keyed per repo', () => {
+  const repo = tmpRepo('upkeep-memo-path');
+  const p = wiringMemoPath(repo, '/home/dev');
+  assert.ok(p.startsWith(join('/home/dev', '.graft', 'wiring')), `outside the repo: ${p}`);
+  assert.notEqual(p, wiringMemoPath(tmpRepo('upkeep-memo-path2'), '/home/dev'), 'one file per repo');
+  // Same repo, same file — a trailing separator is not a different project.
+  assert.equal(wiringMemoPath(`${repo}/`, '/home/dev'), p);
+});
+
+test('refreshOpts: a record means replay, no record means stay inside the repo', () => {
+  assert.deepEqual(refreshOpts({ version: '1', hosts: [], at: 'x', opts: { global: false } }, null),
+    { global: false, mcp: true, hooks: true });
+  // A stamp with no opts predates the flags: init did run here, wiring everything.
+  assert.deepEqual(refreshOpts({ version: '1', hosts: [], at: 'x' }, null), DEFAULT_WIRING_OPTS);
+  // No stamp, but the machine remembers the init: replay what it chose.
+  assert.deepEqual(refreshOpts(null, { repo: '/r', at: 'x', opts: { global: false, hooks: false } }),
+    { global: false, mcp: true, hooks: false });
+  // Nothing anywhere: repo-local, plus out-of-repo entries that ALREADY name graft.
+  // A flat `global: false` here also abandoned every install predating the stamp —
+  // those users did run `graft init`, and nothing else ever refreshes ~/.codex.
+  assert.deepEqual(refreshOpts(null, null), { global: 'if-present', mcp: true, hooks: true });
+});
+
+test('--no-global survives graft/ being deleted — every fresh clone is that case', () => {
+  const repo = tmpRepo('upkeep-memo');
+  writeStamp(repo, '1.0.0', ['agents'], { global: false }, undefined, HOME);
+  assert.deepEqual(readWiringMemo(repo, HOME)?.opts, { global: false, mcp: true, hooks: true });
+
+  // graft/ is git-ignored, so this is also what every colleague's clone looks like.
+  rmDir(join(repo, 'graft'));
+  assert.equal(readStamp(repo), null);
+
+  let seen: WiringOpts | null = null;
+  reconcileWiring(repo, '2.0.0', {
+    wired: () => ['agents'],
+    rewrite: (_repo, _hosts, opts) => { seen = opts; },
+    home: HOME,
+  });
+  assert.deepEqual(seen, { global: false, mcp: true, hooks: true }, 'the opt-out outlived the cache dir');
+});
+
+test('an unsolicited refresh never CREATES machine-wide config', () => {
+  // Committed wiring (`git add .claude`, says the epilogue) plus a git-ignored
+  // graft/ means the first session in a fresh clone looks unstamped. Refreshing the
+  // repo's own files there is maintenance; installing graft's hooks into
+  // ~/.codex/hooks.json — read by every Codex project on the machine — for someone
+  // who never ran `graft init` is not. 'if-present' is exactly that line: entries
+  // that already name graft are the user's own earlier yes and stay current
+  // (installCodexHooks/registerMcpConfigs enforce it); nothing new is created.
+  const repo = tmpRepo('upkeep-unsolicited');
+  const home = tmpRepo('upkeep-unsolicited-home');
+  let seen: WiringOpts | null = null;
+  const r = reconcileWiring(repo, '2.0.0', {
+    wired: () => ['agents', 'claude'],
+    rewrite: (_repo, _hosts, opts) => { seen = opts; },
+    home,
+  });
+  assert.deepEqual(seen, { global: 'if-present', mcp: true, hooks: true });
+  assert.equal(r?.global, 'if-present');
+  assert.deepEqual(r?.hosts, ['agents', 'claude'], 'the repo-local wiring is still brought up to date');
 });
 
 test('wiredHostIds reads what init actually wrote, not what the machine has', () => {
@@ -149,19 +221,22 @@ test('reconcileWiring rewrites once on a version mismatch, then no-ops', () => {
   const calls: string[][] = [];
   const rewrite = (_r: string, hosts: string[]) => { calls.push(hosts); };
   const wired = () => ['claude', 'cursor'];
+  const deps = { wired, rewrite, home: HOME };
 
-  // No stamp (fresh clone, or wired by a pre-stamp graft) → refresh.
-  const first = reconcileWiring(repo, '2.0.0', { wired, rewrite });
-  assert.deepEqual(first, { from: 'unwired', to: '2.0.0', hosts: ['claude', 'cursor'], global: true });
+  // No stamp and no memo (a fresh clone of a repo whose wiring was committed) →
+  // refresh the repo, and out-of-repo only where graft is already registered:
+  // nobody asked this machine to install anything new.
+  const first = reconcileWiring(repo, '2.0.0', deps);
+  assert.deepEqual(first, { from: 'unwired', to: '2.0.0', hosts: ['claude', 'cursor'], global: 'if-present' });
   assert.deepEqual(calls, [['claude', 'cursor']]);
 
   // Stamp now matches the running binary → nothing happens on every later session.
-  assert.equal(reconcileWiring(repo, '2.0.0', { wired, rewrite }), null);
+  assert.equal(reconcileWiring(repo, '2.0.0', deps), null);
   assert.equal(calls.length, 1, 'idempotent: no rewrite per session');
 
   // A newer binary → one more refresh, reported with the version it came from.
-  const upgraded = reconcileWiring(repo, '2.1.0', { wired, rewrite });
-  assert.deepEqual(upgraded, { from: '2.0.0', to: '2.1.0', hosts: ['claude', 'cursor'], global: true });
+  const upgraded = reconcileWiring(repo, '2.1.0', deps);
+  assert.deepEqual(upgraded, { from: '2.0.0', to: '2.1.0', hosts: ['claude', 'cursor'], global: 'if-present' });
   assert.equal(calls.length, 2);
   assert.equal(readStamp(repo)?.version, '2.1.0');
 });
@@ -170,11 +245,12 @@ test('reconcileWiring restores a host whose file went missing', () => {
   // The whole point of a refresh is putting the wiring back. Detecting hosts from
   // disk alone would drop the one host whose file is gone — the one that needs it.
   const repo = tmpRepo('upkeep-restore');
-  writeStamp(repo, '1.0.0', ['claude', 'cursor']);
+  writeStamp(repo, '1.0.0', ['claude', 'cursor'], {}, undefined, HOME);
   const calls: string[][] = [];
   const r = reconcileWiring(repo, '2.0.0', {
     wired: () => ['claude'], // cursor's graft.mdc is no longer on disk
     rewrite: (_repo, hosts) => { calls.push(hosts); },
+    home: HOME,
   });
   assert.deepEqual(r?.hosts, ['claude', 'cursor']);
   assert.deepEqual(calls, [['claude', 'cursor']]);
@@ -183,15 +259,15 @@ test('reconcileWiring restores a host whose file went missing', () => {
 
 test('reconcileWiring adopts a host added since the stamp was written', () => {
   const repo = tmpRepo('upkeep-adopt');
-  writeStamp(repo, '1.0.0', ['claude']);
-  const r = reconcileWiring(repo, '2.0.0', { wired: () => ['claude', 'windsurf'], rewrite: () => {} });
+  writeStamp(repo, '1.0.0', ['claude'], {}, undefined, HOME);
+  const r = reconcileWiring(repo, '2.0.0', { wired: () => ['claude', 'windsurf'], rewrite: () => {}, home: HOME });
   assert.deepEqual(r?.hosts, ['claude', 'windsurf']);
 });
 
 test('reconcileWiring leaves a repo that graft never wired alone', () => {
   const repo = tmpRepo('upkeep-unwired');
   let rewrote = false;
-  const r = reconcileWiring(repo, '2.0.0', { wired: () => [], rewrite: () => { rewrote = true; } });
+  const r = reconcileWiring(repo, '2.0.0', { wired: () => [], rewrite: () => { rewrote = true; }, home: HOME });
   assert.equal(r, null);
   assert.equal(rewrote, false);
   assert.equal(existsSync(stampPath(repo)), false, 'no stamp written for a repo we do not manage');
@@ -202,6 +278,7 @@ test('reconcileWiring never throws out into a hook', () => {
   const r = reconcileWiring(repo, '2.0.0', {
     wired: () => ['claude'],
     rewrite: () => { throw new Error('disk full'); },
+    home: HOME,
   });
   assert.equal(r, null, 'a failed refresh is silent, not a broken session');
 });
