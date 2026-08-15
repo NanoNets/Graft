@@ -99,6 +99,13 @@ const SNIPPETS: Array<{ lang: string; file: string; src: string; defs: string[];
     src: `int helper() { return 1; }\nint run() { return helper(); }\n`,
     defs: ["function:helper", "function:run"], call: ["run", "helper"],
   },
+  {
+    // Lisp: every form is a bare list_lit, so definitions are matched by the
+    // head symbol's name (`defn`, `ns`, …), not a dedicated grammar node.
+    lang: "clojure", file: "a.clj",
+    src: `(ns my.core)\n\n(defn helper [] 1)\n\n(defn run [] (helper))\n`,
+    defs: ["function:helper", "function:run", "module:my.core"], call: ["run", "helper"],
+  },
 ];
 
 for (const s of SNIPPETS) {
