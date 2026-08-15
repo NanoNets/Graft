@@ -471,6 +471,23 @@ function collectTsImportBindings(
 }
 
 /**
+ * Do these two wrappers stand for the same syntax node? `===` does not answer that:
+ * node-tree-sitter materializes `SyntaxNode` objects on demand and caches them
+ * weakly, so reaching one node twice can return two different JS objects. Comparing
+ * wrappers makes a purely syntactic question depend on collector timing — two cold
+ * builds of unchanged source then disagree on `references` edges (#116).
+ *
+ * `id` is the stable identity, unique within one tree, so the tree is compared too.
+ * A `Tree` is one object per parse (unlike its nodes), so `===` is right for it.
+ */
+function sameSyntaxNode(
+  a: Parser.SyntaxNode | null | undefined,
+  b: Parser.SyntaxNode | null | undefined,
+): boolean {
+  return !!a && !!b && a.tree === b.tree && a.id === b.id;
+}
+
+/**
  * A parameter or local declaration wins over an import inside that function.
  * Drop that imported binding for the whole function rather than create a false
  * dependency. Nested functions are separate scopes and filter themselves.
@@ -483,7 +500,7 @@ function withoutShadowedImports(
   const shadowed = new Set<string>();
   const definitionValue = definition.childForFieldName("value");
   const visit = (node: Parser.SyntaxNode): void => {
-    if (node !== definition && node !== definitionValue && isFunctionBoundary(node)) {
+    if (!sameSyntaxNode(node, definition) && !sameSyntaxNode(node, definitionValue) && isFunctionBoundary(node)) {
       const name = node.childForFieldName("name");
       if (name?.type === "identifier") shadowed.add(name.text);
       return;
@@ -521,13 +538,16 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
   if (!parent || !callTypes.has(parent.type)) return false;
-  return parent.childForFieldName("function") === node || parent.childForFieldName("name") === node;
+  return (
+    sameSyntaxNode(parent.childForFieldName("function"), node) ||
+    sameSyntaxNode(parent.childForFieldName("name"), node)
+  );
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return sameSyntaxNode(parent?.childForFieldName("name"), node);
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and
