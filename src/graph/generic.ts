@@ -152,7 +152,44 @@ export function isWarm(langName: string): boolean {
   return loaded.has(langName);
 }
 
+/** Load one grammar from the tree-sitter-wasms bundle, initialising
+ * web-tree-sitter on first call. Null when the wasm is missing or won't
+ * instantiate — never throws, so a caller degrades instead of failing the build.
+ *
+ * Shared with the container tier (container.ts), which needs a grammar to find
+ * where an embedded language starts but none of the tags.scm machinery above.
+ * Kept here so web-tree-sitter is initialised exactly once per process. */
+export async function loadWasmLanguage(wasm: string): Promise<unknown | null> {
+  if (!tsMod) {
+    tsMod = await import("web-tree-sitter");
+    initPromise = initPromise ?? tsMod.Parser.init();
+  }
+  await initPromise;
+  const bytes = requireWasm(wasm);
+  if (!bytes) return null;
+  try {
+    return await tsMod.Language.load(bytes);
+  } catch {
+    return null;
+  }
+}
+
 const PARSE_CHUNK = 16384; // <32KB slices — same tree-sitter limit workaround as extract.ts
+
+/** Parse with an already-loaded grammar. Returns the root node, or null if the
+ * grammar was never warmed or the parse blew up. Companion to
+ * `loadWasmLanguage` for callers outside this module. */
+export function parseWasm(language: unknown, source: string): TsNode | null {
+  if (!tsMod) return null;
+  try {
+    const parser = new tsMod.Parser();
+    parser.setLanguage(language as never);
+    const tree = parser.parse((i: number) => source.slice(i, i + PARSE_CHUNK));
+    return (tree?.rootNode as TsNode) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function fileNode(rel: string, source: string): NodeV1 {
   return {
@@ -429,7 +466,8 @@ function walkExtract(root: TsNode, mkDef: (name: string, kind: Kind, whole: TsNo
   visit(root);
 }
 
-interface TsNode {
+/** Minimal structural view of a web-tree-sitter node — shared with container.ts. */
+export interface TsNode {
   type: string;
   text: string;
   startIndex: number;
