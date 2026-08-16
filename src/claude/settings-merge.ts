@@ -43,7 +43,7 @@ function isGraftHookEntry(entry: Json): boolean {
   return JSON.stringify(entry ?? '').includes('graft-hooks.cjs');
 }
 
-export function mergeGraftSettings(existing: Json): { merged: Json; warnings: string[] } {
+export function mergeGraftSettings(existing: Json, opts: { hooks?: boolean } = {}): { merged: Json; warnings: string[] } {
   const merged: Json = { ...(existing ?? {}) };
   const warnings: string[] = [];
 
@@ -56,10 +56,21 @@ export function mergeGraftSettings(existing: Json): { merged: Json; warnings: st
     warnings.push('Existing subagentStatusLine left untouched.');
 
   merged.hooks = { ...(merged.hooks ?? {}) };
-  for (const [event, blocks] of Object.entries(graftBlocks())) {
-    const prior = Array.isArray(merged.hooks[event]) ? merged.hooks[event] : [];
-    const foreign = prior.filter((e: Json) => !isGraftHookEntry(e)); // drop old Graft entries → idempotent
-    merged.hooks[event] = [...foreign, ...blocks];
+  if (opts.hooks === false) {
+    // `--no-hooks`: drop graft hook entries, keep anyone else's.
+    for (const event of Object.keys(merged.hooks)) {
+      const prior = Array.isArray(merged.hooks[event]) ? merged.hooks[event] : [];
+      const foreign = prior.filter((e: Json) => !isGraftHookEntry(e));
+      if (foreign.length) merged.hooks[event] = foreign;
+      else delete merged.hooks[event];
+    }
+    if (Object.keys(merged.hooks).length === 0) delete merged.hooks;
+  } else {
+    for (const [event, blocks] of Object.entries(graftBlocks())) {
+      const prior = Array.isArray(merged.hooks[event]) ? merged.hooks[event] : [];
+      const foreign = prior.filter((e: Json) => !isGraftHookEntry(e)); // drop old Graft entries → idempotent
+      merged.hooks[event] = [...foreign, ...blocks];
+    }
   }
 
   const footer = Array.isArray(merged.footerLinksRegexes) ? [...merged.footerLinksRegexes] : [];

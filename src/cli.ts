@@ -577,8 +577,8 @@ program
   .option("--all-agents", "write instruction files for every known agent, detected or not")
   .option("--no-agents", "Claude Code wiring only; skip other agents")
   .option("--list-agents", "list known agent ids and exit")
-  .option("--no-mcp", "skip MCP server registration for other agents")
-  .option("--no-hooks", "skip hook installation for other agents")
+  .option("--no-mcp", "skip MCP server registration (Claude Code .mcp.json and other agents)")
+  .option("--no-hooks", "skip hook installation (Claude Code helpers + settings, and other agents)")
   .option("--dry-run", "print every file init would touch, then exit without writing")
   .option("-y, --yes", "skip the picker and wire every detected agent (the pre-0.8 default)")
   .option("--no-global", "skip writes outside this repo (the ~/.codex/ config + hooks)")
@@ -604,7 +604,7 @@ program
     // guessing (pre-0.8 this silently wired every agent the machine had ever
     // installed — see --yes to get that back).
     const home = homedir();
-    const plan = planInit(repo, { home });
+    const plan = planInit(repo, { home, mcp: opts.mcp, hooks: opts.hooks });
     const detectedIds = plan.filter((p) => p.detected).map((p) => p.id);
     const noAgents = (opts as { agents?: unknown }).agents === false;
 
@@ -639,7 +639,7 @@ program
     if (opts.dryRun) {
       console.error(formatPlan(plan, ids, repo, home));
       for (const child of children)
-        console.error(`\n— ${child}/ (workspace child)\n` + formatPlan(planInit(join(repo, child), { home }), ids, join(repo, child), home));
+        console.error(`\n— ${child}/ (workspace child)\n` + formatPlan(planInit(join(repo, child), { home, mcp: opts.mcp, hooks: opts.hooks }), ids, join(repo, child), home));
       return;
     }
     if (ids.length === 0) {
@@ -689,11 +689,13 @@ function wireTarget(
     const { home, cliPath, plan, wantClaude, opts } = ctx;
 
     if (wantClaude) {
-      const res = runInit(repo, { build: opts.build, cliPath });
+      const res = runInit(repo, { build: opts.build, cliPath, mcp: opts.mcp, hooks: opts.hooks });
       console.error(`✓ wrote ${res.settingsPath}`);
       for (const s of res.shims) console.error(`✓ wrote ${s}`);
       console.error(`✓ wrote ${res.skill}`);
-      if (res.mcp.action === "skipped-unparseable")
+      if (res.mcp.action === "skipped")
+        console.error(`· skipped Claude Code MCP registration (--no-mcp)`);
+      else if (res.mcp.action === "skipped-unparseable")
         console.error(`⚠ .mcp.json: ${res.mcp.path} left unchanged (not valid JSON) — add the graft server manually`);
       else if (res.mcp.action === "unchanged")
         console.error(`· mcp claude: ${res.mcp.path} (already registered)`);
