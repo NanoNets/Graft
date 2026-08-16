@@ -454,3 +454,177 @@ test("Java overloads: same-arity overloads stay unresolved rather than guessing"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** Construction fixture. `Box` is built raw, with explicit type arguments, and with the
+ * diamond — three spellings of one node. `File` and the nested `Alpha`/`Beta` builders
+ * exist so the negative half can be pinned: a qualified `new` must resolve to NOTHING
+ * rather than to the same-named type that happens to be in the repo. */
+const GENERIC_BOX = `package com.acme;
+
+public final class Box<T> {
+  private final T value;
+
+  public Box(T value) {
+    this.value = value;
+  }
+
+  public T get() {
+    return value;
+  }
+}
+`;
+
+/** A repo-local type whose simple name collides with a JDK one. */
+const LOCAL_FILE = `package com.acme;
+
+public final class File {
+  public void touch() {}
+}
+`;
+
+/**
+ * Two nested builders under one outer type, and a method that constructs one of them —
+ * all in ONE file, deliberately. A last-segment collapse yields the bare name `Builder`,
+ * which matches both; the resolver's same-file tiebreak then takes the FIRST candidate.
+ * Split across files the ambiguity would simply drop, so a cross-file fixture would pass
+ * whether or not the collapse happens and would pin nothing.
+ */
+const NESTED = `package com.acme;
+
+public final class Api {
+
+  public static class Alpha {
+    public static class Builder {
+      public Api build() {
+        return null;
+      }
+    }
+  }
+
+  public static class Beta {
+    public static class Builder {
+      public Api build() {
+        return null;
+      }
+    }
+  }
+
+  public Api make() {
+    return new Beta.Builder().build();
+  }
+}
+`;
+
+const GENERIC_USES = `package com.acme;
+
+import com.acme.Box;
+
+public final class Uses {
+
+  public Box<String> explicitArguments() {
+    return new Box<String>("a");
+  }
+
+  public Box<String> diamond() {
+    return new Box<>("b");
+  }
+
+  @SuppressWarnings("rawtypes")
+  public Box raw() {
+    return new Box("c");
+  }
+
+  public Object qualified() {
+    return new java.io.File("x");
+  }
+
+}
+`;
+
+function genericFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-java-generic-"));
+  mkdirSync(join(dir, PKG), { recursive: true });
+  writeFileSync(join(dir, PKG, "Box.java"), GENERIC_BOX);
+  writeFileSync(join(dir, PKG, "File.java"), LOCAL_FILE);
+  writeFileSync(join(dir, PKG, "Api.java"), NESTED);
+  writeFileSync(join(dir, PKG, "Uses.java"), GENERIC_USES);
+  return dir;
+}
+
+test("Java construction: a generic `new` reaches the same type node as a raw one", async () => {
+  // `object_creation_expression` used to hand the constructed type's RAW TEXT to the
+  // resolver, so `new Box<String>()` searched for a node named "Box<String>" and the
+  // diamond form for "Box<>". Neither exists — the node is "Box" — so every generic
+  // construction lost its edge while the raw form worked, which is why it went
+  // unnoticed.
+  //
+  // The constructed type is now erased by `javaConstructedTypeName`, which is
+  // deliberately NOT bindings.ts's `javaTypeName`: that one collapses a qualified name
+  // to its last segment, which is safe for deciding what a variable holds and NOT safe
+  // for naming a constructor target. Wiring the two together is what the sibling test
+  // below ("a QUALIFIED `new` resolves to nothing") exists to forbid.
+  const dir = genericFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const box = `${PKG}/Box.java#Box`;
+    const uses = `${PKG}/Uses.java`;
+    const calls = graph.edges.filter((e) => e.relation === "calls" && e.target === box);
+    const sources = new Set(calls.map((e) => e.source));
+
+    assert.ok(sources.has(`${uses}#Uses.explicitArguments`), "new Box<String>() should reach Box");
+    assert.ok(sources.has(`${uses}#Uses.diamond`), "new Box<>() should reach Box");
+    assert.ok(sources.has(`${uses}#Uses.raw`), "new Box() should still reach Box");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java construction: a QUALIFIED `new` resolves to nothing, not to a same-named local type", async () => {
+  // The negative half of the same change, and the reason erasure is done by a helper of
+  // its own rather than by the binding pass's `javaTypeName`. Reducing `java.io.File` to
+  // its final segment would find the repo's unrelated `com.acme.File` and assert an edge
+  // the source never expressed — trading a missing edge for a wrong one, which is the
+  // trade the resolver exists to refuse.
+  const dir = genericFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const calls = graph.edges.filter((e) => e.relation === "calls");
+
+    assert.ok(
+      !calls.some(
+        (e) =>
+          e.source === `${PKG}/Uses.java#Uses.qualified` && e.target === `${PKG}/File.java#File`,
+      ),
+      "new java.io.File(...) must not resolve to the repo's own File",
+    );
+    assert.ok(
+      !calls.some((e) => e.source === `${PKG}/Uses.java#Uses.qualified`),
+      "and must not resolve to anything else either",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java construction: a nested `new` does not bind to a sibling of the same simple name", async () => {
+  // `new Beta.Builder()` collapsed to `Builder` matches two nodes in the SAME file, and
+  // the resolver's same-file tiebreak returns the FIRST — `Alpha.Builder` — at
+  // `extracted` confidence, i.e. confidently wrong. Resolving nested construction
+  // properly needs a qualified-name index; until then it resolves to nothing.
+  const dir = genericFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const api = `${PKG}/Api.java`;
+    const ctor = graph.edges.filter(
+      (e) =>
+        e.relation === "calls" && e.source === `${api}#Api.make` && e.target.includes("Builder"),
+    );
+
+    assert.deepEqual(ctor, [], "a qualified nested construction must not pick a Builder at all");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
