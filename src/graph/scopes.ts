@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
 import { shouldSkipDir, walkDir } from "../ingest/fs.js";
 import { relPosix } from "../util/paths.js";
-import { readIncludeDirs } from "../util/state.js";
+import { readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import type { GraphV1, ScopeV1 } from "./types.js";
 
 /** Project-marker files, checked in this order (also the order `markers` is built in). */
@@ -128,11 +128,13 @@ interface Candidate {
   isWorkspace: boolean;
 }
 
-/** Walk the tree (reusing `walkDir`'s skip rules, including the repo's persisted
- * `--include-dir` override) and find project-marker dirs. */
+/** Walk the tree (reusing `walkDir`'s persisted directory and submodule
+ * choices) and find project-marker dirs. */
 export function discoverScopes(
   root: string,
-  repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root))),
+  repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root)), {
+    followSubmodules: readFollowSubmodules(resolve(root)),
+  }),
 ): ScopeV1[] {
   const absRoot = resolve(root);
   const dirs = collectDirs(absRoot, repoFiles);

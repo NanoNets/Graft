@@ -36,7 +36,7 @@ import { planInit, selectedWrites } from "./hosts/plan.js";
 import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js";
 import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
-import { writeBuildConfig } from "./util/state.js";
+import { patchBuildConfig, type BuildConfig } from "./util/state.js";
 import { formatUpdateNudge, maybeRefreshInBackground, readUpdateCache, refreshUpdateCache, writeStamp } from "./upkeep.js";
 
 const program = new Command();
@@ -185,13 +185,33 @@ program
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
   .option("--lsp", "add compiler-grade call edges via a language server if one is installed (opt-in, slower; e.g. rust-analyzer, clangd)")
   .option(
+    "--follow-submodules",
+    "include initialized Git submodules recursively; persisted for later builds and automatic refreshes",
+  )
+  .option(
+    "--no-follow-submodules",
+    "exclude Git submodules; persisted for later builds and automatic refreshes (default)",
+  )
+  .option(
     "--include-dir <name>",
     "override SKIP_DIRS for this repo's walks — repeatable (e.g. --include-dir build --include-dir tools); " +
       "persisted, so a later build (and the hooks/refresh path) include it without the flag; dot-dirs are never overridable",
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
-  .action(async (dir: string, opts: { deep?: boolean; extensions?: string[]; concurrency?: string; reuse?: boolean; lsp?: boolean; includeDir?: string[] }) => {
+  .action(async (
+    dir: string,
+    opts: {
+      deep?: boolean;
+      extensions?: string[];
+      concurrency?: string;
+      reuse?: boolean;
+      lsp?: boolean;
+      includeDir?: string[];
+      followSubmodules?: boolean;
+    },
+    command: Command,
+  ) => {
     const concurrency = opts.concurrency ? Math.max(1, Number(opts.concurrency)) : undefined;
     if (opts.concurrency && !Number.isFinite(concurrency)) {
       console.error(`✗ --concurrency must be a number, got "${opts.concurrency}"`);
@@ -201,6 +221,7 @@ program
     // Persisted BEFORE the build itself runs, so this invocation's walks (and
     // every later no-flag build / hooks refresh) see it identically — the
     // walkDir call sites read it from state, not from a threaded option.
+    const buildConfigPatch: BuildConfig = {};
     if (opts.includeDir && opts.includeDir.length > 0) {
       // --include-dir takes bare SKIP_DIRS-style directory NAMES (shouldSkipDir
       // compares a single path segment), never paths, and dot-dirs are never
@@ -217,7 +238,14 @@ program
           process.exit(1);
         }
       }
-      writeBuildConfig(resolve(dir), { includeDirs: opts.includeDir });
+      buildConfigPatch.includeDirs = opts.includeDir;
+    }
+    const followSubmodulesWasExplicit = command.getOptionValueSource("followSubmodules") === "cli";
+    if (followSubmodulesWasExplicit && typeof opts.followSubmodules === "boolean") {
+      buildConfigPatch.followSubmodules = opts.followSubmodules;
+    }
+    if (Object.keys(buildConfigPatch).length > 0) {
+      patchBuildConfig(resolve(dir), buildConfigPatch);
     }
     const engine = engineFrom();
     const fmt = (o: Record<string, number>) =>
@@ -254,6 +282,7 @@ program
         childConfig: cliConfig(),
         override: buildGlobalDir,
         includeDirs: opts.includeDir,
+        followSubmodules: followSubmodulesWasExplicit ? opts.followSubmodules : undefined,
       });
       return;
     }

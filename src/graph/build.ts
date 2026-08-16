@@ -22,7 +22,7 @@ import { extractGeneric, genericLangOf, warmGenericGrammars } from "./generic.js
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
 import { readSourceFile } from "../util/source.js";
-import { readIncludeDirs } from "../util/state.js";
+import { readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import {
   emptyExtractCache,
   readExtractCache,
@@ -151,8 +151,10 @@ export async function buildGraph(
   const outDir = contextDirFor(root, opts.contextDir);
   // Enumerate once: source extraction, scope discovery, and Go module
   // resolution must agree on the same Git-ignore-aware working-tree view —
-  // including the repo's persisted `--include-dir` override.
-  const repoFiles = walkDir(root, readIncludeDirs(root));
+  // including the repo's persisted directory and submodule choices.
+  const repoFiles = walkDir(root, readIncludeDirs(root), {
+    followSubmodules: readFollowSubmodules(root),
+  });
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
