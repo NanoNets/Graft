@@ -4,7 +4,7 @@
  * graft covers the long tail of languages for ~one registry row each, instead of
  * a hand-written extractor per language (the depth tier in extract.ts).
  *
- * Grammars are WASM (`tree-sitter-wasms` bundle) loaded via `web-tree-sitter`, so
+ * Grammars are WASM (`tree-sitter-wasm` bundle) loaded via `web-tree-sitter`, so
  * a new language needs no native node-gyp build. Loading is async (WASM init), so
  * callers MUST `await warmGenericGrammars([...])` once before the synchronous
  * `extractGeneric()` is used in a build/check loop. If a grammar isn't warmed,
@@ -31,7 +31,7 @@ const require = createRequire(import.meta.url);
 const QUERY_DIRS = [join(HERE, "queries"), join(HERE, "..", "..", "src", "graph", "queries")];
 
 /** A breadth-tier language: graft name, file extensions, and the wasm basename
- * in tree-sitter-wasms/out/tree-sitter-<wasm>.wasm. One row per language. */
+ * in tree-sitter-wasm/<wasm>/tree-sitter-<wasm>.wasm. One row per language. */
 export interface GenericLang {
   name: string;
   exts: string[];
@@ -58,6 +58,7 @@ export const GENERIC_LANGS: readonly GenericLang[] = [
   { name: "ocaml", exts: [".ml", ".mli"], wasm: "ocaml" },
   { name: "zig", exts: [".zig"], wasm: "zig" },
   { name: "dart", exts: [".dart"], wasm: "dart" }, // surfaced by PR #38 (@muneebshere)
+  { name: "clojure", exts: [".clj", ".cljs", ".cljc", ".bb"], wasm: "clojure" },
 ];
 
 const byExt = new Map<string, GenericLang>();
@@ -91,9 +92,10 @@ let tsMod: typeof import("web-tree-sitter") | null = null;
 let initPromise: Promise<void> | null = null;
 
 function requireWasm(wasm: string): Buffer | null {
-  // Resolve the grammar wasm from the tree-sitter-wasms bundle.
+  // Resolve the grammar wasm from the tree-sitter-wasm bundle (its package.json
+  // `exports` maps the bare "<lang>/…" subpath to the actual "out/<lang>/…" file).
   try {
-    const p = require.resolve(`tree-sitter-wasms/out/tree-sitter-${wasm}.wasm`);
+    const p = require.resolve(`tree-sitter-wasm/${wasm}/tree-sitter-${wasm}.wasm`);
     return readFileSync(p);
   } catch {
     return null;
