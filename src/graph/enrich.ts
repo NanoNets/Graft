@@ -35,6 +35,21 @@ export interface EnrichOptions {
   concurrency?: number;
   /** Progress is reported per file (one LLM call each), as files finish — not per node. */
   onProgress?: (info: { index: number; total: number; node: string }) => void;
+  /**
+   * Durability flush of the (partially) enriched graph, called from the per-file
+   * completion handler at most once every {@link CHECKPOINT_MS}. Without it, crux
+   * only reached wiring.json at build end, so an interrupted --deep run discarded
+   * every crux it had already computed and paid for (#128). Single-threaded, so it
+   * never interleaves with a node mutation.
+   */
+  checkpoint?: () => void;
+}
+
+/** How often the crux pass flushes partial progress to disk. Read at call time (not
+ * module load) so a test seam `GRAFT_CRUX_CHECKPOINT_MS=0` (flush on every completed
+ * file) takes effect. */
+function checkpointMs(): number {
+  return Number(process.env.GRAFT_CRUX_CHECKPOINT_MS ?? 15000);
 }
 
 export interface EnrichStats {
@@ -100,6 +115,8 @@ export async function enrichGraph(
   const files = [...byFile.keys()];
   const limit = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   let done = 0;
+  const flushEvery = checkpointMs();
+  let lastCheckpoint = Date.now();
 
   await mapWithConcurrency(files, limit, async (path) => {
     const fileNodes = byFile.get(path)!;
@@ -130,6 +147,14 @@ export async function enrichGraph(
 
     // Report on completion so the counter climbs monotonically under concurrency.
     opts.onProgress?.({ index: done++, total: files.length, node: path });
+
+    // Flush partial crux to disk periodically, so a killed --deep run keeps what it
+    // has already computed (#128). Throttled by wall-clock; the caller's checkpoint
+    // writes wiring.json atomically, and the next run folds it back in by body_hash.
+    if (opts.checkpoint && Date.now() - lastCheckpoint >= flushEvery) {
+      lastCheckpoint = Date.now();
+      opts.checkpoint();
+    }
   });
 
   return stats;

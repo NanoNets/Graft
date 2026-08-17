@@ -181,11 +181,13 @@ test("a failed rebuild still answers from the graph on disk", async (t) => {
   writeFileSync(join(d, "src", "math.ts"), `${MATH}export const X = 1;\n`);
 
   // Make the graph write itself fail: the query must degrade to the old graph, not
-  // start erroring because a rebuild couldn't happen.
-  const graphFile = wiringPath(outOf(d));
-  chmodSync(graphFile, 0o400);
+  // start erroring because a rebuild couldn't happen. writeGraph is atomic (temp +
+  // rename), and a rename can replace a read-only FILE, so the unwritable target has
+  // to be the DIRECTORY — which is also the realistic "can't write here" case.
+  const graphDir = dirname(wiringPath(outOf(d)));
+  chmodSync(graphDir, 0o500); // r-x: the temp write fails, old wiring.json stays put
   const r = await ensureFreshGraph(d);
-  chmodSync(graphFile, 0o600);
+  chmodSync(graphDir, 0o700);
 
   assert.equal(r.refreshed, false);
   assert.match(r.note ?? "", /refresh skipped/);

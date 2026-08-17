@@ -8,7 +8,7 @@
  * timestamps, so rebuilding an unchanged repo produces a byte-identical file and
  * git diffs stay minimal.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { EdgeV1, GraphV1, NodeV1 } from "./types.js";
 
@@ -41,7 +41,13 @@ export function writeGraph(graph: GraphV1, outDir: string): string {
   };
   const path = wiringPath(outDir);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(sorted, null, 2) + "\n");
+  // Atomic write (temp + rename): the crux pass now checkpoints wiring.json
+  // periodically (#128), and a --deep run is exactly what gets killed mid-flush
+  // (SIGTERM/CI timeout/laptop sleep). A partial writeFileSync would leave a
+  // truncated, unparseable graph; rename swaps it in atomically on the same fs.
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(sorted, null, 2) + "\n");
+  renameSync(tmp, path);
   return path;
 }
 
