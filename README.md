@@ -105,8 +105,8 @@ Graft builds that understanding **once** and writes it into your repo as a folde
 
 - **Real explanations, not a list of symbols.** Each node says, in plain English, what a part of the system does and how it connects to the rest, the way a senior engineer would explain it. That is the part an agent actually needs so it can skip the exploration. It is not a dump of function names.
 - **A real graph you can read.** No embeddings, no similarity search, no index to keep warm. The graph is a set of linked files your agent opens, greps, and follows, exactly the way it reads any other file in the repo.
-- **Grafted into git.** The graph is just files in `graft/`. Commit it, and anyone who clones the repo has it. No database, no server, no setup. Git does the syncing, and a stale graph shows up as a diff in review instead of rotting in some external store.
-- **The diff lives with the code.** When a change moves things around, you see it in the graph diff in the same pull request, right next to the code that caused it.
+- **A local cache, not a committed artifact.** `graft build` writes `graft/` and adds it to `.gitignore` — it's a regenerable local cache, like `node_modules`. What you commit is the small wiring `graft init` drops in (`.claude/`, `AGENTS.md`, the MCP config); each teammate runs `graft build` to generate their own graph. No database, no server, no setup.
+- **Always fresh, automatically.** Every query rebuilds the graph against the working tree first — structural, `$0`, ~3ms when nothing moved — so `ask`/`grep`/`callers`/`skeleton`/`map` describe the code as it is right now, including uncommitted edits. `graft check` is a local freshness signal; there's no stale index to babysit.
 - **Your provider, your key, your model.** Summaries are written by any provider you choose — OpenAI, Anthropic (native), OpenRouter, Fireworks, Groq, a LiteLLM proxy, or a local model — under your own key. The structural code graph (`graft build`, `graft check`) is deterministic tree-sitter and never calls a model at all.
 
 <p align="center">
