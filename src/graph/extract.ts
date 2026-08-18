@@ -170,6 +170,7 @@ const JAVA_KINDS: Record<string, Kind> = {
   enum_declaration: "enum",
   record_declaration: "struct",
   annotation_type_declaration: "interface",
+  annotation_type_element_declaration: "method",
   method_declaration: "method",
   constructor_declaration: "method",
 };

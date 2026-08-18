@@ -550,12 +550,22 @@ function lexical(
   // (or no graph) keeps the original local scoring path.
   const scopes = graph ? scopesOfGraph(graph) : null;
   let scopeMeta: AskResult["scopes"];
+  // The BM25 length prior, corpus-global like `idf`/`dfltIdf` above. Hoisted out
+  // of the single-scope branch so BOTH paths score against the same statistics
+  // — that shared basis is half of what makes multi-scope scores comparable
+  // (see fuse.ts's module header). Under `--in`, the sidecar's `avgBodyLen`
+  // covers the whole corpus and must not be reused for the filtered set.
+  const avgBodyLen = askIndex && !inPrefix
+    ? askIndex.avgBodyLen
+    : symbolDocs.length
+      ? symbolDocs.reduce((a, d) => a + bodyLen(d.body), 0) / symbolDocs.length
+      : 0;
   if (scopes && scopes.length > 1) {
-    // ── Multi-scope repo: rank each sub-project against its OWN corpus (its
-    // IDF, its BM25 length prior, its subgraph walk), then fuse the per-scope
-    // orderings by reciprocal rank — the big scope can't drown the small one.
-    // Same scoring functions and blend as the single-scope path, just fed
-    // per-scope inputs; the fusion itself lives in fuse.ts. ──
+    // ── Multi-scope repo: partition by sub-project and walk each subgraph
+    // separately — so the big scope can't drown the small one — but score every
+    // scope against the repo-wide statistics, so the results stay comparable and
+    // can be ordered by score. Same scoring functions and blend as the
+    // single-scope path; the combination itself lives in fuse.ts. ──
     const byScope = new Map<string, typeof symbolDocs>();
     for (const d of symbolDocs) {
       const s = scopeOf(d.n.path, scopes).prefix;
@@ -563,47 +573,35 @@ function lexical(
       if (list) list.push(d);
       else byScope.set(s, [d]);
     }
-    const idfOf = new Map<string, { idf: Map<string, number>; dflt: number }>();
     const fusion = rankScopesAndFuse(
       [...byScope.keys()].sort(),
       {
         lex: (s) => {
           const docs = byScope.get(s)!;
-          // Per-scope IDF/BM25 stats: concepts are repo-level so their bags
-          // fold in everywhere, symbol bags come from this scope only. (The
-          // build sidecar's df/avgBodyLen are corpus-global, so multi-scope
-          // always computes these live — from the sidecar's own token maps.)
-          const sIdf = computeIdf([
-            ...conceptBags,
-            ...docs.map((d) => new Set([...d.name.keys(), ...d.path.keys(), ...d.body.keys()])),
-          ]);
-          idfOf.set(s, { idf: sIdf, dflt: Math.log(1 + conceptBags.length + docs.length) });
-          const avg = docs.reduce((a, d) => a + bodyLen(d.body), 0) / docs.length;
+          // Repo-wide IDF and length prior — the SAME `idf`/`avgBodyLen` the
+          // single-scope path uses. Scoring each scope against its own corpus
+          // (as this did before #117) made a term worth a different amount in
+          // every scope, so the resulting scores could not be compared and the
+          // combined order had to fall back on rank. Only the PARTITION is
+          // per-scope now; the statistics are global.
           const out = new Map<string, number>();
           for (const { n, name, path, body } of docs) {
             const total =
-              (score(q, name, sIdf) * 3 +
-                score(q, path, sIdf) * 2 +
-                bm25(q, body, sIdf, bodyLen(body), avg)) *
+              (score(q, name, idf) * 3 +
+                score(q, path, idf) * 2 +
+                bm25(q, body, idf, bodyLen(body), avgBodyLen)) *
               testFactor(n.path);
             if (total > 0) out.set(n.id, total);
           }
           return out;
         },
-        // The participation gate's match-STRENGTH signal, evaluated once per
-        // scope on that scope's raw-lex top doc — same `strongShare`/
-        // `matchedIdfShare` functions and per-scope idf `lex` (above) just
-        // computed, so this reads the SAME strength `federateAsk` gates on
-        // (see fuse.ts's STRONG_FLOOR/HIGH_FLOOR).
-        strength: (s, id) => {
-          const d = docsById.get(id);
-          const si = idfOf.get(s);
-          if (!d || !si) return { coverage: 0, coverageStrong: 0 };
-          return {
-            coverage: matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt),
-            coverageStrong: strongShare(q, d.n, d, si.idf, si.dflt),
-          };
-        },
+        // Body-only suppression: does any doc in this scope carry a query term
+        // in an identifier (name) or its path, rather than only in prose?
+        hasIdentifierMatch: (s) =>
+          (byScope.get(s) ?? []).some(({ name, path }) => {
+            for (const t of q.keys()) if (hasTerm(name, t) || hasTerm(path, t)) return true;
+            return false;
+          }),
         walk: (s, seeds) =>
           graphRank
             ? personalizedPageRank(graph!, seeds, {
@@ -630,9 +628,11 @@ function lexical(
         scope: rd.scope,
       };
       const d = docsById.get(rd.id);
-      const si = idfOf.get(rd.scope);
-      matchedOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt) : 0);
-      matchedStrongOf.set(hit, d && si ? strongShare(q, n, d, si.idf, si.dflt) : 0);
+      // Global idf here too, so per-hit coverage means the same thing in a
+      // multi-scope repo as it does in a single-scope one — the escalation
+      // nudge and the hook's coverage gate both read these.
+      matchedOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path, d.body], idf, dfltIdf) : 0);
+      matchedStrongOf.set(hit, d ? strongShare(q, n, d, idf, dfltIdf) : 0);
       selectionGroupOf.set(hit, `file:${n.path}`);
       symbolHits.push(hit);
     }
@@ -642,14 +642,10 @@ function lexical(
     if (fusion.federated.length > 1 || fusion.alsoMatched.length > 0)
       scopeMeta = { federated: fusion.federated, alsoMatched: fusion.alsoMatched };
   } else {
-  // Single-scope: retain the pre-scopes lexical/PPR scoring path. Under `--in`,
-  // `askIndex`'s `avgBodyLen` is corpus-global and must not be reused for the
-  // filtered set.
-  const avgBodyLen = askIndex && !inPrefix
-    ? askIndex.avgBodyLen
-    : symbolDocs.length
-      ? symbolDocs.reduce((a, d) => a + bodyLen(d.body), 0) / symbolDocs.length
-      : 0;
+  // Single-scope: the pre-scopes ranking path, byte-identical output when
+  // `--in` is absent (Task 3's regression guarantee: `askIndex && !inPrefix`
+  // reduces to plain `askIndex` when `inPrefix` is undefined). `avgBodyLen` is
+  // now defined once above and shared with the multi-scope branch.
   const lex = new Map<string, number>(); // node id → lexical score (>0 only)
   let maxLex = 0;
   for (const { n, name, path, body } of symbolDocs) {
