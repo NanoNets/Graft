@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { warmGenericGrammars, extractGeneric, genericLangOf, isWarm } from "../src/graph/generic.js";
+import { warmGenericGrammars, extractGeneric, genericLangOf, isWarm, loadWasmLanguage, parseWasm } from "../src/graph/generic.js";
 import { resolveEdges } from "../src/graph/resolve.js";
 import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
@@ -289,4 +289,66 @@ test("buildGraph + checkGraph handle a breadth-tier (.rs) repo end-to-end", asyn
   // identically, so a fresh graph reads as in-sync, not perpetually stale.
   const chk = await checkGraph(dir);
   assert.equal(chk.ok, true, `check OK on a breadth-tier repo (added=${chk.added}, removed=${chk.removed})`);
+});
+
+// A grammar that THROWS mid-parse (as opposed to returning an error tree) is not a
+// per-file syntax problem — it is the grammar failing. It used to be swallowed inside
+// extractGeneric, leaving the file with only its file node while `build` reported
+// every file as parsed and the extract cache memoised the empty result as clean. The
+// contract now: the throw surfaces in `errors`, is remembered by the cache, and does
+// not disturb sibling files. The probe below uses a real crash in the bundled PHP
+// grammar (heredoc → "memory access out of bounds"); if a future grammar bundle no
+// longer throws, there is nothing to assert and the test skips rather than fails.
+const PHP_HEREDOC = `<?php
+namespace App;
+class WithHeredoc {
+    public function sql(): string {
+        return <<<SQL
+            SELECT 1
+            SQL;
+    }
+}
+`;
+const PHP_PLAIN = `<?php
+namespace App;
+class Plain { public function a(): int { return 1; } }
+`;
+
+test("a grammar that throws surfaces in build errors instead of silently emptying the file", async (t) => {
+  await warmGenericGrammars(["php"]);
+  assert.ok(isWarm("php"), "php grammar should warm");
+
+  // Probe the grammar itself, not extractGeneric — its catch is the very thing under
+  // test. parseWasm returns null when the parser throws (and non-null on success).
+  const php = await loadWasmLanguage("php");
+  assert.ok(php, "php wasm loads");
+  assert.ok(parseWasm(php, PHP_PLAIN), "sanity: the grammar parses plain PHP");
+  const grammarThrows = parseWasm(php, PHP_HEREDOC) === null;
+  if (!grammarThrows) {
+    t.skip("bundled php grammar no longer throws on heredoc — nothing to assert");
+    return;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "graft-throw-"));
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src", "WithHeredoc.php"), PHP_HEREDOC);
+  writeFileSync(join(dir, "src", "Plain.php"), PHP_PLAIN);
+
+  const first = await buildGraph(dir, { reuse: false });
+  const errs = first.errors.filter((e) => e.includes("WithHeredoc.php"));
+  assert.equal(errs.length, 1, `the throwing file is reported once (errors=${JSON.stringify(first.errors)})`);
+  assert.match(errs[0], /grammar threw/, "the message says the grammar threw, not that the file has a syntax error");
+
+  const g = readGraph(wiringPath(contextDirFor(dir)));
+  assert.ok(g, "graph built despite the throw");
+  const plain = g!.nodes.filter((n) => n.path.endsWith("Plain.php") && n.kind !== "file");
+  assert.ok(plain.length >= 2, `sibling file still fully indexed (got ${plain.length})`);
+  assert.ok(!g!.nodes.some((n) => n.path.endsWith("WithHeredoc.php") && n.kind !== "file"),
+    "the throwing file contributes no symbol nodes (it must not look parsed)");
+
+  // Incremental rebuild: the failure must replay from the cache as a failure,
+  // not as a clean empty parse.
+  const second = await buildGraph(dir, { reuse: true });
+  assert.equal(second.errors.filter((e) => e.includes("WithHeredoc.php")).length, 1,
+    "a cached failure is still reported on the next build");
 });
