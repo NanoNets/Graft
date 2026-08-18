@@ -73,6 +73,12 @@ export interface BuildConfig {
    * no-flag build — and the fingerprint/refresh path, which never sees CLI
    * flags at all — behave identically to the invocation that set it. */
   includeDirs?: string[];
+  /** Repo-relative directory prefixes that are the ONLY directories walked.
+   * When set, every walk (build, check, freshness probe, scope discovery)
+   * indexes files under these prefixes and skips everything else. Persisted so
+   * a no-flag rebuild and the refresh path behave identically to the invocation
+   * that set it. */
+  onlyDirs?: string[];
   /** Whether initialized Git submodules are folded into this repo's graph.
    * Absent/false keeps the historical boundary at the superproject. */
   followSubmodules?: boolean;
@@ -120,6 +126,17 @@ export function patchBuildConfig(d: string, patch: BuildConfig): void {
  * a later no-flag rebuild, and the hooks/refresh path all agree. */
 export function readIncludeDirs(d: string): Set<string> | undefined {
   const dirs = readBuildConfig(d)?.includeDirs;
+  return dirs && dirs.length ? new Set(dirs) : undefined;
+}
+
+/** The persisted `--only-dir` whitelist for repo `d`, as a Set — `undefined`
+ * when nothing was ever persisted (or the persisted list is empty), which
+ * `walkDir` treats as "walk the whole tree" (the default). Symmetric with
+ * {@link readIncludeDirs}: read from the same local config, shared by every
+ * walkDir-driven entry point so build, check, freshness and scope discovery
+ * all agree on the same file set. */
+export function readOnlyDirs(d: string): Set<string> | undefined {
+  const dirs = readBuildConfig(d)?.onlyDirs;
   return dirs && dirs.length ? new Set(dirs) : undefined;
 }
 
