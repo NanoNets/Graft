@@ -24,6 +24,7 @@ import { extractFile, languageOf } from "./extract.js";
 import { extractGeneric, genericLangOf, warmGenericGrammars } from "./generic.js";
 import { listSourceFiles } from "./build.js";
 import { readGraph, wiringPath } from "./write.js";
+import { readFingerprint } from "./fingerprint.js";
 import { readSourceFile } from "../util/source.js";
 
 export interface GraphCheckResult {
@@ -70,7 +71,12 @@ export async function checkGraph(
   }
 
   // Freshly extract Tier-1 nodes from the code on disk (same file set as build).
-  const sourceFiles = listSourceFiles(root, outDir);
+  // A `--only-dir` build records its whitelist in the fingerprint; read it back
+  // so `check` diffs the same limited set instead of flagging every excluded
+  // file as "added".
+  const fpOnlyDirs = readFingerprint(outDir)?.onlyDirs;
+  const onlyDirs = fpOnlyDirs && fpOnlyDirs.length > 0 ? new Set(fpOnlyDirs) : undefined;
+  const sourceFiles = listSourceFiles(root, outDir, undefined, onlyDirs);
   await warmGenericGrammars(
     new Set(sourceFiles.map((f) => genericLangOf(f)?.name).filter((n): n is string => !!n)),
   );

@@ -3,20 +3,20 @@
  *
  * The whitelist is the inverse of SKIP_DIRS: when set, ONLY files under the
  * listed repo-relative prefixes are indexed, and everything else (including
- * top-level files) is skipped. Like `--include-dir`, it persists to the local
- * `.graft/config.json` so a later no-flag build — and the fingerprint probe,
- * which never sees CLI flags — walk the same set. That last property is what
- * keeps a limited build from looping: excluded files must not read as phantom
- * "added" drift on every query.
+ * top-level files) is skipped. It is recorded in the fingerprint — the graph's
+ * own freshness sidecar under `graft/` — never in the source repo's
+ * `.graft/config.json`, so a limited build leaves no trace under the repo being
+ * indexed. That also keeps the query-path freshness probe honest: the excluded
+ * files must not read as phantom "added" drift on every query.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { readGraph, wiringPath } from "../src/graph/write.js";
-import { probeDrift, isClean } from "../src/graph/fingerprint.js";
+import { probeDrift, isClean, readFingerprint } from "../src/graph/fingerprint.js";
 import type { GraphV1 } from "../src/graph/types.js";
 
 function repoWithDirs(): string {
@@ -37,7 +37,7 @@ function graphOf(d: string): GraphV1 | null {
   return readGraph(wiringPath(join(d, "graft")));
 }
 
-test("--only-dir limits the walk to listed prefixes, persists, and the fingerprint probe stays clean", () => {
+test("--only-dir limits the walk, records the whitelist in the fingerprint, and the probe stays clean", () => {
   const d = repoWithDirs();
   try {
     // Default: everything is indexed.
@@ -56,13 +56,10 @@ test("--only-dir limits the walk to listed prefixes, persists, and the fingerpri
     assert.ok(!limited!.nodes.some((n) => n.path === "src/b/b.ts"), "src/b must be skipped");
     assert.ok(!limited!.nodes.some((n) => n.path === "top.ts"), "top.ts must be skipped");
 
-    // No flag this time: the persisted whitelist must still apply.
-    runCli(["build", d]);
-    const persisted = graphOf(d);
-    assert.ok(persisted, "expected a rebuilt graph");
-    assert.ok(persisted!.nodes.some((n) => n.path === "src/a/a.ts"), "persisted: src/a indexed");
-    assert.ok(!persisted!.nodes.some((n) => n.path === "src/b/b.ts"), "persisted: src/b skipped");
-    assert.ok(!persisted!.nodes.some((n) => n.path === "top.ts"), "persisted: top.ts skipped");
+    // The whitelist lives in the fingerprint, not the source repo's config.
+    const fp = readFingerprint(join(d, "graft"));
+    assert.deepEqual(fp?.onlyDirs, ["src/a"], "fingerprint must record the whitelist");
+    assert.ok(!existsSync(join(d, ".graft", "config.json")), "source repo config must be untouched");
 
     // The fingerprint probe (the fast path `ensureFreshGraph`/hooks use, which
     // never sees CLI flags) must enumerate the same whitelisted set — so the

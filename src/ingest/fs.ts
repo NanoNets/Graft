@@ -4,8 +4,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { relPosix } from "../util/paths.js";
-import { readOnlyDirs } from "../util/state.js";
 
 /** Directories that are dependency/build output, never source. */
 export const SKIP_DIRS = new Set([
@@ -73,20 +71,7 @@ export function walkDir(
   includes?: ReadonlySet<string>,
   opts: WalkOptions = {},
 ): string[] {
-  const files = gitVisibleFiles(dir, includes, opts.followSubmodules === true) ?? walkFilesystem(dir, includes);
-  // The `--only-dir` whitelist is applied HERE, on the single enumeration entry
-  // point every consumer shares (build, check, freshness probe, scope
-  // discovery), so a build and the query-path freshness probe can never disagree
-  // about which files exist. When set, only files whose repo-relative path is
-  // under one of the prefixes survive; everything else (including submodules
-  // outside the list) is skipped.
-  const onlyDirs = readOnlyDirs(resolve(dir));
-  if (!onlyDirs || onlyDirs.size === 0) return files;
-  const root = resolve(dir);
-  return files.filter((abs) => {
-    const rel = relPosix(root, abs);
-    return [...onlyDirs].some((d) => rel === d || rel.startsWith(`${d}/`));
-  });
+  return gitVisibleFiles(dir, includes, opts.followSubmodules === true) ?? walkFilesystem(dir, includes);
 }
 
 /** Git's canonical working-tree file set, relative to `dir`. Tracked files are
