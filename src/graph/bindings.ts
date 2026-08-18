@@ -58,6 +58,21 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     }
     return null;
   }
+  if (lang === "php") {
+    const phpDefTypes = new Set([
+      "class_declaration",
+      "interface_declaration",
+      "trait_declaration",
+      "enum_declaration",
+      "method_declaration",
+      "function_definition",
+    ]);
+    if (phpDefTypes.has(node.type)) return node.childForFieldName("name")?.text ?? null;
+    // Closures push a scope segment in extract.ts too — mirror it so a typed
+    // parameter bound inside a closure is keyed under the same scope path.
+    if (node.type === "anonymous_function" || node.type === "arrow_function") return phpClosureName(node);
+    return null;
+  }
   const defTypes =
     lang === "python"
       ? new Set(["class_definition", "function_definition"])
@@ -116,6 +131,9 @@ export function resolveRecvType(
       undefined
     );
   }
+  // PHP static call `Foo::bar()`: the scope operand is a class name, so it *is*
+  // the receiver type. (Member calls pass a `$var` receiver, filtered by the `$`.)
+  if (ctx.lang === "php" && !receiver.startsWith("$")) return receiver;
   return (
     (ctx.lang === "go" && receiver === ctx.goReceiverVar ? ctx.enclosingClass : undefined) ??
     ctx.bindings.lookup(ctx.scope, receiver) ??
@@ -195,6 +213,7 @@ function visit(
   if (lang === "python") handlePy(node, scope, classScope, bindings, aliases);
   else if (lang === "go") handleGo(node, scope, bindings);
   else if (lang === "java") handleJava(node, scope, classScope, bindings);
+  else if (lang === "php") handlePhp(node, scope, bindings);
   else handleTs(node, scope, classScope, bindings, aliases);
 
   const name = defName(node, lang);
@@ -230,6 +249,62 @@ function callTypeName(node: Parser.SyntaxNode | null | undefined, aliases: Map<s
   const fn = node.childForFieldName("function");
   if (fn?.type !== "identifier") return null;
   return aliases.get(fn.text) ?? fn.text;
+}
+
+/** PHP variable->type bindings from the two confident, syntax-local clues:
+ * a type-hinted parameter (`function f(Foo $x)`) and a `new` assignment
+ * (`$x = new Foo()`). Keyed by the `$var` text (with the `$`) so a
+ * `$var->method()` call site resolves through resolveRecvType's bindings
+ * lookup, exactly like Python's annotated params and Go's receiver. */
+function handlePhp(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {
+  if (node.type === "simple_parameter") {
+    const type = phpTypeName(node.childForFieldName("type"));
+    const name = node.childForFieldName("name");
+    if (type && name?.type === "variable_name") bindings.set(scope.join("."), name.text, type);
+    return;
+  }
+  if (node.type === "assignment_expression") {
+    const left = node.childForFieldName("left");
+    const right = node.childForFieldName("right");
+    if (left?.type === "variable_name" && right?.type === "object_creation_expression") {
+      const type = phpNewType(right);
+      if (type) bindings.set(scope.join("."), left.text, type);
+    }
+  }
+}
+
+/** Closure name, duplicated from extract.ts's `phpClosureName` (this file must
+ * not value-import extract.ts) so the two scope stacks agree on the segment a
+ * closure pushes. The right-hand-side check compares node `.id` rather than
+ * `===` on wrappers for the same reason as extract.ts: wrapper identity is not
+ * stable across traversals, so `===` can spuriously fall through to `{closure}`
+ * and desync this scope segment from the one extract.ts mints. */
+function phpClosureName(node: Parser.SyntaxNode): string {
+  const parent = node.parent;
+  if (parent?.type === "assignment_expression" && parent.childForFieldName("right")?.id === node.id) {
+    const left = parent.childForFieldName("left");
+    if (left?.type === "variable_name") return left.text.replace(/^\$/, "");
+  }
+  return "{closure}";
+}
+
+/** A PHP type hint's class name: unwrap `?T` (optional_type) and `named_type`,
+ * de-qualify a namespaced name to its trailing segment. Null for primitives,
+ * unions, and intersections (no single confident class to bind). */
+function phpTypeName(node: Parser.SyntaxNode | null): string | null {
+  if (!node) return null;
+  if (node.type === "named_type" || node.type === "optional_type") {
+    return phpTypeName(node.namedChildren[0] ?? null);
+  }
+  if (node.type === "name") return node.text;
+  if (node.type === "qualified_name") return node.text.replace(/^.*\\/, "");
+  return null;
+}
+
+/** The class name of a `new Foo()` / `new App\Foo()`, de-qualified. */
+function phpNewType(node: Parser.SyntaxNode): string | null {
+  const cls = node.namedChildren.find((c) => c.type === "name" || c.type === "qualified_name");
+  return cls ? cls.text.replace(/^.*\\/, "") : null;
 }
 
 function handlePy(
