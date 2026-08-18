@@ -83,7 +83,11 @@ svg.graph:active{cursor:grabbing}
 .zoomctl{position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px}
 .zoomctl .iconbtn{background:var(--panel)}
 
-.detail{width:300px;flex:none;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;padding:18px 18px 24px}
+.resizer{flex:none;width:9px;margin:0 -4px;z-index:6;cursor:col-resize;position:relative;touch-action:none}
+.resizer::before{content:"";position:absolute;top:0;bottom:0;left:4px;width:1px;background:var(--border)}
+.resizer:hover::before,.resizer:focus-visible::before{left:3px;width:3px;background:var(--accent)}
+.resizer:focus-visible{outline:none}
+.detail{width:var(--detail-w,300px);flex:none;border-left:1px solid var(--border);background:var(--panel);overflow-y:auto;padding:18px 18px 24px}
 .detail .empty{color:var(--muted);font-size:13.5px;text-align:center;margin-top:200px}
 .d-type{display:inline-flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;padding:3px 10px;border-radius:20px;background:var(--chip)}
 .d-type .sw{width:8px;height:8px;border-radius:50%}
@@ -116,4 +120,4 @@ svg.graph:active{cursor:grabbing}
 .emptytab code{background:var(--chip);padding:2px 8px;border-radius:6px;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.9em}
 
 @media (prefers-reduced-motion:reduce){ .tree-row .chev{transition:none} }
-@media (max-width:760px){ .detail{display:none} .searchbox input{width:120px} .counts{display:none} }
+@media (max-width:760px){ .detail,.resizer{display:none} .searchbox input{width:120px} .counts{display:none} }
