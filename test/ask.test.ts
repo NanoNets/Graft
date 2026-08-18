@@ -203,6 +203,38 @@ test("ask reports coverage: 1.0 when every query term hits, low on mostly-off-co
   }
 });
 
+test("ask pools complementary evidence from sibling symbols without replacing their spans", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-ask-file-pool-"));
+  try {
+    writeFileSync(
+      join(dir, "auth.ts"),
+      `export function validateCredential(value: string): string {\n` +
+        `  return value;\n` +
+        `}\n\n` +
+        `export function rotateSession(value: string): string {\n` +
+        `  return value;\n` +
+        `}\n`,
+    );
+    writeFileSync(
+      join(dir, "noise.ts"),
+      `export function validateCredentialSession(value: string): string {\n` +
+        `  return value;\n` +
+        `}\n`,
+    );
+    await buildGraph(dir);
+
+    const r = ask(dir, "validate credential rotate session", { graphRank: false, limit: 5 });
+    const authHits = r.hits.filter((h) => /^auth\.ts:L\d+-L\d+$/.test(h.pointer));
+    assert.equal(authHits.length, 2, "both complementary symbol spans remain in the pack");
+    assert.match(r.hits[0].pointer, /^auth\.ts:L\d+-L\d+$/, "the distributed-evidence file ranks first");
+    assert.ok((r.coverage ?? 0) > 0, "the pooled top remains a lexical hit for relevance gating");
+    assert.ok((r.coverageStrong ?? 0) >= 0.1, "the pooled top still clears the strong relevance gate");
+    assert.ok(!r.hits.some((h) => h.pointer === "auth.ts"), "pooling does not replace spans with a whole-file hit");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ask finds a symbol by a term that appears only in its body (body-indexing)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "graft-ask-body-"));
   try {

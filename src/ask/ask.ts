@@ -31,6 +31,7 @@ import { normalizePathPrefix } from "../util/paths.js";
 import { resolveSymbol } from "../graph/traverse.js";
 import type { EdgeV1, GraphV1, NodeV1, Relation } from "../graph/types.js";
 import { rankScopesAndFuse } from "./fuse.js";
+import { poolFileEvidence, type FileEvidenceCandidate } from "./file-evidence.js";
 import { personalizedPageRank } from "./graphrank.js";
 import { readSourceFile } from "../util/source.js";
 import { counts, tokenize, type AskIndex, type AskIndexDoc } from "./index-file.js";
@@ -392,6 +393,34 @@ function matchedIdfShare(
   return total > 0 ? matched / total : 0;
 }
 
+/** Per-term form of {@link matchedIdfShare}, used only as internal evidence for
+ * file pooling. Each matched term stores its share of the whole query's IDF
+ * mass, so merging maps by term rewards complementary matches but not repeated
+ * copies of the same word across sibling symbols. */
+function matchedIdfEvidence(
+  q: Map<string, number>,
+  fields: Array<Map<string, number>>,
+  idf: Map<string, number>,
+  dfltIdf: number,
+): { share: number; terms: Map<string, number> } {
+  let total = 0;
+  let matched = 0;
+  const weights: Array<[string, number]> = [];
+  for (const t of q.keys()) {
+    const weight = idf.get(t) ?? dfltIdf;
+    total += weight;
+    if (!fields.some((f) => hasTerm(f, t))) continue;
+    matched += weight;
+    weights.push([t, weight]);
+  }
+  if (total <= 0) return { share: 0, terms: new Map() };
+
+  return {
+    share: matched / total,
+    terms: new Map(weights.map(([term, weight]) => [term, weight / total])),
+  };
+}
+
 function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolean, inPrefix?: string): AskResult {
   // Binary query terms: a word repeated in a pasted issue body counts once, so a
   // ranty description can't linearly amplify an incidental word.
@@ -527,9 +556,18 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
   };
   const docsById = new Map(symbolDocs.map((d) => [d.n.id, d]));
   const symbolHits: AskHit[] = [];
+  // Internal-only descriptors aligned to `symbolHits`. They let the common
+  // post-ranking seam pool complementary lexical evidence without parsing
+  // pointers or changing AskHit's public/output shape.
+  const fileEvidence: FileEvidenceCandidate[] = [];
+  // `matchedIdfEvidence` intentionally plural-folds for relevance reporting,
+  // while lexical candidate generation uses exact tokens. Keep the actual
+  // lexical ids so a graph-only rescue (e.g. query "packs", node token "pack")
+  // can never masquerade as pooling evidence merely through plural folding.
+  const lexicalHitIds = new Set<string>();
   // The single-vs-multi-scope branch keys on `scopesOfGraph` ONLY: one scope
-  // (or no graph) takes the existing path below completely untouched — that
-  // branch is a byte-level regression guarantee for single-scope repos.
+  // (or no graph) keeps the original local scoring path; the common file-
+  // evidence rerank runs only after either branch has produced candidates.
   const scopes = graph ? scopesOfGraph(graph) : null;
   let scopeMeta: AskResult["scopes"];
   if (scopes && scopes.length > 1) {
@@ -568,7 +606,10 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
                 score(q, path, sIdf) * 2 +
                 bm25(q, body, sIdf, bodyLen(body), avg)) *
               testFactor(n.path);
-            if (total > 0) out.set(n.id, total);
+            if (total > 0) {
+              out.set(n.id, total);
+              lexicalHitIds.add(n.id);
+            }
           }
           return out;
         },
@@ -616,6 +657,22 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       matchedOf.set(hit, d && si ? matchedIdfShare(q, [d.name, d.path, d.body], si.idf, si.dflt) : 0);
       matchedStrongOf.set(hit, d && si ? strongShare(q, n, d, si.idf, si.dflt) : 0);
       symbolHits.push(hit);
+      // Pooling is a post-fusion rerank, so every scope must express evidence
+      // against the same repo-global query-term weights. Scope-local IDF above
+      // remains authoritative for scope ranking and participation.
+      const evidence = d
+        ? matchedIdfEvidence(q, [d.name, d.path, d.body], idf, dfltIdf).terms
+        : new Map<string, number>();
+      fileEvidence.push({
+        file: n.path,
+        score: hit.score,
+        evidence,
+        eligible:
+          lexicalHitIds.has(rd.id) &&
+          n.kind !== "file" &&
+          testFactor(n.path) === 1 &&
+          evidence.size > 0,
+      });
     }
     // Label + footer only when federation actually happened (or a scope was
     // gated out and is worth mentioning) — a query matching one scope of a
@@ -623,11 +680,10 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
     if (fusion.federated.length > 1 || fusion.alsoMatched.length > 0)
       scopeMeta = { federated: fusion.federated, alsoMatched: fusion.alsoMatched };
   } else {
-  // Single-scope: the pre-scopes ranking path, byte-identical output when
-  // `--in` is absent (Task 3's regression guarantee: `askIndex && !inPrefix`
-  // reduces to plain `askIndex` when `inPrefix` is undefined, so this line is
-  // a no-op change for every non-`--in` caller). Under `--in`, `askIndex`'s
-  // `avgBodyLen` is corpus-global and must not be reused for the filtered set.
+  // Single-scope: retain the pre-scopes lexical/PPR scoring path. (The common
+  // file-evidence rerank below may intentionally change final ordering.) Under
+  // `--in`, `askIndex`'s `avgBodyLen` is corpus-global and must not be reused
+  // for the filtered set.
   const avgBodyLen = askIndex && !inPrefix
     ? askIndex.avgBodyLen
     : symbolDocs.length
@@ -645,6 +701,7 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       testFactor(n.path);
     if (total > 0) {
       lex.set(n.id, total);
+      lexicalHitIds.add(n.id);
       maxLex = Math.max(maxLex, total);
     }
   }
@@ -681,15 +738,39 @@ function lexical(query: string, corpus: Corpus, limit: number, graphRank: boolea
       score: blended,
     };
     const d = docsById.get(id);
-    matchedOf.set(hit, d ? matchedIdfShare(q, [d.name, d.path, d.body], idf, dfltIdf) : 0);
+    const match = d
+      ? matchedIdfEvidence(q, [d.name, d.path, d.body], idf, dfltIdf)
+      : { share: 0, terms: new Map<string, number>() };
+    matchedOf.set(hit, match.share);
     matchedStrongOf.set(hit, d ? strongShare(q, n, d, idf, dfltIdf) : 0);
     symbolHits.push(hit);
+    fileEvidence.push({
+      file: n.path,
+      score: hit.score,
+      evidence: match.terms,
+      eligible:
+        lexicalHitIds.has(id) &&
+        n.kind !== "file" &&
+        testFactor(n.path) === 1 &&
+        match.terms.size > 0,
+    });
   }
   }
 
+  // Recompose fine-grained hits at ranking time: distinct query evidence from
+  // sibling symbols can lift their file, but every result remains the original
+  // symbol span. Mutating scores in place preserves the AskHit identities used
+  // by `matchedOf`/`matchedStrongOf` for the final top-hit relevance signal.
+  // Scope/workspace participation is deliberately unchanged: this small stage
+  // reranks only candidates already admitted by those existing gates.
+  const pooledScores = poolFileEvidence(fileEvidence);
+  for (let index = 0; index < symbolHits.length; index += 1)
+    symbolHits[index].score = pooledScores[index];
+
   // Concepts and symbols live on comparable 0..~1.5 scales so they merge fairly:
-  // concept scores are normalized to their own max, symbol scores are the
-  // lexical-normalized + graph-weighted blend.
+  // concept scores are normalized to their own max; symbol scores start from
+  // the lexical-normalized + graph-weighted blend, then file pooling uses one
+  // common rescale to preserve that blend's original ceiling.
   for (const h of conceptHits) h.score = maxConcept > 0 ? h.score / maxConcept : 0;
 
   const scored = [...conceptHits, ...symbolHits];
