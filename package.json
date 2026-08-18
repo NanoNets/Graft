@@ -1,7 +1,7 @@
 {
   "name": "@nanonets/graft",
   "version": "0.11.0",
-  "description": "Build a repo's context graph as a folder of linked markdown files that live in the repo and stay in sync with the code through git.",
+  "description": "Build a repo's context graph as a folder of linked markdown files: a local, regenerable cache that every query keeps in sync with your code.",
   "keywords": [
     "ai",
     "agents",
@@ -55,7 +55,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.113.0",
+    "@anthropic-ai/sdk": "^0.116.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "gray-matter": "^4.0.3",
@@ -66,7 +66,7 @@
     "tree-sitter-php": "^0.23.4",
     "tree-sitter-python": "^0.21.0",
     "tree-sitter-typescript": "^0.23.2",
-    "tree-sitter-wasms": "^0.1.13",
+    "tree-sitter-wasm": "^1.1.4",
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.18.2",
     "web-tree-sitter": "^0.25.10"

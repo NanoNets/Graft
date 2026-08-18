@@ -10,14 +10,15 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
 import { relPosix } from "../util/paths.js";
-import { readIncludeDirs } from "../util/state.js";
+import { readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import { languageOf, depthExtensions } from "./extract.js";
 import { genericLangOf, genericExtensions } from "./generic.js";
+import { containerLangOf, containerExtensions } from "./container.js";
 
-/** Every extension graft has a parser for (depth + breadth), sorted and de-duped —
- * the authoritative answer to "what does `-e` actually support". */
+/** Every extension graft has a parser for (depth + breadth + container), sorted
+ * and de-duped — the authoritative answer to "what does `-e` actually support". */
 export function supportedExtensions(): string[] {
-  return [...new Set([...depthExtensions(), ...genericExtensions()])].sort();
+  return [...new Set([...depthExtensions(), ...genericExtensions(), ...containerExtensions()])].sort();
 }
 
 /** Normalize a user-supplied extension: ensure a leading dot, lower-case. */
@@ -39,21 +40,25 @@ export function unsupportedExtensions(exts: string[]): string[] {
 /**
  * The source files a graph build parses: supported languages, minus the
  * output dir. When no pre-enumerated `repoFiles` is passed, the walk reads
- * `root`'s persisted `--include-dir` override (if any) directly from state —
- * so every caller that enumerates through here (the fingerprint probe, the
- * hooks/refresh path, none of which ever see a CLI flag) behaves identically
- * to the `graft build --include-dir` invocation that set it.
+ * `root`'s persisted file-walk choices directly from state, so every caller
+ * that enumerates through here (the fingerprint probe and hooks/refresh path,
+ * none of which ever see a CLI flag) behaves identically to the build that
+ * saved those choices.
  */
 export function listSourceFiles(
   root: string,
   outDir: string,
-  repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root))),
+  repoFiles: string[] = walkDir(root, readIncludeDirs(resolve(root)), {
+    followSubmodules: readFollowSubmodules(resolve(root)),
+  }),
 ): string[] {
-  // A file is a source file if a depth-tier grammar (languageOf) OR a breadth-tier
-  // grammar (genericLangOf) claims its extension. Both must agree here or `build`
-  // and `check` would enumerate different sets.
+  // A file is a source file if a depth-tier grammar (languageOf), a breadth-tier
+  // grammar (genericLangOf) or a container (containerLangOf) claims its extension.
+  // All three must agree here or `build` and `check` would enumerate different sets.
   return repoFiles.filter(
-    (f) => !f.startsWith(outDir) && (languageOf(f) !== null || genericLangOf(f) !== null),
+    (f) =>
+      !f.startsWith(outDir) &&
+      (languageOf(f) !== null || genericLangOf(f) !== null || containerLangOf(f) !== null),
   );
 }
 

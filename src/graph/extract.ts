@@ -172,6 +172,7 @@ const JAVA_KINDS: Record<string, Kind> = {
   enum_declaration: "enum",
   record_declaration: "struct",
   annotation_type_declaration: "interface",
+  annotation_type_element_declaration: "method",
   method_declaration: "method",
   constructor_declaration: "method",
 };
@@ -508,6 +509,23 @@ function collectTsImportBindings(
 }
 
 /**
+ * Do these two wrappers stand for the same syntax node? `===` does not answer that:
+ * node-tree-sitter materializes `SyntaxNode` objects on demand and caches them
+ * weakly, so reaching one node twice can return two different JS objects. Comparing
+ * wrappers makes a purely syntactic question depend on collector timing — two cold
+ * builds of unchanged source then disagree on `references` edges (#116).
+ *
+ * `id` is the stable identity, unique within one tree, so the tree is compared too.
+ * A `Tree` is one object per parse (unlike its nodes), so `===` is right for it.
+ */
+function sameSyntaxNode(
+  a: Parser.SyntaxNode | null | undefined,
+  b: Parser.SyntaxNode | null | undefined,
+): boolean {
+  return !!a && !!b && a.tree === b.tree && a.id === b.id;
+}
+
+/**
  * A parameter or local declaration wins over an import inside that function.
  * Drop that imported binding for the whole function rather than create a false
  * dependency. Nested functions are separate scopes and filter themselves.
@@ -520,7 +538,7 @@ function withoutShadowedImports(
   const shadowed = new Set<string>();
   const definitionValue = definition.childForFieldName("value");
   const visit = (node: Parser.SyntaxNode): void => {
-    if (node !== definition && node !== definitionValue && isFunctionBoundary(node)) {
+    if (!sameSyntaxNode(node, definition) && !sameSyntaxNode(node, definitionValue) && isFunctionBoundary(node)) {
       const name = node.childForFieldName("name");
       if (name?.type === "identifier") shadowed.add(name.text);
       return;
@@ -558,13 +576,16 @@ function isFunctionBoundary(node: Parser.SyntaxNode): boolean {
 function isDirectCallee(node: Parser.SyntaxNode, callTypes: ReadonlySet<string>): boolean {
   const parent = node.parent;
   if (!parent || !callTypes.has(parent.type)) return false;
-  return parent.childForFieldName("function") === node || parent.childForFieldName("name") === node;
+  return (
+    sameSyntaxNode(parent.childForFieldName("function"), node) ||
+    sameSyntaxNode(parent.childForFieldName("name"), node)
+  );
 }
 
 /** Definition/declaration identifiers name a new binding; they do not use one. */
 function isDeclarationName(node: Parser.SyntaxNode): boolean {
   const parent = node.parent;
-  return parent?.childForFieldName("name") === node;
+  return sameSyntaxNode(parent?.childForFieldName("name"), node);
 }
 
 /** Recognize the definition shapes: mapped node types, Go's type/method forms, and
@@ -827,9 +848,10 @@ function calleeName(
   // Java call site and the language would extract nodes with no call edges at all.
   if (lang === "java") {
     if (node.type === "object_creation_expression") {
-      // `new Foo()` — the constructed type is the call target.
-      const t = node.childForFieldName("type");
-      return t ? { name: t.text, viaMember: false } : null;
+      // `new Foo()` — the constructed type is the call target, named as the graph
+      // names it.
+      const name = javaConstructedTypeName(node.childForFieldName("type"));
+      return name ? { name, viaMember: false } : null;
     }
     const nameNode = node.childForFieldName("name");
     if (!nameNode) return null;
@@ -874,6 +896,40 @@ function calleeName(
 function javaArgCount(node: Parser.SyntaxNode): number | undefined {
   const args = node.childForFieldName("arguments");
   return args ? args.namedChildren.length : undefined;
+}
+
+/**
+ * The name a `new` CONSTRUCTS, as the graph names it — or null when this pass cannot
+ * say, in which case the construction resolves to nothing.
+ *
+ * Erasing type arguments is the only transformation here, because it is the only one
+ * that provably does not change which type is being named:
+ *
+ *     Box            -> Box
+ *     Box<String>    -> Box     (the node is `Box`; the arguments are not part of it)
+ *     Box<>          -> Box
+ *
+ * A QUALIFIED name is deliberately dropped rather than reduced to its final segment:
+ *
+ *     java.io.File   -> null    (not the repo's own `File`)
+ *     Beta.Builder   -> null    (not `Alpha.Builder` in the same file)
+ *
+ * Collapsing those was the first attempt at this fix, and it traded lost edges for
+ * WRONG ones — `new java.io.File(…)` resolved to an unrelated in-repo `File`, and a
+ * nested `Beta.Builder` bound to a sibling `Alpha.Builder` at `extracted` confidence,
+ * because the same-file tiebreak takes the first candidate. Dropping keeps this pass
+ * on the resolver's own rule: resolve precisely, or not at all.
+ *
+ * Deliberately NOT shared with bindings.ts's `javaTypeName`. That one answers "what
+ * type does this variable HOLD", where reducing `java.util.List` to `List` is a local
+ * heuristic with different stakes; this one answers "what type is being constructed",
+ * and the two questions do not have the same safe answer. Supporting qualified
+ * construction properly needs an import-aware type index, not a longer helper.
+ */
+function javaConstructedTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "generic_type") return javaConstructedTypeName(node.namedChildren[0]);
+  return node.type === "type_identifier" ? node.text : null;
 }
 
 /** A Java call's receiver text: a bare identifier (`repo.save()`), `this`, or

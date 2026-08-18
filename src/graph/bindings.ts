@@ -157,6 +157,7 @@ const JAVA_DEF_TYPES: ReadonlySet<string> = new Set([
   "enum_declaration",
   "record_declaration",
   "annotation_type_declaration",
+  "annotation_type_element_declaration",
   "method_declaration",
   "constructor_declaration",
 ]);
@@ -380,7 +381,18 @@ function handleTs(
     const pattern = node.childForFieldName("pattern");
     if (pattern?.type !== "identifier") return;
     const typeName = tsAnnotationTypeName(node.childForFieldName("type"), aliases);
-    if (typeName) bindings.set(scopePath, pattern.text, typeName);
+    if (!typeName) return;
+    bindings.set(scopePath, pattern.text, typeName);
+    // A parameter PROPERTY (`constructor(private readonly svc: Svc){}`) is a parameter
+    // AND a class field, so `this.svc` must resolve to its type — the default DI idiom
+    // in NestJS/Angular. The plain-parameter binding above keys on the bare name and at
+    // the constructor scope, which `this.svc.method()` call sites never reach; without
+    // the field-style binding here their recvType is undefined and the call edge is
+    // dropped (#76). Detected by the modifier child a plain parameter never carries.
+    const isParamProperty = node.children.some(
+      (c) => c.type === "accessibility_modifier" || c.type === "readonly" || c.type === "override_modifier",
+    );
+    if (isParamProperty) bindings.set(classScope ?? scopePath, `this.${pattern.text}`, typeName);
   }
 }
 
@@ -389,8 +401,15 @@ function handleTs(
  *
  * Java looks like the easy case — it is statically typed, so a declaration states
  * its own type with no inference needed. In practice modern Java leans on `var`,
- * which carries no type at the declaration site, so those locals bind nothing and
- * their calls fall back to name-only resolution exactly as in TS/Python.
+ * which carries no type at the declaration site. Upstream's documented limit was
+ * that a `var` local's member calls stay unresolved; this pass recovers them by
+ * falling back to a `new X()` initializer when the declared type is absent or
+ * `var`, covering locals, fields, and try-with-resources the same way.
+ *
+ * Varargs (`String... xs`), try-with-resources (`try (Foo f = ...)`),
+ * enhanced-for (`for (Foo x : xs)`), and catch parameters (`catch (E e)`) also
+ * bind their names, so a member call on any of them resolves through the bound
+ * type rather than falling back to name-only resolution.
  *
  * Fields are recorded twice: bare (`repo.save()`) and `self.`-prefixed
  * (`this.repo.save()`), since resolveRecvType normalizes `this.` to `self.`.
@@ -403,6 +422,7 @@ function handleJava(
 ): void {
   const scopePath = scope.join(".");
 
+  // formal_parameter: `Foo bar` in method/constructor signatures
   if (node.type === "formal_parameter") {
     const type = javaTypeName(node.childForFieldName("type"));
     const name = node.childForFieldName("name");
@@ -410,10 +430,54 @@ function handleJava(
     return;
   }
 
+  // spread_parameter (varargs): `Foo... args` — tree-sitter gives this a distinct
+  // node type with no field names; the type is the first named child and the name
+  // lives inside a `variable_declarator`.
+  if (node.type === "spread_parameter") {
+    const typeNode = node.namedChildren.find((c) => c.type !== "variable_declarator");
+    const name = node.namedChildren.find((c) => c.type === "variable_declarator")?.childForFieldName("name");
+    const type = javaTypeName(typeNode);
+    if (type && name?.type === "identifier") bindings.set(scopePath, name.text, type);
+    return;
+  }
+
+  // resource (try-with-resources): `try (Foo f = new Foo())` — the `resource` node
+  // has `type`, `name`, and `value` fields, binding like a local. `var f = new Foo()`
+  // falls back to the constructed type.
+  if (node.type === "resource") {
+    const name = node.childForFieldName("name");
+    const type = javaTypeName(node.childForFieldName("type")) ?? javaNewTypeName(node.childForFieldName("value"));
+    if (type && name?.type === "identifier") bindings.set(scopePath, name.text, type);
+    return;
+  }
+
+  // enhanced_for_statement: `for (Foo f : items)` — the loop variable `f` is typed
+  // by the `type` field; bind it under the lexical scope so `f.method()` inside the
+  // loop body resolves.
+  if (node.type === "enhanced_for_statement") {
+    const name = node.childForFieldName("name");
+    const type = javaTypeName(node.childForFieldName("type"));
+    if (type && name?.type === "identifier") bindings.set(scopePath, name.text, type);
+    return;
+  }
+
+  // catch_formal_parameter: `catch (Exception e)` — tree-sitter gives this a
+  // distinct node type (not `formal_parameter`); the type lives in a `catch_type`
+  // child (which holds one `type_identifier`, or several for multi-catch
+  // `IOException | BizException` — bind the first).
+  if (node.type === "catch_formal_parameter") {
+    const name = node.childForFieldName("name");
+    const catchType = node.namedChildren.find((c) => c.type === "catch_type");
+    const typeNode = catchType?.namedChildren.find(
+      (c) => c.type === "type_identifier" || c.type === "scoped_type_identifier" || c.type === "identifier",
+    );
+    const type = javaTypeName(typeNode);
+    if (type && name?.type === "identifier") bindings.set(scopePath, name.text, type);
+    return;
+  }
+
   if (node.type !== "local_variable_declaration" && node.type !== "field_declaration") return;
 
-  const type = javaTypeName(node.childForFieldName("type"));
-  if (!type) return; // `var` — no type at the declaration site
   const isField = node.type === "field_declaration";
   const target = isField ? (classScope ?? scopePath) : scopePath;
 
@@ -421,6 +485,11 @@ function handleJava(
     if (d.type !== "variable_declarator") continue;
     const name = d.childForFieldName("name");
     if (name?.type !== "identifier") continue;
+    // Declared type first; fall back to a `new X()` initializer when the type is
+    // absent or `var` (upstream's documented limit) — recovers the common
+    // `var x = new Foo()` shape without guessing at call-return inference.
+    const type = javaTypeName(node.childForFieldName("type")) ?? javaNewTypeName(d.childForFieldName("value"));
+    if (!type) continue;
     bindings.set(target, name.text, type);
     if (isField) bindings.set(target, `self.${name.text}`, type);
   }
@@ -428,7 +497,8 @@ function handleJava(
 
 /** A Java type node's bare name. `var` is the inferred-local keyword and states no
  * type, so it binds nothing. A generic binds to its erasure (`List<Order>` → `List`),
- * and a qualified type to its final segment (`java.util.List` → `List`). */
+ * a qualified type to its final segment (`java.util.List` → `List`), and an array
+ * to its element type (`Foo[]` → `Foo`). */
 function javaTypeName(node: Parser.SyntaxNode | null | undefined): string | null {
   if (!node) return null;
   if (node.type === "type_identifier") return node.text === "var" ? null : node.text;
@@ -439,7 +509,22 @@ function javaTypeName(node: Parser.SyntaxNode | null | undefined): string | null
   if (node.type === "scoped_type_identifier") {
     return node.namedChildren.at(-1)?.text ?? null;
   }
+  if (node.type === "array_type") {
+    const el = node.childForFieldName("element") ?? node.namedChildren.find((c) => c.type !== "dimensions");
+    return el ? javaTypeName(el) : null;
+  }
   return null;
+}
+
+/** The type constructed by a `new X(...)` expression, or null when the value is
+ * not an `object_creation_expression` (or the constructed type isn't a bare
+ * `type_identifier`/`scoped_type_identifier`/`generic_type`). Used as the
+ * fallback for a `var`-typed or untyped local/field/resource whose initializer
+ * is a construction — the one shape a single-file pass can infer with no
+ * return-type analysis. */
+function javaNewTypeName(value: Parser.SyntaxNode | null | undefined): string | null {
+  if (value?.type !== "object_creation_expression") return null;
+  return javaTypeName(value.childForFieldName("type"));
 }
 
 function handleGo(node: Parser.SyntaxNode, scope: string[], bindings: FileBindings): void {
