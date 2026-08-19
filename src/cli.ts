@@ -555,6 +555,29 @@ program
   );
 
 program
+  .command("blast")
+  .description(
+    "Blast radius of a diff: what depends on the lines this change touched ($0, no LLM). " +
+      "Built for CI — `--format markdown` is a PR comment with a Mermaid diagram.",
+  )
+  .argument(...DIR_ARG)
+  .option("--base <ref>", "diff against this ref's merge base with HEAD (e.g. origin/main); default: the working tree vs HEAD")
+  .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
+  .option("--format <fmt>", "text (default) | markdown | mermaid | json")
+  .option(...NO_REFRESH_FLAG)
+  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; refresh?: boolean }) => {
+    const dir = queryRoot(dirArg);
+    await refreshBefore(dir, opts);
+    const { runBlastCommand } = await import("./blast/blast-cli.js");
+    runBlastCommand(dir, {
+      base: opts.base,
+      depth: opts.depth,
+      format: opts.format,
+      globalDir: program.opts<GlobalOpts>().dir,
+    });
+  });
+
+program
   .command("grep")
   .description("Regex search over indexed files, hits grouped by enclosing symbol and ranked by coupling ($0, no LLM)")
   .argument("<pattern>", "regex pattern (or literal string with --fixed)")

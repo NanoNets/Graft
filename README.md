@@ -351,10 +351,15 @@ graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a 
 graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)
 graft map --max-dirs N               # raise/lower the number of directories shown
 
+graft blast [dir]                    # blast radius of a diff: what depends on the lines this change touched (no LLM, no key)
+graft blast --base origin/main       # diff against the merge base with HEAD — what a PR job runs
+graft blast --format markdown        # a PR comment: Mermaid diagram of affected modules, per-symbol detail collapsed under it
+graft blast --depth all --format json  # the full transitive closure, machine-readable
+
 graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code (never auto-refreshes — it's the drift report)
 graft check --json                   # print the drift report as JSON
 
-# ask / skeleton / callers / grep / map all refresh the graph first if the working tree moved:
+# ask / skeleton / callers / grep / map / blast all refresh the graph first if the working tree moved:
 #   --no-refresh                     # answer from the graph exactly as it is on disk
 #   GRAFT_NO_REFRESH=1               # same, for every command
 #   GRAFT_REFRESH=hash               # hash every file instead of trusting size+mtime
