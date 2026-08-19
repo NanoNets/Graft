@@ -1,0 +1,33 @@
+name: Blast radius
+
+# graft's own PRs run the action graft ships, so the comment format is reviewed the
+# same way the code is. `pull_request` (not `_target`) on purpose: the job reads the
+# PR's code, so it must not carry write access to secrets a fork could reach.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  blast:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/graft-blast
+        with:
+          depth: "2"
+          # No API key on a fork's PR, so the deep pass would degrade anyway; the
+          # structural graph still groups by directory, which is enough to review the
+          # comment itself.
+          deep: ${{ github.event.pull_request.head.repo.fork == false }}
+        env:
+          GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
