@@ -25,9 +25,17 @@ jobs:
       - uses: ./.github/actions/graft-blast
         with:
           depth: "2"
+          # graft reviews its own PRs with the code IN the PR, not with the last
+          # release — a release cannot run a command the PR is adding.
+          setup-cmd: npm ci && npm run build
+          graft-cmd: node dist/cli.js
           # No API key on a fork's PR, so the deep pass would degrade anyway; the
           # structural graph still groups by directory, which is enough to review the
           # comment itself.
           deep: ${{ github.event.pull_request.head.repo.fork == false }}
         env:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
+          # Wire format stays `openai` for any OpenAI-compatible gateway; these two
+          # point it at whichever one holds the key above.
+          GRAFT_BASE_URL: ${{ vars.GRAFT_BASE_URL }}
+          GRAFT_MODEL: ${{ vars.GRAFT_MODEL }}

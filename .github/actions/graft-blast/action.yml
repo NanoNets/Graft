@@ -32,6 +32,21 @@ inputs:
     description: "Token used to post the comment. Needs `pull-requests: write` permission."
     required: false
     default: ${{ github.token }}
+  graft-cmd:
+    description: >-
+      How to invoke graft. The default installs the published CLI, which is what any
+      repo consuming this action wants. graft's OWN workflow overrides it with a
+      locally built binary (see setup-cmd) so a PR's comment is produced by the code
+      in that PR — otherwise this action would review new work with the last release,
+      which cannot run a command the release does not have yet.
+    required: false
+    default: npx --yes @nanonets/graft@latest
+  setup-cmd:
+    description: >-
+      Command run before graft, for the locally-built case (e.g. `npm ci && npm run
+      build`). Empty by default.
+    required: false
+    default: ""
 
 outputs:
   markdown:
@@ -52,6 +67,13 @@ runs:
       with:
         node-version: "20"
 
+    - name: Prepare the CLI
+      if: inputs.setup-cmd != ''
+      shell: bash
+      env:
+        SETUP_CMD: ${{ inputs.setup-cmd }}
+      run: bash -c "$SETUP_CMD"
+
     - name: Build the graph
       id: build
       shell: bash
@@ -60,6 +82,7 @@ runs:
       # and inline interpolation is how that becomes command injection.
       env:
         DEEP: ${{ inputs.deep }}
+        GRAFT: ${{ inputs.graft-cmd }}
       run: |
         set -uo pipefail
         deep=""
@@ -67,7 +90,7 @@ runs:
         # --allow-partial: a spent quota must not fail the PR check. The build still
         # says so on stderr, and that warning is carried into the comment below
         # rather than being swallowed (graft#127).
-        npx --yes @nanonets/graft@latest build . $deep 2>build.log
+        $GRAFT build . $deep 2>build.log
         cat build.log
         if grep -q "the deep pass did not complete" build.log; then
           echo "degraded=true" >> "$GITHUB_OUTPUT"
@@ -82,10 +105,10 @@ runs:
         BASE: ${{ inputs.base != '' && inputs.base || format('origin/{0}', github.event.pull_request.base.ref) }}
         DEPTH: ${{ inputs.depth }}
         DEGRADED: ${{ steps.build.outputs.degraded }}
+        GRAFT: ${{ inputs.graft-cmd }}
       run: |
         set -euo pipefail
-        npx --yes @nanonets/graft@latest blast . \
-          --base "$BASE" --depth "$DEPTH" --format markdown > blast.md
+        $GRAFT blast . --base "$BASE" --depth "$DEPTH" --format markdown > blast.md
         if [ "$DEGRADED" = "true" ]; then
           printf '\n> ⚠️ The deep pass did not complete on this run, so module names may be missing or stale.\n' >> blast.md
         fi
