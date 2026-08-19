@@ -15,7 +15,7 @@
  */
 import { impactOfMany, type EdgeHit } from "../graph/traverse.js";
 import type { GraphV1, NodeV1 } from "../graph/types.js";
-import { moduleIndex, type ModuleIndex } from "./modules.js";
+import { dirLabel, moduleIndex, parentDir, shortLabel, type ModuleIndex } from "./modules.js";
 import type { ChangedFile } from "./diff.js";
 
 const SPAN_RE = /^L(\d+)-L(\d+)$/;
@@ -263,37 +263,54 @@ function changedAreas(
     incoming.set(e.target, at);
   }
 
-  const byLabel = new Map<string, ChangedArea>();
-  for (const [path, nodes] of seedNodes) {
+  // Group by DIRECTORY, not by concept. Concepts in a well-summarised repo are
+  // near-file-grained — graft's own PR produced nine of them, one file each — so
+  // grouping the diff by concept groups nothing: the left side was nine circles
+  // with near-identical truncated names. A directory is the coarser unit reviewers
+  // already use, and a concept name is only worth borrowing when one concept
+  // happens to claim the whole group.
+  const groups = new Map<string, string[]>();
+  for (const path of seedNodes.keys()) {
     // A changed test file is the signal, not the source of a blast radius. Drawing
     // it as an area would put "your tests changed" on both sides of the arrow.
     if (TEST_PATH.test(path)) continue;
-    const label = index.labelOf(path);
-    let area = byLabel.get(label);
-    if (!area) {
-      area = {
-        label, files: [], seeds: 0, tests: "none", testFiles: [], changedTestFiles: [],
-        reached: 0, behavioural: 0, unreached: [],
-      };
-      byLabel.set(label, area);
-    }
-    area.files.push(path);
-    area.seeds += nodes.length;
+    const dir = dirLabel(path);
+    groups.set(dir, [...(groups.get(dir) ?? []), path]);
+  }
+  coarsen(groups, MAX_AREAS);
 
-    for (const node of nodes) {
-      // Reach is measured over behaviour only. Counting interfaces and type aliases
-      // would sink every ratio: nothing "calls" a type, so a fully tested area of
-      // typed code would report a third of its symbols as unreached.
-      const behavioural = node.kind === "function" || node.kind === "method" || node.kind === "class";
-      const from = incoming.get(node.id) ?? new Set<string>();
-      for (const t of from) {
-        if (!area.testFiles.includes(t)) area.testFiles.push(t);
-        if (changedTests.has(t) && !area.changedTestFiles.includes(t)) area.changedTestFiles.push(t);
+  const byLabel = new Map<string, ChangedArea>();
+  for (const [dir, paths] of groups) {
+    const concepts = new Set(paths.map((p) => index.conceptOf(p)));
+    const [only] = concepts;
+    // One concept for the whole group and nothing unclaimed: its name says more
+    // than the path does. Otherwise the directory is the honest description.
+    const label = concepts.size === 1 && only ? shortLabel(only) : dir;
+    const area: ChangedArea = {
+      label, files: [], seeds: 0, tests: "none", testFiles: [], changedTestFiles: [],
+      reached: 0, behavioural: 0, unreached: [],
+    };
+    byLabel.set(label, area);
+    for (const path of paths) {
+      const nodes = seedNodes.get(path) ?? [];
+      area.files.push(path);
+      area.seeds += nodes.length;
+
+      for (const node of nodes) {
+        // Reach is measured over behaviour only. Counting interfaces and type aliases
+        // would sink every ratio: nothing "calls" a type, so a fully tested area of
+        // typed code would report a third of its symbols as unreached.
+        const behavioural = node.kind === "function" || node.kind === "method" || node.kind === "class";
+        const from = incoming.get(node.id) ?? new Set<string>();
+        for (const t of from) {
+          if (!area.testFiles.includes(t)) area.testFiles.push(t);
+          if (changedTests.has(t) && !area.changedTestFiles.includes(t)) area.changedTestFiles.push(t);
+        }
+        if (!behavioural) continue;
+        area.behavioural++;
+        if (from.size > 0) area.reached++;
+        else area.unreached.push(node.name);
       }
-      if (!behavioural) continue;
-      area.behavioural++;
-      if (from.size > 0) area.reached++;
-      else area.unreached.push(node.name);
     }
   }
 
@@ -345,7 +362,7 @@ function toImpacted(h: EdgeHit & { node: NodeV1 }): Impacted {
 }
 
 function emptyIndex(): ModuleIndex {
-  return { hasConcepts: false, labelOf: (p) => p };
+  return { hasConcepts: false, labelOf: (p) => p, conceptOf: () => null };
 }
 
 /**
@@ -397,6 +414,37 @@ function groupByModule(
     modules: all.filter((m) => !isTestOnly(m)).sort(bySize),
     testModules: all.filter(isTestOnly).sort(bySize),
   };
+}
+
+/**
+ * Directory groups the diff is folded down to before anything is drawn.
+ *
+ * Kept here rather than in the renderer because it is a statement about the diff,
+ * not about the picture: five areas is roughly what a reviewer holds in their head,
+ * and the renderer then draws all of them.
+ */
+const MAX_AREAS = 5;
+
+/**
+ * Fold directory groups into their parents until there are at most `max`.
+ *
+ * The deepest group goes first, and only into a parent that already exists, so
+ * `src/ai/llm/` joins `src/ai/` rather than everything collapsing towards the repo
+ * root. When no group has an existing parent, one is created — but never at the top
+ * level, since a single `(root)` area is no grouping at all.
+ */
+function coarsen(groups: Map<string, string[]>, max: number): void {
+  const depth = (dir: string) => dir.split("/").length;
+  while (groups.size > max) {
+    const keys = [...groups.keys()].sort((a, b) => depth(b) - depth(a) || (groups.get(a)!.length - groups.get(b)!.length));
+    const pick =
+      keys.find((k) => groups.has(parentDir(k)) && parentDir(k) !== "") ??
+      keys.find((k) => parentDir(k) !== "");
+    if (!pick) return;
+    const parent = parentDir(pick);
+    groups.set(parent, [...(groups.get(parent) ?? []), ...groups.get(pick)!]);
+    groups.delete(pick);
+  }
 }
 
 const TEST_PATH = /(^|\/)(tests?|specs?|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rb)$/i;

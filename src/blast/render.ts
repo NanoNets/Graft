@@ -229,7 +229,12 @@ function impactTable(r: BlastReport): string[] {
   for (const mod of shown) {
     const nearest = mod.symbols[0];
     const hop = nearest ? `\`${nearest.path}:${nearest.span}\` ${nearest.name} — ${nearest.relation}, depth ${nearest.depth}` : "—";
-    const from = [...new Set(mod.from.map((f) => areaOf.get(f) ?? f))].join(", ") || "—";
+    // Two names, then a count. Six area names in one cell is what turned this
+    // column into a wall wider than the rest of the table put together.
+    const names = [...new Set(mod.from.map((f) => areaOf.get(f) ?? f))];
+    const from = names.length === 0 ? "—"
+      : names.length <= 2 ? names.join(", ")
+      : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
     rows.push(`| ${mod.label} | ${mod.symbols.length} | ${hop} | ${from} |`);
   }
   if (hidden.length > 0) {
