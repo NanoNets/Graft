@@ -918,3 +918,207 @@ test("Java scopes: pom.xml, build.gradle, and build.gradle.kts are project marke
     }
   }
 });
+
+/**
+ * Heritage fixture. Every supertype here is generic, qualified, or a type variable —
+ * the three shapes that a naive walk of the clause turns into bogus supertypes. `Item`
+ * carries a method no subclass has, so a wrong `extends` is visible as a wrong CALL:
+ * `extends` feeds `classParents`, which `resolveTypedMember` walks up.
+ */
+const HER_ITEM = `package com.acme;
+
+public class Item {
+  public void poison() {}
+}
+`;
+
+const HER_BASE = `package com.acme;
+
+public class Base<T> {
+  public void real() {}
+}
+`;
+
+const HER_MARKER = `package com.acme;
+
+public interface Marker {}
+`;
+
+const HER_OUTER = `package com.acme;
+
+public class Outer {
+  public interface Inner {}
+}
+`;
+
+const HER_CHILD = `package com.acme;
+
+public final class Child extends Base<Item> implements Marker {
+  public void use() {
+    Child c = new Child();
+    c.poison();
+  }
+}
+`;
+
+const HER_HOLDER = `package com.acme;
+
+public class Holder<T> extends Base<T> {}
+`;
+
+const HER_IMPL = `package com.acme;
+
+public final class Impl implements Outer.Inner {}
+`;
+
+function heritageFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-java-heritage-"));
+  mkdirSync(join(dir, PKG), { recursive: true });
+  writeFileSync(join(dir, PKG, "Item.java"), HER_ITEM);
+  writeFileSync(join(dir, PKG, "Base.java"), HER_BASE);
+  writeFileSync(join(dir, PKG, "Marker.java"), HER_MARKER);
+  writeFileSync(join(dir, PKG, "Outer.java"), HER_OUTER);
+  writeFileSync(join(dir, PKG, "Child.java"), HER_CHILD);
+  writeFileSync(join(dir, PKG, "Holder.java"), HER_HOLDER);
+  writeFileSync(join(dir, PKG, "Impl.java"), HER_IMPL);
+  return dir;
+}
+
+test("Java heritage: a type ARGUMENT is not a supertype", async () => {
+  // `implements Comparable<Item>` / `extends Base<Item>` used to walk into
+  // `type_arguments` and report `Item` as a supertype of its own accord.
+  const dir = heritageFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const from = `${PKG}/Child.java#Child`;
+    const her = graph.edges.filter(
+      (e) => (e.relation === "extends" || e.relation === "implements") && e.source === from,
+    );
+
+    assert.ok(
+      her.some((e) => e.relation === "extends" && e.target === `${PKG}/Base.java#Base`),
+      "the named supertype still resolves",
+    );
+    assert.ok(
+      her.some((e) => e.relation === "implements" && e.target === `${PKG}/Marker.java#Marker`),
+      "a non-generic interface is unaffected",
+    );
+    assert.ok(
+      !her.some((e) => e.target === `${PKG}/Item.java#Item` || e.target === "Item"),
+      "the type argument must not become a supertype",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java heritage: a bogus supertype no longer poisons call resolution", async () => {
+  // The reason this outranks a cosmetic heritage fix. `extends` edges populate
+  // `classParents`, so `Child extends Item` made `resolveTypedMember` walk `Item` as an
+  // ancestor and resolve `c.poison()` — a method that does not compile on a `Child`.
+  const dir = heritageFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    assert.ok(
+      !graph.edges.some(
+        (e) =>
+          e.relation === "calls" &&
+          e.source === `${PKG}/Child.java#Child.use` &&
+          e.target === `${PKG}/Item.java#Item.poison`,
+      ),
+      "a method reachable only through a bogus ancestor must not resolve",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java heritage: a type VARIABLE is never a supertype", async () => {
+  // `class Holder<T> extends Base<T>` names `Base`. A `T` surviving to the edge list is
+  // the declaration's own parameter, which erasure alone would not always remove.
+  const dir = heritageFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const from = `${PKG}/Holder.java#Holder`;
+    const her = graph.edges.filter(
+      (e) => (e.relation === "extends" || e.relation === "implements") && e.source === from,
+    );
+
+    assert.deepEqual(
+      her.map((e) => e.target),
+      [`${PKG}/Base.java#Base`],
+      "Holder extends exactly Base — not T",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java heritage: a QUALIFIED supertype keeps its whole name", async () => {
+  // Heritage keeps an unresolved base as the edge target by design, so `Outer.Inner`
+  // stays whole: truthful, and unable to false-match a bare `Inner` node elsewhere in
+  // the repo. (Construction drops a qualified name instead — it has no such contract.)
+  const dir = heritageFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const her = graph.edges.filter(
+      (e) => e.relation === "implements" && e.source === `${PKG}/Impl.java#Impl`,
+    );
+
+    assert.deepEqual(her.map((e) => e.target), ["Outer.Inner"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Two same-named nested types in ONE file, plus a construction of one of them. Split
+ * across files the cross-file ambiguity check already drops it, so a same-file fixture
+ * is the only one that can pin the same-file branch. */
+const AMBIG = `package com.acme;
+
+public final class Api {
+
+  public static class AlphaB {
+    public static class Builder {}
+  }
+
+  public static class BetaB {
+    public static class Builder {}
+  }
+
+  public Object build() {
+    return new Builder();
+  }
+}
+`;
+
+test("resolveName: a same-file name matching two nodes resolves to neither", async () => {
+  // The same-file branch used to return `local[0]` — first in document order — and
+  // label it `extracted`, i.e. certain, while the cross-file branch two lines below
+  // required a unique match. A file with `AlphaB.Builder` and `BetaB.Builder` therefore
+  // got a silent first-wins guess for a bare `new Builder()`. Language-agnostic: the
+  // fixture is Java only because that is where it was found.
+  const dir = mkdtempSync(join(tmpdir(), "graft-resolve-ambig-"));
+  try {
+    mkdirSync(join(dir, PKG), { recursive: true });
+    writeFileSync(join(dir, PKG, "Api.java"), AMBIG);
+
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const guesses = graph.edges.filter(
+      (e) =>
+        e.relation === "calls" &&
+        e.source === `${PKG}/Api.java#Api.build` &&
+        e.target.includes("Builder"),
+    );
+
+    assert.deepEqual(guesses, [], "two candidates in one file must resolve to neither");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

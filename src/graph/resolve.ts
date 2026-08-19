@@ -224,7 +224,12 @@ function resolveName(
   globalName: Map<string, NodeV1[]>,
 ): { id: string; confidence: EdgeV1["confidence"] } | null {
   const local = (perFileName.get(file)?.get(name) ?? []).filter((n) => kinds.includes(n.kind));
-  if (local.length) return { id: local[0].id, confidence: "extracted" };
+  // Same-file requires a UNIQUE match, exactly as the cross-file branch below does.
+  // Returning `local[0]` meant a file holding two same-named types (`Alpha.Builder` and
+  // `Beta.Builder`, `Alpha.Inner` and `Beta.Inner`) silently resolved to whichever came
+  // first in document order — and labelled it `extracted`, i.e. certain. That is the
+  // guess this module's header says it does not make.
+  if (local.length === 1) return { id: local[0].id, confidence: "extracted" };
   const global = (globalName.get(name) ?? []).filter((n) => kinds.includes(n.kind));
   if (global.length === 1) return { id: global[0].id, confidence: "inferred" };
   return null;
