@@ -392,6 +392,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
     // may `implements`, so every type declaration is a heritage site, not just a class.
     const javaTypeDecl = ctx.lang === "java" && JAVA_TYPE_KINDS.has(desc.kind);
     if (desc.kind === "class" || javaTypeDecl) edges.push(...heritageEdges(node, id, ctx));
+    if (ctx.lang === "php") edges.push(...phpAttributeReferenceEdges(node, id, ctx));
 
     const enclosingClass =
       desc.kind === "class" || javaTypeDecl
@@ -478,20 +479,126 @@ function collectImportedSymbols(
   root: Parser.SyntaxNode,
   lang: Language,
 ): Map<string, { name: string; specifier: string }> {
-  const out = new Map<string, { name: string; specifier: string }>();
-  if (lang !== "typescript" && lang !== "tsx") return out;
+  if (lang === "typescript" || lang === "tsx") {
+    const out = new Map<string, { name: string; specifier: string }>();
+    const visit = (node: Parser.SyntaxNode): void => {
+      if (node.type === "import_statement") {
+        const specifier = importSpecifier(node, lang);
+        if (!specifier) return;
+        collectTsImportBindings(node, specifier, out);
+        return;
+      }
+      for (const child of node.namedChildren) visit(child);
+    };
+    visit(root);
+    return out;
+  }
+  if (lang === "php") return collectPhpImportedSymbols(root);
+  return new Map();
+}
 
+/** PHP `use` bindings: local alias → { exported name, FQN specifier }. */
+function collectPhpImportedSymbols(root: Parser.SyntaxNode): Map<string, { name: string; specifier: string }> {
+  const out = new Map<string, { name: string; specifier: string }>();
   const visit = (node: Parser.SyntaxNode): void => {
-    if (node.type === "import_statement") {
-      const specifier = importSpecifier(node, lang);
-      if (!specifier) return;
-      collectTsImportBindings(node, specifier, out);
+    if (node.type === "namespace_use_declaration") {
+      collectPhpUseDeclaration(node, out);
       return;
     }
     for (const child of node.namedChildren) visit(child);
   };
   visit(root);
   return out;
+}
+
+function collectPhpUseDeclaration(
+  decl: Parser.SyntaxNode,
+  out: Map<string, { name: string; specifier: string }>,
+): void {
+  const prefix = decl.namedChildren.find((c) => c.type === "namespace_name")?.text.replace(/\\$/, "") ?? "";
+  const clauses: Parser.SyntaxNode[] = [];
+  for (const child of decl.namedChildren) {
+    if (child.type === "namespace_use_clause") clauses.push(child);
+    if (child.type === "namespace_use_group") {
+      for (const c of child.namedChildren) {
+        if (c.type === "namespace_use_clause") clauses.push(c);
+      }
+    }
+  }
+  for (const clause of clauses) {
+    const binding = phpUseClauseBinding(clause, prefix);
+    if (binding) out.set(binding.local, { name: binding.name, specifier: binding.specifier });
+  }
+}
+
+function phpUseClauseBinding(
+  clause: Parser.SyntaxNode,
+  prefix: string,
+): { local: string; name: string; specifier: string } | null {
+  const names = clause.namedChildren.filter((c) => c.type === "name");
+  const qualified = clause.namedChildren.find((c) => c.type === "qualified_name");
+  let fqn: string;
+  let importedName: string;
+  if (qualified) {
+    fqn = qualified.text.replace(/^\\/, "");
+    importedName = fqn.replace(/^.*\\/, "");
+  } else if (names[0]) {
+    importedName = names[0].text;
+    fqn = prefix ? `${prefix}\\${importedName}` : importedName;
+  } else {
+    return null;
+  }
+  const alias =
+    qualified && names.length >= 1
+      ? names[names.length - 1].text
+      : names.length >= 2
+        ? names[1].text
+        : undefined;
+  const local = alias ?? importedName;
+  return { local, name: importedName, specifier: fqn };
+}
+
+/** PHP 8 attributes on a definition → `references` edges to the attribute class. */
+function phpAttributeReferenceEdges(node: Parser.SyntaxNode, sourceId: string, ctx: WalkCtx): RawEdge[] {
+  const edges: RawEdge[] = [];
+  for (const child of node.namedChildren) {
+    if (child.type !== "attribute_list") continue;
+    for (const group of child.namedChildren) {
+      if (group.type !== "attribute_group") continue;
+      for (const attr of group.namedChildren) {
+        if (attr.type !== "attribute") continue;
+        const ref = phpAttributeClassRef(attr, ctx);
+        if (ref) {
+          edges.push({
+            source: sourceId,
+            relation: "references",
+            name: ref.name,
+            ...(ref.specifier ? { specifier: ref.specifier } : {}),
+            file: ctx.rel,
+          });
+        }
+      }
+    }
+  }
+  return edges;
+}
+
+function phpAttributeClassRef(
+  attr: Parser.SyntaxNode,
+  ctx: WalkCtx,
+): { name: string; specifier?: string } | null {
+  const nameNode =
+    attr.childForFieldName("name") ??
+    attr.namedChildren.find((c) => c.type === "name" || c.type === "qualified_name");
+  if (!nameNode) return null;
+  if (nameNode.type === "qualified_name") {
+    const fqn = nameNode.text.replace(/^\\/, "");
+    return { name: fqn.replace(/^.*\\/, ""), specifier: fqn };
+  }
+  const bare = nameNode.text;
+  const imported = ctx.importedSymbols.get(bare);
+  if (imported) return { name: imported.name, specifier: imported.specifier };
+  return { name: bare };
 }
 
 function collectTsImportBindings(

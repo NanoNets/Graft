@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/build.js";
@@ -289,6 +289,81 @@ test("PHP extraction: closures become nodes and own the calls inside them", asyn
         (e) => e.relation === "calls" && e.source === "app.php#{closure}" && e.target === "app.php#topLevel",
       ),
       "the anonymous callback's call to topLevel is owned by {closure}",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Issue #144: PHP 8 attributes are metadata, not call sites — wire them as
+// `references` edges from the annotated symbol to the attribute class.
+const ATTR_ROUTE_PHP = `<?php
+namespace Poc\\Attr;
+
+#[\\Attribute]
+class Route
+{
+    public function __construct(public string $path, public string $method = 'GET') {}
+}
+`;
+
+const ATTR_DEPRECATED_PHP = `<?php
+namespace Poc\\Attr;
+
+#[\\Attribute]
+class Deprecated
+{
+    public function __construct(public string $message) {}
+}
+`;
+
+const ATTR_WIDGET_PHP = `<?php
+namespace Poc;
+use Poc\\Attr\\Route;
+use Poc\\Attr\\Deprecated;
+
+#[Deprecated('use NewWidget')]
+class Widget {
+    #[Route('/widgets', method: 'GET')]
+    public function index(): void { $this->load(); }
+    private function load(): void {}
+}
+`;
+
+function makeAttributeFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-php-attr-"));
+  writeFileSync(join(dir, "composer.json"), `{"name": "poc/app"}\n`);
+  mkdirSync(join(dir, "Poc", "Attr"), { recursive: true });
+  writeFileSync(join(dir, "Poc", "Attr", "Route.php"), ATTR_ROUTE_PHP);
+  writeFileSync(join(dir, "Poc", "Attr", "Deprecated.php"), ATTR_DEPRECATED_PHP);
+  writeFileSync(join(dir, "Poc", "Widget.php"), ATTR_WIDGET_PHP);
+  return dir;
+}
+
+test("PHP extraction: attribute usage resolves to references edges (#144)", async () => {
+  const dir = makeAttributeFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.relation === "references" &&
+          e.source === "Poc/Widget.php#Widget" &&
+          e.target === "Poc/Attr/Deprecated.php#Deprecated",
+      ),
+      "Widget class should reference the Deprecated attribute class",
+    );
+
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.relation === "references" &&
+          e.source === "Poc/Widget.php#Widget.index" &&
+          e.target === "Poc/Attr/Route.php#Route",
+      ),
+      "index method should reference the Route attribute class",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
