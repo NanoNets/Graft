@@ -99,8 +99,9 @@ export function resolveEdges(
     let fileMap = perFileName.get(n.path);
     if (!fileMap) perFileName.set(n.path, (fileMap = new Map()));
     push(fileMap, n.name, n);
-    if (n.kind === "method" && n.owner) {
-      push(ownerMethod, `${n.owner}.${n.name}`, n);
+    if (n.kind === "method") {
+      const owner = n.owner ?? ownerFromMethodId(n.id);
+      if (owner) push(ownerMethod, `${owner}.${n.name}`, n);
     }
   }
 
@@ -116,6 +117,17 @@ export function resolveEdges(
     const ownName = byId.get(e.source)?.name;
     if (!ownName) continue;
     push(classParents, ownName, e.name);
+  }
+
+  // classTraits: class name → trait names from raw `implements` edges in PHP files.
+  // PHP models `use SomeTrait;` as implements; trait methods live on the trait owner,
+  // not the using class, so resolveTypedMember walks these after the class lookup fails.
+  const classTraits = new Map<string, string[]>();
+  for (const e of rawEdges) {
+    if (e.relation !== "implements" || !e.name || !e.file.endsWith(".php")) continue;
+    const ownName = byId.get(e.source)?.name;
+    if (!ownName) continue;
+    push(classTraits, ownName, e.name);
   }
 
   const out: EdgeV1[] = [];
@@ -173,7 +185,7 @@ export function resolveEdges(
     } else if (e.relation === "calls") {
       if (e.viaMember) {
         if (!e.recvType) continue;
-        const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents, e.argCount);
+        const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents, classTraits, e.argCount);
         if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
         if (hit) add(e.source, hit.id, "calls", hit.confidence);
         // No owner-qualified match means the call is unresolved. A unique bare
