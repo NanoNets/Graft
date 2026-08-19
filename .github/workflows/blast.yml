@@ -37,5 +37,5 @@ jobs:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
           # Wire format stays `openai` for any OpenAI-compatible gateway; these two
           # point it at whichever one holds the key above.
-          GRAFT_BASE_URL: ${{ vars.GRAFT_BASE_URL }}
-          GRAFT_MODEL: ${{ vars.GRAFT_MODEL }}
+          GRAFT_BASE_URL: ${{ secrets.GRAFT_BASE_URL }}
+          GRAFT_MODEL: ${{ secrets.GRAFT_MODEL }}

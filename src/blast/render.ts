@@ -37,6 +37,53 @@ function depthLabel(depth: number): string {
 }
 
 /**
+ * Node colours, taken from `graft viz`'s own palette (viewer/style.css) so the two
+ * pictures of the same graph read as one thing: amber is the file you touched
+ * (`--k-file`), teal is what depends on it (`--k-method`, the colour the viewer uses
+ * for dependents), grey is the edge (`--edge`). Fill AND text colour are set
+ * explicitly on every node, because a GitHub comment renders in either theme and a
+ * node that inherits one of them is illegible in the other.
+ */
+const VIZ = {
+  changedFill: "#F7E7CE",
+  changedStroke: "#D98E2B",
+  changedInk: "#3D2A0E",
+  moduleFill: "#D9EDF3",
+  moduleStroke: "#3AA7C9",
+  moduleInk: "#0E313C",
+  edge: "#9AA4A9",
+} as const;
+
+/**
+ * Changed files ordered by how much they actually reach, so the box cap keeps the
+ * files a reviewer needs.
+ *
+ * This ordering is not cosmetic. Arrows can only be drawn between boxes that exist,
+ * so with the cap applied in diff order a 23-file PR drew ten arbitrary files and
+ * dropped almost every arrow — the diagram then said "nothing depends on any of
+ * this", which is the opposite of the truth.
+ */
+function changedByReach(r: BlastReport, modules: ImpactedModule[]): string[] {
+  const reach = new Map<string, { modules: number; symbols: number }>();
+  for (const mod of modules) {
+    for (const from of mod.from) {
+      const at = reach.get(from) ?? { modules: 0, symbols: 0 };
+      at.modules++;
+      at.symbols += mod.symbols.length;
+      reach.set(from, at);
+    }
+  }
+  return r.changed
+    .filter((c) => !r.unindexed.includes(c.path) && !r.deleted.includes(c.path))
+    .map((c) => c.path)
+    .sort((a, b) => {
+      const ra = reach.get(a);
+      const rb = reach.get(b);
+      return (rb?.modules ?? 0) - (ra?.modules ?? 0) || (rb?.symbols ?? 0) - (ra?.symbols ?? 0) || a.localeCompare(b);
+    });
+}
+
+/**
  * The Mermaid flowchart: changed files on the left, affected modules on the right.
  *
  * Returns null when there is nothing to draw — an empty diagram frame reads as a
@@ -46,14 +93,13 @@ export function mermaidDiagram(r: BlastReport): string | null {
   const modules = r.modules.slice(0, MAX_MODULE_BOXES);
   if (modules.length === 0) return null;
 
-  const changedShown = r.changed
-    .filter((c) => !r.unindexed.includes(c.path) && !r.deleted.includes(c.path))
-    .slice(0, MAX_CHANGED_BOXES);
+  const ranked = changedByReach(r, modules);
+  const changedShown = ranked.slice(0, MAX_CHANGED_BOXES);
   if (changedShown.length === 0) return null;
 
-  const changedId = new Map(changedShown.map((c, i) => [c.path, `C${i}`]));
+  const changedId = new Map(changedShown.map((path, i) => [path, `C${i}`]));
   const lines = ["flowchart LR", '  subgraph changed["changed in this PR"]', "    direction TB"];
-  for (const c of changedShown) lines.push(`    ${changedId.get(c.path)}[${label(c.path)}]`);
+  for (const path of changedShown) lines.push(`    ${changedId.get(path)}[${label(path)}]`);
   lines.push("  end");
 
   modules.forEach((mod, i) => {
@@ -61,14 +107,28 @@ export function mermaidDiagram(r: BlastReport): string | null {
     lines.push(`  M${i}[${label(mod.label, detail)}]`);
   });
 
-  // One arrow per (changed file → module) pair the report attributed, deduped by
-  // construction since `from` holds each path once.
+  // One arrow per (changed file → module) pair the walk actually recorded.
+  let hiddenArrows = 0;
   modules.forEach((mod, i) => {
     for (const from of mod.from) {
       const id = changedId.get(from);
       if (id) lines.push(`  ${id} --> M${i}`);
+      else hiddenArrows++;
     }
   });
+
+  lines.push(`  classDef changedNode fill:${VIZ.changedFill},stroke:${VIZ.changedStroke},stroke-width:1px,color:${VIZ.changedInk};`);
+  lines.push(`  classDef moduleNode fill:${VIZ.moduleFill},stroke:${VIZ.moduleStroke},stroke-width:1px,color:${VIZ.moduleInk};`);
+  if (changedShown.length > 0) {
+    lines.push(`  class ${changedShown.map((p) => changedId.get(p)).join(",")} changedNode;`);
+  }
+  lines.push(`  class ${modules.map((_, i) => `M${i}`).join(",")} moduleNode;`);
+  // linkStyle needs explicit indices; every arrow drawn so far is one link, in order.
+  const arrowCount = lines.filter((l) => l.includes(" --> ")).length;
+  if (arrowCount > 0) {
+    lines.push(`  linkStyle ${Array.from({ length: arrowCount }, (_, i) => i).join(",")} stroke:${VIZ.edge},stroke-width:1.5px;`);
+  }
+  if (hiddenArrows > 0) lines.push(`  %% ${hiddenArrows} arrow(s) from changed files not drawn (box cap)`);
 
   return lines.join("\n");
 }
@@ -90,10 +150,16 @@ export function markdownReport(r: BlastReport): string {
       out.push("```mermaid");
       out.push(diagram);
       out.push("```");
+      const notes: string[] = [];
       const hiddenModules = r.modules.length - MAX_MODULE_BOXES;
-      if (hiddenModules > 0) {
+      if (hiddenModules > 0) notes.push(`${plural(hiddenModules, "further module")} not drawn`);
+      const drawable = r.changed.length - r.unindexed.length - r.deleted.length;
+      if (drawable > MAX_CHANGED_BOXES) {
+        notes.push(`${drawable - MAX_CHANGED_BOXES} of ${drawable} changed files not drawn (the ones reaching the most modules are kept)`);
+      }
+      if (notes.length > 0) {
         out.push("");
-        out.push(`_${plural(hiddenModules, "further module")} not drawn; all are listed below._`);
+        out.push(`_${notes.join("; ")}. Everything is listed below._`);
       }
     }
     out.push("");
@@ -119,7 +185,9 @@ function headline(r: BlastReport, symbols: number): string {
 }
 
 function moduleDetail(mod: ImpactedModule): string[] {
-  const head = `**${mod.label}** — ${plural(mod.symbols.length, "symbol")} in ${plural(mod.files.length, "file")}`;
+  // <strong>, not `**` — GitHub does not process markdown emphasis inside a
+  // <summary> tag, so asterisks would render as literal asterisks in the header.
+  const head = `<strong>${mod.label}</strong> — ${plural(mod.symbols.length, "symbol")} in ${plural(mod.files.length, "file")}`;
   const lines = ["<details>", `<summary>${head}</summary>`, ""];
   for (const s of mod.symbols.slice(0, MAX_SYMBOLS_LISTED)) {
     lines.push(`- \`${s.path}:${s.span}\` — ${s.name} (${s.relation}, depth ${s.depth})`);
