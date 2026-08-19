@@ -224,6 +224,14 @@ function push<T>(map: Map<string, T[]>, key: string, val: T): void {
   else map.set(key, [val]);
 }
 
+/** Derive a method's owner from its dotted id when extract did not stamp `owner`
+ * (PHP trait/interface methods today). `app.php#Loggable.log` → `Loggable`. */
+function ownerFromMethodId(id: string): string | undefined {
+  const post = id.includes("#") ? id.split("#")[1] : id;
+  const segs = post.split(".");
+  return segs.length >= 2 ? segs[segs.length - 2] : undefined;
+}
+
 /**
  * Resolve a bare symbol name: same-file match first (certain → `extracted`),
  * else a unique cross-file match (→ `inferred`), else null (ambiguous/unknown).
@@ -284,6 +292,7 @@ function resolveTypedMember(
   file: string,
   ownerMethod: Map<string, NodeV1[]>,
   classParents: Map<string, string[]>,
+  classTraits: Map<string, string[]>,
   argCount?: number,
 ): { id: string; confidence: EdgeV1["confidence"] } | "ambiguous" | null {
   const MAX_DEPTH = 3;
@@ -292,15 +301,19 @@ function resolveTypedMember(
   for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
     for (const type of frontier) {
       const all = ownerMethod.get(`${type}.${name}`);
-      if (!all || all.length === 0) continue; // try next ancestor
-      const candidates = narrowByArity(all, argCount);
-      if (candidates.length === 1) {
-        const c = candidates[0];
-        return { id: c.id, confidence: c.path === file ? "extracted" : "inferred" };
+      if (all && all.length > 0) {
+        const candidates = narrowByArity(all, argCount);
+        if (candidates.length === 1) {
+          const c = candidates[0];
+          return { id: c.id, confidence: c.path === file ? "extracted" : "inferred" };
+        }
+        const sameFile = candidates.find((c) => c.path === file);
+        if (sameFile) return { id: sameFile.id, confidence: "extracted" };
+        return "ambiguous"; // several, none same-file — drop and stop
       }
-      const sameFile = candidates.find((c) => c.path === file);
-      if (sameFile) return { id: sameFile.id, confidence: "extracted" };
-      return "ambiguous"; // several, none same-file — drop and stop
+      const traitHit = resolveTraitMember(type, name, file, ownerMethod, classTraits, argCount);
+      if (traitHit === "ambiguous") return "ambiguous";
+      if (traitHit) return traitHit;
     }
     const next: string[] = [];
     for (const type of frontier) {
@@ -313,6 +326,31 @@ function resolveTypedMember(
     frontier = next;
   }
   return null; // chain exhausted, no candidate anywhere
+}
+
+/** Resolve a member call against methods declared on PHP traits used by `type`. */
+function resolveTraitMember(
+  type: string,
+  name: string,
+  file: string,
+  ownerMethod: Map<string, NodeV1[]>,
+  classTraits: Map<string, string[]>,
+  argCount?: number,
+): { id: string; confidence: EdgeV1["confidence"] } | "ambiguous" | null {
+  const traits = classTraits.get(type);
+  if (!traits?.length) return null;
+  const matches: NodeV1[] = [];
+  for (const trait of traits) {
+    const all = ownerMethod.get(`${trait}.${name}`);
+    if (!all?.length) continue;
+    matches.push(...narrowByArity(all, argCount));
+  }
+  if (matches.length === 0) return null;
+  if (matches.length === 1) {
+    const c = matches[0];
+    return { id: c.id, confidence: c.path === file ? "extracted" : "inferred" };
+  }
+  return "ambiguous";
 }
 
 /**
