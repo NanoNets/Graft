@@ -58,6 +58,35 @@ export interface ImpactedModule {
   from: string[];
 }
 
+/**
+ * Whether the diff brought its tests along.
+ *
+ * `changed` — a test file that reaches this area was edited in this PR.
+ * `stale`   — tests reach it and the diff left every one of them alone.
+ * `none`    — nothing under `test/` reaches it at all.
+ * `na`      — no function, method or class changed here, so there is nothing to
+ *             ask the question of: a types-only file, or config and wiring.
+ */
+export type TestSignal = "changed" | "stale" | "none" | "na";
+
+/** One area of the diff: the changed files a reviewer thinks of as one thing. */
+export interface ChangedArea {
+  label: string;
+  /** Changed, indexed, non-test files grouped under this label. */
+  files: string[];
+  /** Changed symbols seeded from those files. */
+  seeds: number;
+  tests: TestSignal;
+  /** Test files with an edge into this area, and those of them the diff changed. */
+  testFiles: string[];
+  changedTestFiles: string[];
+  /** Test reach, over the area's exported functions/methods/classes only. */
+  reached: number;
+  behavioural: number;
+  /** Names of the behavioural symbols no test reaches, for the collapsed detail. */
+  unreached: string[];
+}
+
 export interface BlastReport {
   basis: string;
   depth: number;
@@ -70,6 +99,10 @@ export interface BlastReport {
   seeds: Seed[];
   impacted: Impacted[];
   modules: ImpactedModule[];
+  /** The diff itself, grouped: the left-hand side of the diagram. */
+  areas: ChangedArea[];
+  /** Test-only dependents, kept out of `modules` so they cannot crowd it out. */
+  testModules: ImpactedModule[];
 }
 
 function spanBounds(span: string): { start: number; end: number } | null {
@@ -122,6 +155,8 @@ export function blastRadius(
   const seeds: Seed[] = [];
   const unindexed: string[] = [];
   const deleted: string[] = [];
+  /** Seed nodes per changed file, kept for the area grouping and the test signal. */
+  const seedNodes = new Map<string, NodeV1[]>();
   /** Merged dependents, keyed by node id, at the shallowest depth any file reached
    * them — plus which changed files did the reaching. */
   const merged = new Map<string, { hit: Impacted; from: Set<string> }>();
@@ -165,6 +200,7 @@ export function blastRadius(
     // extracted symbols) the file IS the unit of change, and its importers are the
     // only dependents there are.
     const walkSeeds = symbolSeeds.length > 0 ? symbolSeeds : [fileNode];
+    seedNodes.set(file.path, walkSeeds);
     const hits = impactOfMany(graph, walkSeeds, opts.depth, "in");
     for (const h of hits) {
       if (!hasNode(h)) continue;
@@ -182,6 +218,8 @@ export function blastRadius(
 
   const impacted = [...merged.values()].map((m) => m.hit);
   const origins = new Map([...merged].map(([id, m]) => [id, m.from]));
+  const index = opts.modules ?? emptyIndex();
+  const grouped = groupByModule(impacted, changed, origins, index);
 
   return {
     basis,
@@ -191,8 +229,94 @@ export function blastRadius(
     deleted,
     seeds,
     impacted,
-    modules: groupByModule(impacted, changed, origins, opts.modules ?? emptyIndex()),
+    modules: grouped.modules,
+    testModules: grouped.testModules,
+    areas: changedAreas(graph, changed, seedNodes, index, grouped.modules),
   };
+}
+
+/**
+ * Group the changed files into areas, and work out whether each one's tests moved.
+ *
+ * The diff's own side of the diagram used to be one box per changed file, which can
+ * never fit: a 24-file PR drew ten arbitrary paths. Grouped by the same concept
+ * labels the dependents use, the same PR is three or four circles — and once the
+ * files are grouped, "did a test that reaches this move too?" is one question per
+ * circle instead of per file.
+ */
+function changedAreas(
+  graph: GraphV1,
+  changed: ChangedFile[],
+  seedNodes: Map<string, NodeV1[]>,
+  index: ModuleIndex,
+  modules: ImpactedModule[],
+): ChangedArea[] {
+  const changedTests = new Set(changed.filter((c) => TEST_PATH.test(c.path)).map((c) => c.path));
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  /** Incoming edge sources per node id, resolved to the source's file path. */
+  const incoming = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    const path = nodeById.get(e.source)?.path;
+    if (!path || !TEST_PATH.test(path)) continue;
+    const at = incoming.get(e.target) ?? new Set<string>();
+    at.add(path);
+    incoming.set(e.target, at);
+  }
+
+  const byLabel = new Map<string, ChangedArea>();
+  for (const [path, nodes] of seedNodes) {
+    // A changed test file is the signal, not the source of a blast radius. Drawing
+    // it as an area would put "your tests changed" on both sides of the arrow.
+    if (TEST_PATH.test(path)) continue;
+    const label = index.labelOf(path);
+    let area = byLabel.get(label);
+    if (!area) {
+      area = {
+        label, files: [], seeds: 0, tests: "none", testFiles: [], changedTestFiles: [],
+        reached: 0, behavioural: 0, unreached: [],
+      };
+      byLabel.set(label, area);
+    }
+    area.files.push(path);
+    area.seeds += nodes.length;
+
+    for (const node of nodes) {
+      // Reach is measured over behaviour only. Counting interfaces and type aliases
+      // would sink every ratio: nothing "calls" a type, so a fully tested area of
+      // typed code would report a third of its symbols as unreached.
+      const behavioural = node.kind === "function" || node.kind === "method" || node.kind === "class";
+      const from = incoming.get(node.id) ?? new Set<string>();
+      for (const t of from) {
+        if (!area.testFiles.includes(t)) area.testFiles.push(t);
+        if (changedTests.has(t) && !area.changedTestFiles.includes(t)) area.changedTestFiles.push(t);
+      }
+      if (!behavioural) continue;
+      area.behavioural++;
+      if (from.size > 0) area.reached++;
+      else area.unreached.push(node.name);
+    }
+  }
+
+  for (const area of byLabel.values()) {
+    area.files.sort();
+    area.testFiles.sort();
+    area.changedTestFiles.sort();
+    area.tests =
+      area.behavioural === 0 ? "na"
+      : area.changedTestFiles.length > 0 ? "changed"
+      : area.testFiles.length > 0 ? "stale"
+      : "none";
+  }
+
+  // Ordered by how much each area actually reaches, because the diagram caps this
+  // list and folds the rest into one circle. Ordered by size instead, the fold ends
+  // up holding the best-connected areas and the tail circle collects every arrow —
+  // the same mistake, one level up, as capping changed FILES in diff order.
+  const reach = (a: ChangedArea) =>
+    modules.filter((m) => m.from.some((f) => a.files.includes(f))).length;
+  return [...byLabel.values()].sort(
+    (a, b) => reach(b) - reach(a) || b.files.length - a.files.length || a.label.localeCompare(b.label),
+  );
 }
 
 /** Convenience wrapper: build the module index from a context dir. */
@@ -234,7 +358,7 @@ function groupByModule(
   changed: ChangedFile[],
   origins: Map<string, Set<string>>,
   modules: ModuleIndex,
-): ImpactedModule[] {
+): { modules: ImpactedModule[]; testModules: ImpactedModule[] } {
   const changedPaths = new Set(changed.map((c) => c.path));
   const byLabel = new Map<string, ImpactedModule>();
 
@@ -261,15 +385,18 @@ function groupByModule(
     mod.symbols.sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path));
   }
 
-  // Biggest first, but test-only modules last however large they are: "your own
-  // tests reference the thing you changed" is expected, and on a repo with a test
-  // per module it otherwise outranks every module a reviewer needs to see.
-  return [...byLabel.values()].sort(
-    (a, b) =>
-      Number(isTestOnly(a)) - Number(isTestOnly(b)) ||
-      b.symbols.length - a.symbols.length ||
-      a.label.localeCompare(b.label),
-  );
+  // Test-only modules are separated, not just sorted last. On a repo with a test
+  // per module they are the majority of the graph's dependents — graft's own 24-file
+  // PR produced 31 modules, 24 of them a single test file — so leaving them in the
+  // same list means they crowd out every module a reviewer needs whatever the caps
+  // are. "Your tests reference the thing you changed" is one line, not 24 sections.
+  const bySize = (a: ImpactedModule, b: ImpactedModule) =>
+    b.symbols.length - a.symbols.length || a.label.localeCompare(b.label);
+  const all = [...byLabel.values()];
+  return {
+    modules: all.filter((m) => !isTestOnly(m)).sort(bySize),
+    testModules: all.filter(isTestOnly).sort(bySize),
+  };
 }
 
 const TEST_PATH = /(^|\/)(tests?|specs?|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py|rb)$/i;

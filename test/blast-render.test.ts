@@ -1,15 +1,18 @@
 /**
- * The diagram's caps, which are the part that lies if it gets them wrong.
+ * The comment body's shape, which is the part that lies if it gets it wrong.
  *
- * The first version of `mermaidDiagram` capped the changed-file boxes in diff order
- * and then drew only the arrows whose source box happened to survive. On graft's own
- * 23-file PR that left five of six modules with no arrow at all, so the picture said
- * "nothing depends on any of this" — the exact opposite of the report underneath it.
+ * Two bugs live in this file's history. The first `mermaidDiagram` capped the
+ * changed-file boxes in diff order and then drew only the arrows whose source box
+ * happened to survive: on graft's own 23-file PR that left five of six modules with
+ * no arrow, so the picture said "nothing depends on any of this" — the opposite of
+ * the report underneath it. The second let test-only modules into the same list as
+ * real ones, and a repo with a test per module then reported 31 impacted modules,
+ * 24 of them a single test file. Both are asserted against here.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { markdownReport, mermaidDiagram } from "../src/blast/render.js";
-import type { BlastReport, ImpactedModule } from "../src/blast/blast.js";
+import { markdownReport, mermaidDiagram, textReport } from "../src/blast/render.js";
+import type { BlastReport, ChangedArea, ImpactedModule, TestSignal } from "../src/blast/blast.js";
 
 function mod(label: string, from: string[], symbols: number): ImpactedModule {
   return {
@@ -23,7 +26,20 @@ function mod(label: string, from: string[], symbols: number): ImpactedModule {
   };
 }
 
-/** 12 changed files where only the last two reach anything — the cap must keep those. */
+function area(label: string, files: string[], tests: TestSignal): ChangedArea {
+  // "na" is the types-only case: no function, method or class changed, so the
+  // question does not apply and the area must not be reported as untested.
+  return {
+    label, files, seeds: files.length, tests,
+    testFiles: tests === "none" || tests === "na" ? [] : ["test/a.test.ts"],
+    changedTestFiles: tests === "changed" ? ["test/a.test.ts"] : [],
+    reached: tests === "changed" || tests === "stale" ? 1 : 0,
+    behavioural: tests === "na" ? 0 : 1,
+    unreached: tests === "none" ? ["doThing"] : [],
+  };
+}
+
+/** Seven affected areas from four changed ones, so both caps are exercised. */
 function report(): BlastReport {
   const changed = Array.from({ length: 12 }, (_, i) => ({
     path: `src/f${i}.ts`,
@@ -38,35 +54,105 @@ function report(): BlastReport {
     deleted: [],
     seeds: [],
     impacted: [],
-    modules: [mod("core/", ["src/f10.ts", "src/f11.ts"], 3), mod("api/", ["src/f11.ts"], 1)],
+    modules: [
+      mod("core/", ["src/f0.ts", "src/f6.ts"], 3),
+      mod("api/", ["src/f6.ts"], 2),
+      mod("cli/", ["src/f0.ts"], 2),
+      mod("db/", ["src/f11.ts"], 1),
+      mod("http/", ["src/f0.ts"], 1),
+      mod("sync/", ["src/f11.ts"], 1),
+      mod("viz/", ["src/f6.ts"], 1),
+    ],
+    testModules: [mod("test/", ["src/f0.ts"], 9)],
+    areas: [
+      area("graph build", ["src/f0.ts", "src/f1.ts"], "changed"),
+      area("deep pass", ["src/f6.ts"], "stale"),
+      area("blast", ["src/f11.ts"], "none"),
+      area("types", ["src/f2.ts"], "na"),
+    ],
   };
 }
 
-test("blast diagram: the files that reach something survive the box cap", () => {
+test("blast diagram: both sides are area circles, and the overflow folds into one node", () => {
   const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
 
-  assert.match(diagram, /C\d+\["src\/f10\.ts"\]/, "a reaching file must be drawn");
-  assert.match(diagram, /C\d+\["src\/f11\.ts"\]/, "a reaching file must be drawn");
-  // Three attributions across two modules, every one of them drawn.
+  // Circles, like `graft viz` — never `[boxes]` — and labelled by area, not by path.
+  assert.match(diagram, /D0\(\("graph build<br\/>2 files · ✓"\)\)/);
+  assert.match(diagram, /A0\(\("core\/<br\/>3 symbols"\)\)/);
+  // Two of seven affected areas are past the cap: one grey circle carries both.
+  assert.match(diagram, /AX\(\("2 smaller areas<br\/>2 symbols"\)\)/);
+  assert.ok(!diagram.includes('A5(('), "the sixth area must fold into the tail, not be drawn");
+
+  // Every attribution is drawn, including the two that only reach folded areas.
   const arrows = diagram.split("\n").filter((l) => l.includes(" --> "));
-  assert.equal(arrows.length, 3, `expected every arrow drawn, got:\n${arrows.join("\n")}`);
-  assert.ok(!diagram.includes("arrow(s) from changed files not drawn"), "no arrow should be dropped here");
+  assert.deepEqual(arrows.map((a) => a.trim()).sort(), [
+    "D0 --> A0", "D0 --> A2", "D0 --> A4", "D1 --> A0", "D1 --> A1", "D1 --> AX", "D2 --> A3", "D2 --> AX",
+  ]);
+});
+
+test("blast diagram: the test signal rides on the circle, and an untested area strokes red", () => {
+  const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
+
+  assert.match(diagram, /D1\(\("deep pass<br\/>1 file · ⚠"\)\)/);
+  assert.match(diagram, /D2\(\("blast<br\/>1 file · ✗"\)\)/);
+  // Colour is redundant with the glyph on purpose: the glyph survives a colour-blind
+  // reader and either GitHub theme, the red stroke makes the area findable at speed.
+  assert.match(diagram, /^\s+class D2 untested;/m);
+  // Every changed area is amber; only the one with no test at all takes the red.
+  assert.match(diagram, /D3\(\("types<br\/>1 file · –"\)\)/);
+  assert.match(diagram, /^\s+class D0,D1,D3 changed;/m);
+  // The key is a node inside the diagram, pinned to the first rank by an invisible
+  // link so it lands beside the left-hand column instead of banding over the graph.
+  assert.match(diagram, /KEY\["✓ tests changed too<br\/>⚠ has tests, not updated<br\/>✗ no tests at all<br\/>– no functions changed"\]/);
+  assert.match(diagram, /^\s+KEY ~~~ D0$/m);
 });
 
 test("blast diagram: nodes and links carry explicit colours, so either GitHub theme is legible", () => {
   const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
 
-  assert.match(diagram, /classDef changedNode fill:#[0-9A-F]{6},stroke:#[0-9A-F]{6},stroke-width:1px,color:#[0-9A-F]{6};/i);
-  assert.match(diagram, /classDef moduleNode fill:#[0-9A-F]{6}/i);
-  assert.match(diagram, /^\s+linkStyle 0,1,2 stroke:#/m);
+  assert.match(diagram, /classDef changed fill:#[0-9A-F]{6},stroke:#[0-9A-F]{6},stroke-width:1\.5px,color:#[0-9A-F]{6};/i);
+  assert.match(diagram, /classDef reached fill:#[0-9A-F]{6}/i);
+  assert.match(diagram, /classDef untested fill:#[0-9A-F]{6},stroke:#AF3E35/i);
+  // Exactly the eight arrows drawn above, all styled: an unstyled link inherits
+  // Mermaid's own dark grey and vanishes on a dark theme.
+  assert.match(diagram, /^\s+linkStyle 0,1,2,3,4,5,6,7 stroke:#/m);
 });
 
-test("blast markdown: a truncated diagram says what it left out", () => {
+test("blast markdown: one table and three collapsed sections, no per-module headers", () => {
   const body = markdownReport(report());
 
-  assert.match(body, /2 of 12 changed files not drawn/);
-  assert.match(body, /Everything is listed below/);
-  // Collapsed headers use real tags: GitHub renders no markdown emphasis in <summary>.
-  assert.match(body, /<summary><strong>core\/<\/strong> — 3 symbols in 1 file<\/summary>/);
+  assert.match(body, /\*\*4 areas changed → 7 areas can be affected\.\*\* 11 dependent symbols, depth 2\./);
+  // The types-only area is absent from this sentence on purpose: an area where no
+  // function changed has no test question to answer, and reporting it as untested
+  // is how a report earns the reviewer's distrust.
+  assert.match(body, /Tests: \*\*no test reaches blast\*\*; deep pass has tests the diff did not touch; 1 area updated its tests\./);
+  assert.match(body, /- – \*\*types\*\* — no function, method or class changed here/);
+
+  // Six rows plus a tail row, not 31 sections with one bullet each.
+  const rows = body.split("\n").filter((l) => l.startsWith("| "));
+  assert.equal(rows.length, 9, `header, divider, 6 areas and the tail:\n${rows.join("\n")}`);
+  assert.match(body, /\| core\/ \| 3 \| `core\/dep\.ts:L1-L3` s0 — calls, depth 1 \| graph build, deep pass \|/);
+  assert.match(body, /\| _1 smaller area_ \| 1 \|/);
+
+  const sections = body.split("\n").filter((l) => l.startsWith("<summary>"));
+  assert.equal(sections.length, 3, `all symbols, test signal, test suites:\n${sections.join("\n")}`);
+  // GitHub renders no markdown emphasis inside <summary>, so asterisks would show.
+  assert.match(body, /<summary><strong>All 11 dependent symbols<\/strong>, grouped by area<\/summary>/);
+  // A ratio in the summary would read as coverage; the state counts cannot.
+  assert.match(body, /<summary><strong>Test signal<\/strong> per changed area — 1 ✓ · 1 ⚠ · 1 ✗ · 1 –<\/summary>/);
+  assert.match(body, /Reached = a node under a test path has a resolved edge/);
   assert.ok(!body.includes("<summary>**"), "asterisks would render literally");
+});
+
+test("blast markdown: test-only dependents are counted, never mixed into the areas", () => {
+  const body = markdownReport(report());
+
+  // The 9 test-file symbols are outside the headline, the diagram and the table…
+  assert.match(body, /\*\*4 areas changed → 7 areas can be affected\.\*\* 11 dependent symbols/);
+  assert.ok(!body.includes("| test/ |"), "a test-only area must not take a table row");
+  // …and present as one collapsed line, so the count is not quietly lost.
+  assert.match(body, /<summary>1 test suite also references this code<\/summary>/);
+  assert.match(body, /9 symbols, kept out of the diagram and the table/);
+
+  assert.match(textReport(report()), /1 test suite also references this code \(not listed\)/);
 });

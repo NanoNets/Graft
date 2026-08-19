@@ -41,8 +41,27 @@ export function moduleIndex(contextDir: string): ModuleIndex {
   }
   return {
     hasConcepts: nodes.length > 0,
-    labelOf: (path: string) => claims.get(path)?.label ?? dirLabel(path),
+    labelOf: (path: string) => shortLabel(claims.get(path)?.label ?? dirLabel(path)),
   };
+}
+
+/** Longest label a circle in the diagram can hold before the text overruns it. */
+const MAX_LABEL = 30;
+
+/**
+ * A concept name trimmed to fit a node.
+ *
+ * Concept names are written for a reader with the whole file in front of them, so
+ * they run long and some carry a `Concept: ` prefix from the synthesis prompt.
+ * "Reciprocal-Rank Fusion for Workspace Federation" is a fine node title in `graft
+ * viz` and unreadable inside a circle, so it is cut at a word boundary — never
+ * mid-word, which reads as data corruption rather than as a trim.
+ */
+export function shortLabel(label: string): string {
+  const bare = label.replace(/^concepts?:\s*/i, "").trim();
+  if (bare.length <= MAX_LABEL) return bare;
+  const cut = bare.lastIndexOf(" ", MAX_LABEL);
+  return `${bare.slice(0, cut > MAX_LABEL / 2 ? cut : MAX_LABEL).trimEnd()}…`;
 }
 
 /** Fallback label: the file's directory, or `(root)` for a top-level file. */

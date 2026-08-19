@@ -165,9 +165,15 @@ test("blast --format markdown: diagram first, detail collapsed under it", () => 
   const r = runCli(["blast", d, "--format", "markdown"]);
   assert.equal(r.status, 0, r.describe());
   assert.match(r.stdout, /```mermaid\nflowchart LR/);
-  assert.match(r.stdout, /C0\["src\/math\.ts"\]/);
+  // Both sides of the diagram are circles labelled by area, never one box per file.
+  assert.match(r.stdout, /D0\(\("src\//);
+  assert.match(r.stdout, /\| Can be affected \| Symbols \| Nearest hop \| Reached from \|/);
   assert.match(r.stdout, /<details>/);
   assert.match(r.stdout, /`src\/total\.ts:L\d+-L\d+` — total \(calls, depth 1\)/);
+  // The fixture ships no tests, so the one changed area must say so — in the glyph
+  // on its circle and in the collapsed section.
+  assert.match(r.stdout, /✗/);
+  assert.match(r.stdout, /no test file reaches it/);
   // Labels carry a line break as markup, not as the literal text of the tag.
   assert.ok(!/br\/\d+ file/.test(r.stdout), "the <br/> in a node label must survive escaping");
 });
