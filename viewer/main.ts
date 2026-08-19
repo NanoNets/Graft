@@ -212,6 +212,53 @@ $("themeBtn").addEventListener("click", () => {
   showDetail(view.selected);
 });
 
+/* ---------- resizable detail panel ---------- */
+const DETAIL_W_KEY = "graft-viz-detail-w";
+const MIN_DETAIL = 220;
+const rootEl = document.documentElement;
+const clampDetail = (px: number): number =>
+  Math.min(Math.max(MIN_DETAIL, Math.round(window.innerWidth * 0.6)), Math.max(MIN_DETAIL, Math.round(px)));
+function setDetailWidth(px: number, persist = true): void {
+  const w = clampDetail(px);
+  rootEl.style.setProperty("--detail-w", `${w}px`);
+  if (persist) localStorage.setItem(DETAIL_W_KEY, String(w));
+}
+const savedDetailW = Number(localStorage.getItem(DETAIL_W_KEY));
+if (Number.isFinite(savedDetailW) && savedDetailW >= MIN_DETAIL) setDetailWidth(savedDetailW, false);
+
+const resizer = $("detailResizer");
+let draggingDetail = false;
+resizer.addEventListener("pointerdown", (ev) => {
+  const pe = ev as PointerEvent;
+  draggingDetail = true;
+  resizer.setPointerCapture(pe.pointerId);
+  document.body.style.cursor = "col-resize";
+  ev.preventDefault();
+});
+resizer.addEventListener("pointermove", (ev) => {
+  if (!draggingDetail) return;
+  // panel is flush to the window's right edge: width = distance from cursor to that edge.
+  setDetailWidth(window.innerWidth - (ev as PointerEvent).clientX);
+});
+const endDetailDrag = (ev: Event): void => {
+  if (!draggingDetail) return;
+  draggingDetail = false;
+  document.body.style.cursor = "";
+  try { resizer.releasePointerCapture((ev as PointerEvent).pointerId); } catch { /* not captured */ }
+  view.reheat();
+};
+resizer.addEventListener("pointerup", endDetailDrag);
+resizer.addEventListener("pointercancel", endDetailDrag);
+resizer.addEventListener("keydown", (ev) => {
+  const ke = ev as KeyboardEvent;
+  if (ke.key !== "ArrowLeft" && ke.key !== "ArrowRight") return;
+  const step = ke.shiftKey ? 40 : 16;
+  const cur = $("detail").getBoundingClientRect().width;
+  setDetailWidth(cur + (ke.key === "ArrowLeft" ? step : -step));
+  view.reheat();
+  ev.preventDefault();
+});
+
 /* ---------- data loading + live reload ---------- */
 async function loadAll(): Promise<void> {
   const [context, code] = await Promise.all([loadContextGraph(), loadCodeGraph()]);

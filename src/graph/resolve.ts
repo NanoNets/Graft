@@ -145,7 +145,9 @@ export function resolveEdges(
                   : resolveImport(e.specifier, e.file, byId);
       add(e.source, target, "imports", "extracted");
     } else if (e.relation === "extends" || e.relation === "implements") {
-      const kinds: Kind[] = e.relation === "implements" ? ["interface"] : ["class", "interface"];
+      // `implements` also resolves to a `trait` — PHP models trait composition
+      // (`use SomeTrait;`) as an implements edge, and a trait is a valid target.
+      const kinds: Kind[] = e.relation === "implements" ? ["interface", "trait"] : ["class", "interface"];
       const hit = resolveName(e.name!, e.file, kinds, perFileName, globalName);
       // an unresolved base is usually an external/imported type — keep the name.
       add(e.source, hit?.id ?? e.name!, e.relation, hit?.confidence ?? "inferred");
