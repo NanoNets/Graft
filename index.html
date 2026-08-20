@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graft · blast radius viewers</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #F4F6F6; color: #17191B;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0E1012; color: #E7E9EA; } }
+  main { max-width: 46ch; padding: 32px 24px; }
+  h1 { font-size: 20px; letter-spacing: -.01em; margin: 0 0 12px; }
+  p { margin: 0 0 12px; color: #6B7278; }
+  @media (prefers-color-scheme: dark) { p { color: #8B9298; } }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+  a { color: #3AA7C9; }
+</style>
+</head>
+<body>
+<main>
+  <h1>graft · blast radius viewers</h1>
+  <p>This branch holds one interactive graph per open pull request, written by
+     <code>graft viz --export</code> and linked from the PR's blast-radius comment.</p>
+  <p>Pages live at <code>/pr/&lt;number&gt;/</code> and are deleted when the pull request closes,
+     so there is nothing to browse here.</p>
+  <p><a href="https://github.com/NanoNets/Graft">NanoNets/Graft</a> · <a href="https://graft.nanonets.ai">graft.nanonets.ai</a></p>
+</main>
+</body>
+</html>
