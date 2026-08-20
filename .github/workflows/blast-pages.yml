@@ -72,7 +72,15 @@ jobs:
           git clone --depth 1 --branch gh-pages "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" pages \
             || git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" pages
           cd pages
-          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          # `checkout --orphan` keeps the index, so on a repo with no gh-pages yet
+          # (where the fallback clone above landed on the default branch) the first
+          # commit would carry every file of main and Pages would serve the repo.
+          if ! git checkout gh-pages 2>/dev/null; then
+            git checkout --orphan gh-pages
+            git rm -rf --cached . >/dev/null
+            # The exported page lives outside this clone, so clean cannot reach it.
+            git clean -fdq
+          fi
           mkdir -p "pr/$PR_NUMBER"
           cp ../site/index.html "pr/$PR_NUMBER/index.html"
           git config user.name "github-actions[bot]"

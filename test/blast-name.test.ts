@@ -124,6 +124,20 @@ test("blast name: a concept label outranks naming, and a declined cluster keeps 
   assert.deepEqual([stats.named, stats.declined], [0, 1]);
 });
 
+test("blast name: test-only clusters are never named, since nothing renders them", async () => {
+  const contextDir = dir();
+  const g = graph({ "src/a.ts": "h1", "test/a.test.ts": "h2" });
+  const namer = stubNamer({ hubOne: "Real Feature Name" });
+
+  const r = report([mod("src/", ["src/a.ts"], ["hubOne"])]);
+  r.testModules = [mod("test/", ["test/a.test.ts"], ["describesThings"])];
+
+  await applyNames(g, r, { namer, contextDir });
+
+  assert.deepEqual(namer.calls[0].map((c) => c.symbols[0]), ["hubOne"], "only the drawn cluster is sent");
+  assert.equal(r.testModules[0].label, "describesThings", "the test cluster keeps its backstop");
+});
+
 test("blast name: a failing namer reports the reason and leaves every label alone", async () => {
   const contextDir = dir();
   const g = graph({ "src/a.ts": "h1" });

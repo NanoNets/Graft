@@ -89,6 +89,31 @@ test("viz export: one file, with both graphs and every asset inlined", () => {
   assert.match(page, /"repoName":"demo"/);
 });
 
+test("viz export: opens on the tab that has content, not on an empty Context tab", () => {
+  // A structural `graft build` writes wiring cards (no frontmatter) plus INDEX.md,
+  // and a frontmatter-less file still assembles to one node named after itself — so
+  // the Context tab the viewer starts on holds exactly one dot. Exporting from that
+  // build used to publish precisely that, with the whole wiring graph hidden behind
+  // an unadvertised tab.
+  const sparse = exportViz({ contextDir: contextDir(), viewerDir: viewerDir(), outDir: out(), repoName: "demo" });
+  assert.equal(sparse.contextNodes, 1);
+  assert.equal(sparse.defaultTab, "code", "one node is not a graph — open on the code graph");
+  assert.match(readFileSync(sparse.file, "utf8"), /"defaultTab":"code"/);
+
+  // A real concept layer is the better landing place.
+  const deep = contextDir();
+  writeFileSync(join(deep, "beta.md"), "---\nname: Beta\nslug: beta\ntype: concept\nsources: []\nlinks: []\n---\n");
+  const rich = exportViz({ contextDir: deep, viewerDir: viewerDir(), outDir: out(), repoName: "demo" });
+  assert.equal(rich.defaultTab, "context");
+
+  // And with no wiring graph there is nothing to switch to.
+  const noCode = mkdtempSync(join(tmpdir(), "graft-ctx-"));
+  writeFileSync(join(noCode, "alpha.md"), "---\nname: Alpha\nslug: alpha\ntype: system\nsources: []\nlinks: []\n---\n");
+  const only = exportViz({ contextDir: noCode, viewerDir: viewerDir(), outDir: out(), repoName: "demo" });
+  assert.equal(only.codeNodes, 0);
+  assert.equal(only.defaultTab, "context");
+});
+
 test("viz export: a bundle containing $& is inlined verbatim, not re-substituted", () => {
   // esbuild output is full of `$&`-shaped sequences; as a replacement STRING they
   // expand to the matched text, which put `<script src="/app.js">` back in the page.

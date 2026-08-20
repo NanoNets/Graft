@@ -20,7 +20,12 @@ export interface VizEdge {
 }
 
 export interface VizGraph {
-  meta: { repoName?: string; subtitle?: string; nodeCount: number; edgeCount: number; skippedFiles?: number; droppedEdges?: number };
+  meta: {
+    repoName?: string; subtitle?: string;
+    /** Set by `graft viz --export`: the tab whose graph actually has content. */
+    defaultTab?: "context" | "code";
+    nodeCount: number; edgeCount: number; skippedFiles?: number; droppedEdges?: number;
+  };
   nodes: VizNode[];
   edges: VizEdge[];
 }

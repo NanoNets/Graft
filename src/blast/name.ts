@@ -206,7 +206,10 @@ export async function applyNames(
   opts: { namer?: Namer; contextDir: string },
 ): Promise<NameStats> {
   const stats: NameStats = { cached: 0, named: 0, declined: 0 };
-  const targets: Labelled[] = [...report.modules, ...report.testModules, ...report.areas]
+  // `testModules` are deliberately absent: the comment shows them as a file count in
+  // one collapsed line and nowhere else, so naming them buys nothing and can push a
+  // normal PR over CLUSTERS_PER_CALL into a second request.
+  const targets: Labelled[] = [...report.modules, ...report.areas]
     .filter((c) => c.labelSource === "symbol");
   if (targets.length === 0) return stats;
 

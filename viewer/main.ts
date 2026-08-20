@@ -270,7 +270,10 @@ async function loadAll(): Promise<void> {
   const where = [context.meta.repoName, context.meta.subtitle].filter(Boolean).join(" · ");
   $("repoName").textContent = where;
   document.title = `graft viz — ${where}`;
-  setTab(state.tab);
+  // An exported page says which tab holds its content: a structural build has no
+  // concept nodes, so the default Context tab would open on an empty canvas.
+  const wanted = context.meta.defaultTab;
+  setTab(wanted && wanted !== state.tab ? wanted : state.tab);
 }
 
 onServerChange(() => {

@@ -34,6 +34,8 @@ export interface VizExportResult {
   bytes: number;
   contextNodes: number;
   codeNodes: number;
+  /** Tab the exported page opens on — see the reasoning in {@link exportViz}. */
+  defaultTab: "context" | "code";
 }
 
 /** The wiring graph as the viewer's endpoint would have served it, or null. */
@@ -71,8 +73,19 @@ export function exportViz(opts: VizExportOptions): VizExportResult {
   const js = readFileSync(join(opts.viewerDir, "app.js"), "utf8");
 
   const context = assembleContextGraph(opts.contextDir);
-  const contextGraph = { ...context, meta: { ...context.meta, repoName: opts.repoName, subtitle: opts.subtitle } };
   const code = codeGraph(opts.contextDir);
+
+  // Which tab to open on. The viewer starts on Context, which only a `--deep` build
+  // fills: a structural build writes wiring cards (no frontmatter, so nothing to
+  // assemble) and INDEX.md, and INDEX alone assembles to a single node. Since the
+  // PR path is now structural by design, opening on Context would show a canvas
+  // with one dot while the whole wiring graph sat behind an unadvertised tab.
+  const codeNodes = (code as { nodes?: unknown[] } | null)?.nodes?.length ?? 0;
+  const defaultTab = context.nodes.length > 1 || codeNodes === 0 ? "context" : "code";
+  const contextGraph = {
+    ...context,
+    meta: { ...context.meta, repoName: opts.repoName, subtitle: opts.subtitle, defaultTab },
+  };
 
   const data = [
     "<script>window.__GRAFT_DATA__ = {",
@@ -98,10 +111,5 @@ export function exportViz(opts: VizExportOptions): VizExportResult {
   mkdirSync(opts.outDir, { recursive: true });
   const file = join(opts.outDir, "index.html");
   writeFileSync(file, page);
-  return {
-    file,
-    bytes: Buffer.byteLength(page),
-    contextNodes: contextGraph.nodes.length,
-    codeNodes: (code as { nodes?: unknown[] } | null)?.nodes?.length ?? 0,
-  };
+  return { file, bytes: Buffer.byteLength(page), contextNodes: contextGraph.nodes.length, codeNodes, defaultTab };
 }
