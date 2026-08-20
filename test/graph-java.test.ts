@@ -1122,3 +1122,140 @@ test("resolveName: a same-file name matching two nodes resolves to neither", asy
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * Receiver fixture. `javaReceiver` recognises three shapes and refuses the rest, and
+ * each branch resolves to a DIFFERENT method here, so a mutation that collapses one
+ * into another changes which edge is emitted rather than merely losing one.
+ *
+ * `Repo` and `Helper` both declare `run()` so that picking the wrong receiver picks a
+ * visibly wrong target instead of failing to resolve.
+ */
+const RCV_REPO = `package com.acme;
+
+public final class Repo {
+  public void run() {}
+}
+`;
+
+const RCV_HELPER = `package com.acme;
+
+public final class Helper {
+  public void run() {}
+}
+`;
+
+const RCV_SERVICE = `package com.acme;
+
+public final class Service {
+
+  private final Repo repo;
+
+  public Service(Repo repo) {
+    this.repo = repo;
+  }
+
+  public void viaField() {
+    this.repo.run();
+  }
+
+  public void viaLocal() {
+    Helper local = new Helper();
+    local.run();
+  }
+
+  public void viaThis() {
+    this.own();
+  }
+
+  public void viaChain(Repo[] all) {
+    all[0].run();
+  }
+
+  public void own() {}
+}
+`;
+
+function receiverFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-java-receiver-"));
+  mkdirSync(join(dir, PKG), { recursive: true });
+  writeFileSync(join(dir, PKG, "Repo.java"), RCV_REPO);
+  writeFileSync(join(dir, PKG, "Helper.java"), RCV_HELPER);
+  writeFileSync(join(dir, PKG, "Service.java"), RCV_SERVICE);
+  return dir;
+}
+
+test("Java receivers: `this.field.method()` resolves through the field's declared type", async () => {
+  // The `field_access` branch of javaReceiver, which yields `this.repo` and is then
+  // normalised to `self.repo` by resolveRecvType to meet the binding written by the
+  // field pass. No fixture exercised it before: every receiver test used a bare local.
+  const dir = receiverFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+    const calls = graph.edges.filter((e) => e.relation === "calls");
+
+    assert.ok(
+      calls.some(
+        (e) =>
+          e.source === `${PKG}/Service.java#Service.viaField` &&
+          e.target === `${PKG}/Repo.java#Repo.run`,
+      ),
+      "this.repo.run() should reach Repo.run",
+    );
+    assert.ok(
+      !calls.some(
+        (e) =>
+          e.source === `${PKG}/Service.java#Service.viaField` &&
+          e.target === `${PKG}/Helper.java#Helper.run`,
+      ),
+      "and must not reach the other class that also declares run()",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java receivers: an explicit `this.method()` resolves to the enclosing type", async () => {
+  // The `this` branch. Distinct from the implicit-this call already covered elsewhere:
+  // that one has no `object` node at all and never reaches javaReceiver.
+  const dir = receiverFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.relation === "calls" &&
+          e.source === `${PKG}/Service.java#Service.viaThis` &&
+          e.target === `${PKG}/Service.java#Service.own`,
+      ),
+      "this.own() should reach Service.own",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Java receivers: an unrecognised receiver shape resolves to nothing", async () => {
+  // `all[0].run()` is an array_access, none of the three shapes javaReceiver accepts.
+  // Pinning the refusal matters more than pinning the acceptances: without it, widening
+  // the function to "return something for any object node" would look free, and would
+  // start resolving member calls against whatever type happened to match by name.
+  const dir = receiverFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    assert.deepEqual(
+      graph.edges.filter(
+        (e) => e.relation === "calls" && e.source === `${PKG}/Service.java#Service.viaChain`,
+      ),
+      [],
+      "an array-access receiver states no type, so the call must not resolve",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
