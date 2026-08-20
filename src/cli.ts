@@ -564,15 +564,17 @@ program
   .option("--base <ref>", "diff against this ref's merge base with HEAD (e.g. origin/main); default: the working tree vs HEAD")
   .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
   .option("--format <fmt>", "text (default) | markdown | mermaid | json")
+  .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
   .option(...NO_REFRESH_FLAG)
-  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; refresh?: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; refresh?: boolean }) => {
     const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const { runBlastCommand } = await import("./blast/blast-cli.js");
-    runBlastCommand(dir, {
+    await runBlastCommand(dir, {
       base: opts.base,
       depth: opts.depth,
       format: opts.format,
+      name: opts.name,
       globalDir: program.opts<GlobalOpts>().dir,
     });
   });

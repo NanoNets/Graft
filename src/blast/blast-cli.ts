@@ -7,7 +7,8 @@
 import { resolve } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { loadGraphCached } from "../graph/load.js";
-import { blastRadiusIn } from "./blast.js";
+import type { GraphV1 } from "../graph/types.js";
+import { blastRadiusIn, type BlastReport } from "./blast.js";
 import { changedFiles, refExists } from "./diff.js";
 import { markdownReport, mermaidDiagram, textReport } from "./render.js";
 
@@ -19,6 +20,9 @@ export interface BlastCliOptions {
   /** Raw `--depth`: a positive integer, or `all`/`full`/`max`. Default 2. */
   depth?: string;
   format?: string;
+  /** Ask a model to name the clusters that have no concept name (one call, cached).
+   * Opt-in: a local `graft blast` must not need a key or a network round-trip. */
+  name?: boolean;
   /** The top-level `--dir` override. */
   globalDir?: string;
 }
@@ -44,7 +48,7 @@ function resolveDepth(raw: string | undefined): number {
   return Math.floor(d);
 }
 
-export function runBlastCommand(dir: string, opts: BlastCliOptions): void {
+export async function runBlastCommand(dir: string, opts: BlastCliOptions): Promise<void> {
   const root = resolve(dir);
   const contextDir = contextDirFor(root, opts.globalDir);
   const format = resolveFormat(opts.format);
@@ -75,6 +79,7 @@ export function runBlastCommand(dir: string, opts: BlastCliOptions): void {
   }
 
   const report = blastRadiusIn(graph, contextDir, diff.files, diff.basis, depth);
+  if (opts.name) await nameClusters(graph, report, contextDir);
 
   if (format === "json") {
     console.log(JSON.stringify(report, null, 2));
@@ -88,4 +93,40 @@ export function runBlastCommand(dir: string, opts: BlastCliOptions): void {
     return;
   }
   process.stdout.write(format === "markdown" ? markdownReport(report) : textReport(report));
+}
+
+/**
+ * Name the clusters left on their symbol backstop, then report what it cost.
+ *
+ * Everything here is best-effort by construction: no key, a spent quota or a
+ * refused call leaves the backstop labels in place and the command still exits 0,
+ * because a PR check must not fail over a cosmetic layer.
+ */
+async function nameClusters(graph: GraphV1, report: BlastReport, contextDir: string): Promise<void> {
+  const { applyNames, ChatNamer } = await import("./name.js");
+  const { resolveConfig } = await import("../ai/providers.js");
+  const cfg = resolveConfig({ contextDir });
+
+  let namer;
+  if (cfg.chatModel) {
+    namer = new ChatNamer(cfg.chatModel);
+  } else if (cfg.apiKey) {
+    const { createChatModel } = await import("../ai/llm/factory.js");
+    namer = new ChatNamer(createChatModel({
+      provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model,
+      baseUrl: cfg.baseUrl, headers: cfg.headers,
+    }));
+  }
+
+  const stats = await applyNames(graph, report, { namer, contextDir });
+  if (!namer) {
+    console.error("• --name: no API key (GRAFT_API_KEY), so areas keep their symbol names");
+    return;
+  }
+  if (stats.error) console.error(`• --name: naming failed (${stats.error}) — areas keep their symbol names`);
+  else if (stats.named + stats.cached + stats.declined > 0) {
+    const bits = [`${stats.named} named`, `${stats.cached} cached`];
+    if (stats.declined > 0) bits.push(`${stats.declined} left as symbols (mixed)`);
+    console.error(`• --name: ${bits.join(", ")}`);
+  }
 }
