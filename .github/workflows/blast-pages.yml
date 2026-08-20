@@ -83,9 +83,14 @@ jobs:
           fi
           mkdir -p "pr/$PR_NUMBER"
           cp ../site/index.html "pr/$PR_NUMBER/index.html"
+          # Pages runs Jekyll over a branch source unless this file exists, and
+          # Jekyll would try to render the export as a template rather than serve
+          # it. Written every time, so a rebuilt or force-pushed branch cannot lose
+          # it and start silently mangling every viewer.
+          touch .nojekyll
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "pr/$PR_NUMBER"
+          git add .nojekyll "pr/$PR_NUMBER"
           git commit -m "viz: PR #$PR_NUMBER" || { echo "nothing changed"; exit 0; }
           git push origin gh-pages
 
