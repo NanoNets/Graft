@@ -351,16 +351,23 @@ graft grep "<regex>" -i --fixed      # case-insensitive; treat the pattern as a 
 graft map [dir]                      # token-budgeted repo orientation — dir clusters, hubs, hotspots (no LLM, no key)
 graft map --max-dirs N               # raise/lower the number of directories shown
 
+graft blast [dir]                    # blast radius of a diff: what depends on the lines this change touched (no LLM, no key)
+graft blast --base origin/main       # diff against the merge base with HEAD — what a PR job runs
+graft blast --format markdown        # a PR comment: the areas a change can reach, per-symbol detail collapsed under it
+graft blast --base origin/main --name  # name those areas with one cached LLM call, instead of a full --deep build
+graft blast --depth all --format json  # the full transitive closure, machine-readable
+
 graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code (never auto-refreshes — it's the drift report)
 graft check --json                   # print the drift report as JSON
 
-# ask / skeleton / callers / grep / map all refresh the graph first if the working tree moved:
+# ask / skeleton / callers / grep / map / blast all refresh the graph first if the working tree moved:
 #   --no-refresh                     # answer from the graph exactly as it is on disk
 #   GRAFT_NO_REFRESH=1               # same, for every command
 #   GRAFT_REFRESH=hash               # hash every file instead of trusting size+mtime
 
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser
+graft viz --export site/ --title "PR #12"  # one self-contained index.html — for CI, GitHub Pages, or a build artifact
 
 graft init [dir]                     # pick which agents to wire (prompts on a terminal; writes nothing until you choose)
 graft init --dry-run                 # list every file it would touch, then exit

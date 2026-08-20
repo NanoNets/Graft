@@ -1,0 +1,113 @@
+name: Blast viewer
+
+# Publishes the interactive viewer for a pull request to GitHub Pages, and links it
+# from the blast-radius comment.
+#
+# `pull_request_target`, not `pull_request`, because publishing needs write access to
+# the gh-pages branch and a `pull_request` job on a fork PR has none. That choice
+# carries the standard hazard: this workflow runs with the BASE repo's permissions
+# while the PR's code is attacker-controlled on a fork. So it checks out the base
+# ref for the tooling, builds the CLI from the BASE commit, and only ever reads the
+# PR's files as data — never runs a script from the PR (no `npm ci` on the PR's
+# package.json, no postinstall). The graph is built from the PR's source text by a
+# tree-sitter parser, which executes none of it.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blast-pages-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # 1. The tooling, from the base branch — never from the PR.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: base
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Build the CLI from the base commit
+        working-directory: base
+        run: npm ci && npm run build
+
+      # 2. The PR's code, as data only.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build the graph and export the viewer
+        working-directory: pr
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          node ../base/dist/cli.js build .
+          node ../base/dist/cli.js viz . --export ../site --title "PR #$PR_NUMBER"
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch gh-pages "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" pages \
+            || git clone --depth 1 "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" pages
+          cd pages
+          # `checkout --orphan` keeps the index, so on a repo with no gh-pages yet
+          # (where the fallback clone above landed on the default branch) the first
+          # commit would carry every file of main and Pages would serve the repo.
+          if ! git checkout gh-pages 2>/dev/null; then
+            git checkout --orphan gh-pages
+            git rm -rf --cached . >/dev/null
+            # The exported page lives outside this clone, so clean cannot reach it.
+            git clean -fdq
+          fi
+          mkdir -p "pr/$PR_NUMBER"
+          cp ../site/index.html "pr/$PR_NUMBER/index.html"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "pr/$PR_NUMBER"
+          git commit -m "viz: PR #$PR_NUMBER" || { echo "nothing changed"; exit 0; }
+          git push origin gh-pages
+
+  # A merged or closed PR's page is dead weight — and on a busy repo, thousands of
+  # 1 MB files. Removed with the PR, not on a timer.
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Remove this PR's page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch gh-pages "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" pages || exit 0
+          cd pages
+          [ -d "pr/$PR_NUMBER" ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -r --quiet "pr/$PR_NUMBER"
+          git commit -m "viz: drop PR #$PR_NUMBER" && git push origin gh-pages

@@ -264,9 +264,16 @@ async function loadAll(): Promise<void> {
   const [context, code] = await Promise.all([loadContextGraph(), loadCodeGraph()]);
   state.context = context;
   state.code = code;
-  $("repoName").textContent = context.meta.repoName ?? "";
-  document.title = `graft viz — ${context.meta.repoName ?? ""}`;
-  setTab(state.tab);
+  // The subtitle only exists on an exported page (`graft viz --export --title`),
+  // where the same file is published per pull request and the reader needs to know
+  // WHICH one they opened.
+  const where = [context.meta.repoName, context.meta.subtitle].filter(Boolean).join(" · ");
+  $("repoName").textContent = where;
+  document.title = `graft viz — ${where}`;
+  // An exported page says which tab holds its content: a structural build has no
+  // concept nodes, so the default Context tab would open on an empty canvas.
+  const wanted = context.meta.defaultTab;
+  setTab(wanted && wanted !== state.tab ? wanted : state.tab);
 }
 
 onServerChange(() => {

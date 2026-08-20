@@ -184,6 +184,7 @@ program
   .option("-j, --concurrency <n>", "files summarized in parallel during --deep (default 5)")
   .option("--no-reuse", "re-parse every file instead of replaying unchanged ones from the extraction cache")
   .option("--lsp", "add compiler-grade call edges via a language server if one is installed (opt-in, slower; e.g. rust-analyzer, clangd)")
+  .option("--allow-partial", "with --deep: exit 0 even when some files' summaries failed (default: a degraded meaning tier exits 1)")
   .option(
     "--follow-submodules",
     "include initialized Git submodules recursively; persisted for later builds and automatic refreshes",
@@ -207,6 +208,7 @@ program
       concurrency?: string;
       reuse?: boolean;
       lsp?: boolean;
+      allowPartial?: boolean;
       includeDir?: string[];
       followSubmodules?: boolean;
     },
@@ -288,6 +290,8 @@ program
     }
 
     // --deep: concept nodes first, then the wiring graph links cards up to them.
+    let conceptErrors: string[] = [];
+    let conceptFatal: string | undefined;
     if (deep) {
       const c = await engine.init(dir, {
         extensions: opts.extensions,
@@ -301,6 +305,8 @@ program
         `✓ concepts: ${c.nodes} nodes, ${c.links} links from ${c.files} files (${c.summarized} read, ${c.cached} cached)`,
       );
       for (const e of c.errors) console.error(`✗ ${e}`);
+      conceptErrors = c.errors;
+      conceptFatal = c.fatal;
     }
 
     // Wiring graph — always; LLM meaning only with --deep.
@@ -328,6 +334,37 @@ program
 
     const rel = relative(process.cwd(), g.contextDir) || "graft";
     console.log(`  ${rel}/ is git-ignored (added automatically) — a local cache; teammates run \`graft build\` to get their own.`);
+
+    // #127: a --deep run whose LLM calls failed used to print the same success
+    // footer and exit 0, so a quota-exhausted build looked identical to a clean
+    // one and `graft check` still said "in sync" (it only ever checked Tier-1).
+    // The structural graph IS still written and every successful summary is
+    // cached, so this is a loud warning about a degraded tier, not a rollback.
+    if (deep) {
+      const m = g.meaning;
+      const failed =
+        m.failedFiles > 0 || m.fatal !== undefined || conceptErrors.length > 0 || conceptFatal !== undefined;
+      if (failed) {
+        const ready = m.computed + m.cached;
+        const total = ready + m.stale + m.pending;
+        const pct = total > 0 ? Math.round((ready / total) * 100) : 0;
+        console.error("");
+        console.error(`✗ the deep pass did not complete — the meaning tier is incomplete.`);
+        if (conceptFatal) console.error(`  concepts: ${conceptFatal}`);
+        if (m.fatal) console.error(`  summaries: ${m.fatal}`);
+        if (m.failedFiles > 0) {
+          const skipped = m.skippedFiles > 0 ? `, ${m.skippedFiles} never attempted` : "";
+          console.error(`  ${m.failedFiles} file(s) failed to summarize${skipped}.`);
+        }
+        if (conceptErrors.length > 0) console.error(`  ${conceptErrors.length} concept-pass error(s).`);
+        console.error(`  meaning coverage: ${ready}/${total} symbols (${pct}%).`);
+        console.error(
+          "  Nothing computed was lost: re-run `graft build --deep` to resume from what is cached.\n" +
+            "  Pass --allow-partial to accept a degraded meaning tier and exit 0.",
+        );
+        if (!opts.allowPartial) process.exitCode = 1;
+      }
+    }
   });
 
 program
@@ -434,7 +471,9 @@ program
   .argument(...DIR_ARG)
   .option("-p, --port <port>", "port to serve on", "4400")
   .option("--no-open", "don't open the browser")
-  .action(async (dirArg: string | undefined, opts: { port: string; open: boolean }) => {
+  .option("--export <dir>", "write one self-contained index.html instead of serving (for CI, GitHub Pages, or a build artifact)")
+  .option("--title <text>", "subtitle shown beside the repo name in an exported page (e.g. \"PR #151\")")
+  .action(async (dirArg: string | undefined, opts: { port: string; open: boolean; export?: string; title?: string }) => {
     const dir = queryRoot(dirArg);
     const { existsSync } = await import("node:fs");
     const { resolve, basename } = await import("node:path");
@@ -451,6 +490,23 @@ program
       process.exit(1);
     }
     const viewerDir = fileURLToPath(new URL("./viewer/", import.meta.url)); // prebuilt
+
+    if (opts.export) {
+      const { exportViz } = await import("./viz/export.js");
+      const out = exportViz({
+        contextDir,
+        viewerDir,
+        outDir: resolve(opts.export),
+        repoName: basename(root),
+        subtitle: opts.title,
+      });
+      const kb = Math.round(out.bytes / 1024);
+      console.log(
+        `graft viz → ${out.file} (${kb} kB, ${out.contextNodes} concept nodes, ${out.codeNodes} code nodes)`,
+      );
+      return;
+    }
+
     const srv = await startVizServer({
       contextDir,
       viewerDir,
@@ -516,6 +572,31 @@ program
       });
     },
   );
+
+program
+  .command("blast")
+  .description(
+    "Blast radius of a diff: what depends on the lines this change touched ($0, no LLM). " +
+      "Built for CI — `--format markdown` is a PR comment with a Mermaid diagram.",
+  )
+  .argument(...DIR_ARG)
+  .option("--base <ref>", "diff against this ref's merge base with HEAD (e.g. origin/main); default: the working tree vs HEAD")
+  .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
+  .option("--format <fmt>", "text (default) | markdown | mermaid | json")
+  .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
+  .option(...NO_REFRESH_FLAG)
+  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; refresh?: boolean }) => {
+    const dir = queryRoot(dirArg);
+    await refreshBefore(dir, opts);
+    const { runBlastCommand } = await import("./blast/blast-cli.js");
+    await runBlastCommand(dir, {
+      base: opts.base,
+      depth: opts.depth,
+      format: opts.format,
+      name: opts.name,
+      globalDir: program.opts<GlobalOpts>().dir,
+    });
+  });
 
 program
   .command("grep")
