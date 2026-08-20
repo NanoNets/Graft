@@ -14,9 +14,8 @@
  */
 import type { BlastReport, TestSignal } from "./blast.js";
 
-/** Diagram caps. Everything past them folds into one aggregate circle that carries
- * the dropped counts, so the picture shrinks but never lies. */
-const MAX_AREA_BOXES = 5;
+/** Diagram cap. Everything past it folds into one aggregate circle carrying the
+ * dropped counts, so the picture shrinks but never lies. */
 const MAX_MODULE_BOXES = 5;
 /** Rows in the table under the diagram. */
 const MAX_TABLE_ROWS = 6;
@@ -45,111 +44,57 @@ function depthLabel(depth: number): string {
 
 /**
  * Node colours, taken from `graft viz`'s own palette (viewer/style.css) so the two
- * pictures of the same graph read as one thing: amber is what you touched
- * (`--k-file`), teal is what depends on it (`--k-method`), grey is the tail and the
- * edges (`--edge`), red marks an area with no tests. Fill AND text colour are set
- * explicitly on every node, because a GitHub comment renders in either theme and a
- * node that inherits one of them is illegible in the other.
+ * pictures of the same graph read as one thing: teal is "depends on your change"
+ * (`--k-method`), grey is the overflow circle (`--edge`). One hue for one kind of
+ * thing, now that the diff itself is not drawn. Fill AND text colour are set
+ * explicitly, because a GitHub comment renders in either theme and a node that
+ * inherits one of them is illegible in the other.
  */
 const VIZ = {
-  changedFill: "#F7E7CE", changedStroke: "#D98E2B", changedInk: "#3D2A0E",
   reachedFill: "#D9EDF3", reachedStroke: "#3AA7C9", reachedInk: "#0E313C",
   tailFill: "#EEF2F3", tailStroke: "#9AA4A9", tailInk: "#3A4247",
-  untestedStroke: "#AF3E35",
-  edge: "#9AA4A9",
 } as const;
 
 /** The glyph carried on a changed circle. Meaning lives in the diagram's key. */
 const TEST_GLYPH: Record<TestSignal, string> = { changed: "✓", stale: "⚠", none: "✗", na: "–" };
 
 /**
- * The Mermaid flowchart: changed areas on the left, affected areas on the right.
+ * The diagram: one circle per area that can be affected, and nothing else.
+ *
+ * Everything about the changed side is gone on purpose. Drawing which of your edits
+ * reaches which area is a many-to-many relation, so it can only ever render as a
+ * mesh — nine arrows over eleven circles at its tidiest — and the reviewer has to
+ * trace lines to read it. That relation still exists in the table's "Reached from"
+ * column, where a reader can look it up when they want it, so the picture is free
+ * to answer the only question it is asked at a glance: what can break?
+ *
+ * `TB`, not `LR`: with no edges, top-bottom is what lays unconnected nodes out as a
+ * row instead of a tall column.
  *
  * Returns null when there is nothing to draw — an empty diagram frame reads as a
  * broken renderer, and the caller has a sentence for "no dependents found".
  */
 export function mermaidDiagram(r: BlastReport): string | null {
-  const shownModules = r.modules.slice(0, MAX_MODULE_BOXES);
-  if (shownModules.length === 0 || r.areas.length === 0) return null;
-  const hiddenModules = r.modules.slice(MAX_MODULE_BOXES);
+  const shown = r.modules.slice(0, MAX_MODULE_BOXES);
+  if (shown.length === 0) return null;
+  const hidden = r.modules.slice(MAX_MODULE_BOXES);
 
-  const shownAreas = r.areas.slice(0, MAX_AREA_BOXES);
-  const hiddenAreas = r.areas.slice(MAX_AREA_BOXES);
-  /** Changed path → the id of the circle that stands for it. */
-  const areaId = new Map<string, string>();
-  shownAreas.forEach((a, i) => { for (const f of a.files) areaId.set(f, `D${i}`); });
-  const AREA_TAIL = "DX";
-  for (const a of hiddenAreas) for (const f of a.files) areaId.set(f, AREA_TAIL);
-
-  const lines = ["flowchart LR"];
-
-  // The key is one small dashed node pinned into the first rank by an invisible
-  // link, which is the only placement handle Mermaid offers. Declared first so it
-  // is laid out with the left-hand column rather than banded over the diagram.
-  lines.push(`  KEY[${label("✓ tests changed too", "⚠ has tests, not updated", "✗ no tests at all", "– no functions changed")}]`);
-
-  shownAreas.forEach((a, i) => {
-    lines.push(`  D${i}((${label(a.label, `${plural(a.files.length, "file")} · ${TEST_GLYPH[a.tests]}`)}))`);
-  });
-  if (hiddenAreas.length > 0) {
-    const files = hiddenAreas.reduce((n, a) => n + a.files.length, 0);
-    lines.push(`  ${AREA_TAIL}((${label(`${plural(hiddenAreas.length, "more area")}`, plural(files, "file"))}))`);
-  }
-
-  shownModules.forEach((m, i) => {
+  const lines = ["flowchart TB"];
+  shown.forEach((m, i) => {
     lines.push(`  A${i}((${label(m.label, plural(m.symbols.length, "symbol"))}))`);
   });
-  const MODULE_TAIL = "AX";
-  if (hiddenModules.length > 0) {
-    const symbols = hiddenModules.reduce((n, m) => n + m.symbols.length, 0);
-    lines.push(`  ${MODULE_TAIL}((${label(`${plural(hiddenModules.length, "smaller area")}`, plural(symbols, "symbol"))}))`);
+  const TAIL = "AX";
+  if (hidden.length > 0) {
+    const symbols = hidden.reduce((n, m) => n + m.symbols.length, 0);
+    lines.push(`  ${TAIL}((${label(plural(hidden.length, "smaller area"), plural(symbols, "symbol"))}))`);
   }
 
-  // One arrow per (changed area → affected area) pair the walk recorded. Arrows are
-  // deduped rather than capped: with both sides grouped there are few enough that
-  // dropping one — which is how the first version came to draw a diagram claiming
-  // nothing depended on anything — is never necessary.
-  const arrows: string[] = [];
-  const draw = (from: string, to: string) => {
-    const arrow = `  ${from} --> ${to}`;
-    if (!arrows.includes(arrow)) arrows.push(arrow);
-  };
-  shownModules.forEach((m, i) => {
-    for (const from of m.from) {
-      const id = areaId.get(from);
-      if (id) draw(id, `A${i}`);
-    }
-  });
-  for (const m of hiddenModules) {
-    for (const from of m.from) {
-      const id = areaId.get(from);
-      if (id) draw(id, MODULE_TAIL);
-    }
-  }
-  lines.push(...arrows);
-
-  lines.push(`  classDef changed fill:${VIZ.changedFill},stroke:${VIZ.changedStroke},stroke-width:1.5px,color:${VIZ.changedInk};`);
   lines.push(`  classDef reached fill:${VIZ.reachedFill},stroke:${VIZ.reachedStroke},stroke-width:1.5px,color:${VIZ.reachedInk};`);
-  lines.push(`  classDef tail fill:${VIZ.tailFill},stroke:${VIZ.tailStroke},stroke-width:1px,color:${VIZ.tailInk};`);
-  lines.push(`  classDef untested fill:${VIZ.changedFill},stroke:${VIZ.untestedStroke},stroke-width:2.5px,color:${VIZ.changedInk};`);
-  lines.push(`  classDef key fill:${VIZ.tailFill},stroke:${VIZ.tailStroke},stroke-width:1px,stroke-dasharray:3 3,color:${VIZ.tailInk},font-size:11px;`);
-
-  const tested = shownAreas.map((a, i) => ({ a, id: `D${i}` }));
-  const withTests = tested.filter((t) => t.a.tests !== "none").map((t) => t.id);
-  const withoutTests = tested.filter((t) => t.a.tests === "none").map((t) => t.id);
-  if (withTests.length > 0) lines.push(`  class ${withTests.join(",")} changed;`);
-  // A red stroke on top of the ✗, so the area to comment on is findable at a glance
-  // and still readable for anyone who cannot separate the two hues.
-  if (withoutTests.length > 0) lines.push(`  class ${withoutTests.join(",")} untested;`);
-  lines.push(`  class ${shownModules.map((_, i) => `A${i}`).join(",")} reached;`);
-  const tails = [hiddenAreas.length > 0 ? AREA_TAIL : "", hiddenModules.length > 0 ? MODULE_TAIL : ""].filter(Boolean);
-  if (tails.length > 0) lines.push(`  class ${tails.join(",")} tail;`);
-  lines.push("  class KEY key;");
-  lines.push("  KEY ~~~ D0");
-  if (arrows.length > 0) {
-    lines.push(`  linkStyle ${arrows.map((_, i) => i).join(",")} stroke:${VIZ.edge},stroke-width:1.5px;`);
+  lines.push(`  class ${shown.map((_, i) => `A${i}`).join(",")} reached;`);
+  if (hidden.length > 0) {
+    lines.push(`  classDef tail fill:${VIZ.tailFill},stroke:${VIZ.tailStroke},stroke-width:1px,color:${VIZ.tailInk};`);
+    lines.push(`  class ${TAIL} tail;`);
   }
-
   return lines.join("\n");
 }
 

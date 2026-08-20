@@ -49,9 +49,27 @@ export interface Impacted {
   depth: number;
 }
 
+/**
+ * Where a cluster's label came from — the rungs of the naming ladder.
+ *
+ * `concept` — a concept node from a `--deep` build claims every file in the cluster.
+ * `named`   — `graft blast --name` asked a model to name this cluster (see name.ts).
+ * `symbol`  — the deterministic backstop: the cluster's most significant symbol.
+ *
+ * A bare directory is never a label. The whole point of the picture is that a
+ * reviewer reads what is affected, and `src/graph/` tells them nothing they could
+ * not get from the diff — but it must never be replaced by a guess either, so the
+ * backstop names a real symbol rather than inventing a feature name.
+ */
+export type LabelSource = "concept" | "named" | "symbol";
+
 /** Dependents grouped for the diagram: the unit a reviewer actually thinks in. */
 export interface ImpactedModule {
   label: string;
+  labelSource: LabelSource;
+  /** Stable identity for the cluster, independent of its label: the concept name
+   * or the directory it was grouped by. Naming and its cache key hang off this. */
+  key: string;
   files: string[];
   symbols: Impacted[];
   /** Changed files whose edges reached this module — the diagram's arrows. */
@@ -72,6 +90,9 @@ export type TestSignal = "changed" | "stale" | "none" | "na";
 /** One area of the diff: the changed files a reviewer thinks of as one thing. */
 export interface ChangedArea {
   label: string;
+  labelSource: LabelSource;
+  /** The directory the cluster was grouped by — see {@link ImpactedModule.key}. */
+  key: string;
   /** Changed, indexed, non-test files grouped under this label. */
   files: string[];
   /** Changed symbols seeded from those files. */
@@ -85,6 +106,9 @@ export interface ChangedArea {
   behavioural: number;
   /** Names of the behavioural symbols no test reaches, for the collapsed detail. */
   unreached: string[];
+  /** Changed symbol names, behaviour first — the backstop label and the naming
+   * prompt both read from this. */
+  seedNames: string[];
 }
 
 export interface BlastReport {
@@ -279,18 +303,14 @@ function changedAreas(
   }
   coarsen(groups, MAX_AREAS);
 
-  const byLabel = new Map<string, ChangedArea>();
+  const byKey = new Map<string, ChangedArea>();
   for (const [dir, paths] of groups) {
-    const concepts = new Set(paths.map((p) => index.conceptOf(p)));
-    const [only] = concepts;
-    // One concept for the whole group and nothing unclaimed: its name says more
-    // than the path does. Otherwise the directory is the honest description.
-    const label = concepts.size === 1 && only ? shortLabel(only) : dir;
     const area: ChangedArea = {
-      label, files: [], seeds: 0, tests: "none", testFiles: [], changedTestFiles: [],
-      reached: 0, behavioural: 0, unreached: [],
+      label: dir, labelSource: "symbol", key: dir,
+      files: [], seeds: 0, tests: "none", testFiles: [], changedTestFiles: [],
+      reached: 0, behavioural: 0, unreached: [], seedNames: [],
     };
-    byLabel.set(label, area);
+    byKey.set(dir, area);
     for (const path of paths) {
       const nodes = seedNodes.get(path) ?? [];
       area.files.push(path);
@@ -306,7 +326,13 @@ function changedAreas(
           if (!area.testFiles.includes(t)) area.testFiles.push(t);
           if (changedTests.has(t) && !area.changedTestFiles.includes(t)) area.changedTestFiles.push(t);
         }
-        if (!behavioural) continue;
+        if (!behavioural) {
+          // Types last: a label naming an interface says less than one naming the
+          // function that changed beside it.
+          area.seedNames.push(node.name);
+          continue;
+        }
+        area.seedNames.unshift(node.name);
         area.behavioural++;
         if (from.size > 0) area.reached++;
         else area.unreached.push(node.name);
@@ -314,7 +340,10 @@ function changedAreas(
     }
   }
 
-  for (const area of byLabel.values()) {
+  for (const area of byKey.values()) {
+    const concept = sharedConcept(area.files, index);
+    area.label = concept ?? hubLabel(area.seedNames, area.key);
+    area.labelSource = concept ? "concept" : "symbol";
     area.files.sort();
     area.testFiles.sort();
     area.changedTestFiles.sort();
@@ -331,7 +360,7 @@ function changedAreas(
   // the same mistake, one level up, as capping changed FILES in diff order.
   const reach = (a: ChangedArea) =>
     modules.filter((m) => m.from.some((f) => a.files.includes(f))).length;
-  return [...byLabel.values()].sort(
+  return [...byKey.values()].sort(
     (a, b) => reach(b) - reach(a) || b.files.length - a.files.length || a.label.localeCompare(b.label),
   );
 }
@@ -366,6 +395,36 @@ function emptyIndex(): ModuleIndex {
 }
 
 /**
+ * The concept claiming EVERY file in a cluster, or null when they disagree.
+ *
+ * Unanimity is the point: a concept that covers three of five files describes
+ * something narrower than the cluster, and stamping its name on the whole thing is
+ * how a diagram starts lying about what it drew.
+ */
+function sharedConcept(paths: string[], index: ModuleIndex): string | null {
+  const concepts = new Set(paths.map((p) => index.conceptOf(p)));
+  const [only] = concepts;
+  return concepts.size === 1 && only ? shortLabel(only) : null;
+}
+
+/**
+ * The deterministic backstop label: the cluster's most significant symbol.
+ *
+ * Reached with no concept, no cache and no API key, so this is what guarantees a
+ * circle never carries a bare directory. It is a fact rather than a guess — the
+ * reviewer can grep the name — which is why it beats borrowing a neighbouring
+ * concept: on graft's own graph that borrowing labelled the freshness gate
+ * "Graph Extraction and Loading", which misleads worse than any path.
+ */
+export function hubLabel(names: string[], fallback: string): string {
+  const [head] = names.filter(Boolean);
+  // The hub alone, with no "+8" tail: how many symbols came with it is already the
+  // circle's second line and the table's own column, and repeating it in the label
+  // turned "writeGraph" into "writeGraph +8", which reads as a version number.
+  return head ? shortLabel(head) : fallback;
+}
+
+/**
  * Group dependents into modules. `origins` carries, per dependent, the changed
  * files whose walk actually reached it — so a module's `from` is the real arrow
  * set, not every changed file in the PR.
@@ -377,29 +436,37 @@ function groupByModule(
   modules: ModuleIndex,
 ): { modules: ImpactedModule[]; testModules: ImpactedModule[] } {
   const changedPaths = new Set(changed.map((c) => c.path));
-  const byLabel = new Map<string, ImpactedModule>();
+  const byKey = new Map<string, ImpactedModule>();
 
   for (const hit of impacted) {
     // A dependent inside a file the PR already changes is not "reach" — it is the
     // diff. Reviewers see it in the diff itself; repeating it as blast radius is
     // what makes these comments feel like noise.
     if (changedPaths.has(hit.path)) continue;
-    const label = modules.labelOf(hit.path);
-    let mod = byLabel.get(label);
+    // Cluster by concept where one exists, else by directory. Clustering and
+    // LABELLING are separate steps now: the key only has to be stable, while the
+    // label goes through the ladder below and may end up naming a symbol.
+    const key = modules.conceptOf(hit.path) ?? dirLabel(hit.path);
+    let mod = byKey.get(key);
     if (!mod) {
-      mod = { label, files: [], symbols: [], from: [] };
-      byLabel.set(label, mod);
+      mod = { label: key, labelSource: "symbol", key, files: [], symbols: [], from: [] };
+      byKey.set(key, mod);
     }
     mod.symbols.push(hit);
     if (!mod.files.includes(hit.path)) mod.files.push(hit.path);
   }
 
-  for (const mod of byLabel.values()) {
+  for (const mod of byKey.values()) {
     const from = new Set<string>();
     for (const s of mod.symbols) for (const p of origins.get(s.id) ?? []) from.add(p);
     mod.from = [...from].sort();
     mod.files.sort();
     mod.symbols.sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path));
+    // Shallowest symbol first after that sort, so it is the cluster's hub: the
+    // thing one hop from the diff rather than an arbitrary member.
+    const concept = sharedConcept(mod.files, modules);
+    mod.label = concept ?? hubLabel(mod.symbols.map((s) => s.name), mod.key);
+    mod.labelSource = concept ? "concept" : "symbol";
   }
 
   // Test-only modules are separated, not just sorted last. On a repo with a test
@@ -409,7 +476,7 @@ function groupByModule(
   // are. "Your tests reference the thing you changed" is one line, not 24 sections.
   const bySize = (a: ImpactedModule, b: ImpactedModule) =>
     b.symbols.length - a.symbols.length || a.label.localeCompare(b.label);
-  const all = [...byLabel.values()];
+  const all = [...byKey.values()];
   return {
     modules: all.filter((m) => !isTestOnly(m)).sort(bySize),
     testModules: all.filter(isTestOnly).sort(bySize),

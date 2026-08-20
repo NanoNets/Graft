@@ -164,9 +164,10 @@ test("blast --format markdown: diagram first, detail collapsed under it", () => 
 
   const r = runCli(["blast", d, "--format", "markdown"]);
   assert.equal(r.status, 0, r.describe());
-  assert.match(r.stdout, /```mermaid\nflowchart LR/);
-  // Both sides of the diagram are circles labelled by area, never one box per file.
-  assert.match(r.stdout, /D0\(\("src\//);
+  assert.match(r.stdout, /```mermaid\nflowchart TB/);
+  // Circles for what can break, labelled by area — never one box per changed file,
+  // and never a bare path: with no concept node, the hub symbol names the area.
+  assert.match(r.stdout, /A0\(\("total<br\/>2 symbols"\)\)/);
   assert.match(r.stdout, /\| Can be affected \| Symbols \| Nearest hop \| Reached from \|/);
   assert.match(r.stdout, /<details>/);
   assert.match(r.stdout, /`src\/total\.ts:L\d+-L\d+` — total \(calls, depth 1\)/);
@@ -183,7 +184,7 @@ test("blast --format mermaid: bare diagram, and a comment (not a failure) when t
   writeFileSync(join(d, "src", "math.ts"), MATH_EDITED);
   const drawn = runCli(["blast", d, "--format", "mermaid"]);
   assert.equal(drawn.status, 0, drawn.describe());
-  assert.match(drawn.stdout, /^flowchart LR/);
+  assert.match(drawn.stdout, /^flowchart TB/);
 
   // A README-only diff has no dependents: a CI step must not fail on that.
   writeFileSync(join(d, "src", "math.ts"), MATH);

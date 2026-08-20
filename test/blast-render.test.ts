@@ -17,6 +17,8 @@ import type { BlastReport, ChangedArea, ImpactedModule, TestSignal } from "../sr
 function mod(label: string, from: string[], symbols: number): ImpactedModule {
   return {
     label,
+    labelSource: "concept",
+    key: label,
     files: [`${label}dep.ts`],
     from,
     symbols: Array.from({ length: symbols }, (_, i) => ({
@@ -30,12 +32,13 @@ function area(label: string, files: string[], tests: TestSignal): ChangedArea {
   // "na" is the types-only case: no function, method or class changed, so the
   // question does not apply and the area must not be reported as untested.
   return {
-    label, files, seeds: files.length, tests,
+    label, labelSource: "concept", key: label, files, seeds: files.length, tests,
     testFiles: tests === "none" || tests === "na" ? [] : ["test/a.test.ts"],
     changedTestFiles: tests === "changed" ? ["test/a.test.ts"] : [],
     reached: tests === "changed" || tests === "stale" ? 1 : 0,
     behavioural: tests === "na" ? 0 : 1,
     unreached: tests === "none" ? ["doThing"] : [],
+    seedNames: ["doThing"],
   };
 }
 
@@ -73,49 +76,30 @@ function report(): BlastReport {
   };
 }
 
-test("blast diagram: both sides are area circles, and the overflow folds into one node", () => {
+test("blast diagram: circles for what can break, and nothing else", () => {
   const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
 
-  // Circles, like `graft viz` — never `[boxes]` — and labelled by area, not by path.
-  assert.match(diagram, /D0\(\("graph build<br\/>2 files · ✓"\)\)/);
+  // TB, not LR: with no edges, top-bottom lays unconnected nodes out as a row.
+  assert.match(diagram, /^flowchart TB$/m);
   assert.match(diagram, /A0\(\("core\/<br\/>3 symbols"\)\)/);
   // Two of seven affected areas are past the cap: one grey circle carries both.
   assert.match(diagram, /AX\(\("2 smaller areas<br\/>2 symbols"\)\)/);
-  assert.ok(!diagram.includes('A5(('), "the sixth area must fold into the tail, not be drawn");
+  assert.ok(!diagram.includes("A5(("), "the sixth area must fold into the tail, not be drawn");
 
-  // Every attribution is drawn, including the two that only reach folded areas.
-  const arrows = diagram.split("\n").filter((l) => l.includes(" --> "));
-  assert.deepEqual(arrows.map((a) => a.trim()).sort(), [
-    "D0 --> A0", "D0 --> A2", "D0 --> A4", "D1 --> A0", "D1 --> A1", "D1 --> AX", "D2 --> A3", "D2 --> AX",
-  ]);
+  // The mesh is the thing this diagram exists without. Arrows, the changed side and
+  // the glyph key all left together; the attribution lives in the table's column.
+  assert.ok(!diagram.includes("-->"), `no arrows may be drawn:\n${diagram}`);
+  assert.ok(!diagram.includes("linkStyle"), "nothing to style with no links");
+  assert.ok(!/\bD\d\(\(/.test(diagram), "no changed-area circles");
+  assert.ok(!diagram.includes("KEY"), "no key node");
 });
 
-test("blast diagram: the test signal rides on the circle, and an untested area strokes red", () => {
+test("blast diagram: colours are explicit, so either GitHub theme is legible", () => {
   const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
 
-  assert.match(diagram, /D1\(\("deep pass<br\/>1 file · ⚠"\)\)/);
-  assert.match(diagram, /D2\(\("blast<br\/>1 file · ✗"\)\)/);
-  // Colour is redundant with the glyph on purpose: the glyph survives a colour-blind
-  // reader and either GitHub theme, the red stroke makes the area findable at speed.
-  assert.match(diagram, /^\s+class D2 untested;/m);
-  // Every changed area is amber; only the one with no test at all takes the red.
-  assert.match(diagram, /D3\(\("types<br\/>1 file · –"\)\)/);
-  assert.match(diagram, /^\s+class D0,D1,D3 changed;/m);
-  // The key is a node inside the diagram, pinned to the first rank by an invisible
-  // link so it lands beside the left-hand column instead of banding over the graph.
-  assert.match(diagram, /KEY\["✓ tests changed too<br\/>⚠ has tests, not updated<br\/>✗ no tests at all<br\/>– no functions changed"\]/);
-  assert.match(diagram, /^\s+KEY ~~~ D0$/m);
-});
-
-test("blast diagram: nodes and links carry explicit colours, so either GitHub theme is legible", () => {
-  const diagram = mermaidDiagram(report()) ?? assert.fail("expected a diagram");
-
-  assert.match(diagram, /classDef changed fill:#[0-9A-F]{6},stroke:#[0-9A-F]{6},stroke-width:1\.5px,color:#[0-9A-F]{6};/i);
-  assert.match(diagram, /classDef reached fill:#[0-9A-F]{6}/i);
-  assert.match(diagram, /classDef untested fill:#[0-9A-F]{6},stroke:#AF3E35/i);
-  // Exactly the eight arrows drawn above, all styled: an unstyled link inherits
-  // Mermaid's own dark grey and vanishes on a dark theme.
-  assert.match(diagram, /^\s+linkStyle 0,1,2,3,4,5,6,7 stroke:#/m);
+  assert.match(diagram, /classDef reached fill:#[0-9A-F]{6},stroke:#[0-9A-F]{6},stroke-width:1\.5px,color:#[0-9A-F]{6};/i);
+  assert.match(diagram, /classDef tail fill:#[0-9A-F]{6}/i);
+  assert.match(diagram, /^\s+class A0,A1,A2,A3,A4 reached;/m);
 });
 
 test("blast markdown: one table and three collapsed sections, no per-module headers", () => {
