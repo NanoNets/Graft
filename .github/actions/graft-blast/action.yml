@@ -17,11 +17,13 @@ inputs:
     description: 'Hops to walk over incoming edges, or "all" for the full closure.'
     required: false
     default: "2"
-  deep:
+  name-areas:
     description: >-
-      Run the LLM pass so the diagram is labelled with concept names instead of
-      directories. Needs GRAFT_API_KEY in the environment; without one the build
-      degrades to the free structural pass and the diagram falls back to directories.
+      Name the affected areas with one cached LLM call (`graft blast --name`). Needs
+      GRAFT_API_KEY; without one every area is named after its hub symbol, which is
+      still a name a reviewer can grep. This replaces `build --deep` on the PR path:
+      summarising every file in the repo to label six clusters cost ~356 calls and
+      thirteen minutes per run.
     required: false
     default: "true"
   comment:
@@ -52,9 +54,6 @@ outputs:
   markdown:
     description: The comment body (also written to $GITHUB_STEP_SUMMARY).
     value: ${{ steps.blast.outputs.markdown }}
-  degraded:
-    description: "true when the deep pass did not complete, so labels may be missing."
-    value: ${{ steps.build.outputs.degraded }}
 
 runs:
   using: composite
@@ -74,6 +73,17 @@ runs:
         SETUP_CMD: ${{ inputs.setup-cmd }}
       run: bash -c "$SETUP_CMD"
 
+    # graft/ is git-ignored (it is a local cache), so the only place a name can
+    # survive between runs is GitHub's cache. Restore-only here: a cache saved by a
+    # PR job is scoped to that PR's branch and no other PR could read it, so the
+    # useful entry is always the one a push-to-main job saved (see blast-cache.yml).
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: graft
+        key: graft-${{ github.event.pull_request.base.sha }}
+        restore-keys: |
+          graft-
+
     - name: Build the graph
       id: build
       shell: bash
@@ -81,22 +91,13 @@ runs:
       # inside the shell text: a branch name is attacker-controllable on a fork PR,
       # and inline interpolation is how that becomes command injection.
       env:
-        DEEP: ${{ inputs.deep }}
         GRAFT: ${{ inputs.graft-cmd }}
       run: |
         set -uo pipefail
-        deep=""
-        if [ "$DEEP" = "true" ]; then deep="--deep --allow-partial"; fi
-        # --allow-partial: a spent quota must not fail the PR check. The build still
-        # says so on stderr, and that warning is carried into the comment below
-        # rather than being swallowed (graft#127).
-        $GRAFT build . $deep 2>build.log
-        cat build.log
-        if grep -q "the deep pass did not complete" build.log; then
-          echo "degraded=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "degraded=false" >> "$GITHUB_OUTPUT"
-        fi
+        # Structural only: ~4s, no API key, and it is all `blast` reads. The LLM tier
+        # is no longer on this path — `blast --name` below pays for the six labels
+        # the comment actually shows instead of summarising the whole repo.
+        $GRAFT build .
 
     - name: Compute the blast radius
       id: blast
@@ -104,14 +105,15 @@ runs:
       env:
         BASE: ${{ inputs.base != '' && inputs.base || format('origin/{0}', github.event.pull_request.base.ref) }}
         DEPTH: ${{ inputs.depth }}
-        DEGRADED: ${{ steps.build.outputs.degraded }}
+        NAME_AREAS: ${{ inputs.name-areas }}
         GRAFT: ${{ inputs.graft-cmd }}
       run: |
         set -euo pipefail
-        $GRAFT blast . --base "$BASE" --depth "$DEPTH" --format markdown > blast.md
-        if [ "$DEGRADED" = "true" ]; then
-          printf '\n> ⚠️ The deep pass did not complete on this run, so module names may be missing or stale.\n' >> blast.md
-        fi
+        name=""
+        if [ "$NAME_AREAS" = "true" ]; then name="--name"; fi
+        # --name never fails the step: with no key, a spent quota or a refused call
+        # it prints one line on stderr and every area keeps its hub-symbol name.
+        $GRAFT blast . --base "$BASE" --depth "$DEPTH" $name --format markdown > blast.md
         cat blast.md >> "$GITHUB_STEP_SUMMARY"
         {
           echo "markdown<<GRAFT_EOF"

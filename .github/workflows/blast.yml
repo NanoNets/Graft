@@ -29,10 +29,9 @@ jobs:
           # release — a release cannot run a command the PR is adding.
           setup-cmd: npm ci && npm run build
           graft-cmd: node dist/cli.js
-          # No API key on a fork's PR, so the deep pass would degrade anyway; the
-          # structural graph still groups by directory, which is enough to review the
-          # comment itself.
-          deep: ${{ github.event.pull_request.head.repo.fork == false }}
+          # A fork's PR gets no secrets, so naming would fail anyway; every area then
+          # carries its hub-symbol name, which is still reviewable.
+          name-areas: ${{ github.event.pull_request.head.repo.fork == false }}
         env:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
           # Wire format stays `openai` for any OpenAI-compatible gateway; these two

@@ -83,6 +83,14 @@ const NAMES_SCHEMA = {
 /** Symbols shown per cluster. Enough to characterise it; not a file listing. */
 const SYMBOLS_PER_CLUSTER = 8;
 
+/**
+ * Clusters per request. A PR's diagram needs six, so one batch covers it — the cap
+ * is for the cache-priming job, which deliberately walks a wide diff and can hand
+ * over fifty clusters at once. Past a dozen the prompt stops being a list and the
+ * model starts dropping keys.
+ */
+const CLUSTERS_PER_CALL = 12;
+
 function clusterPrompt(clusters: Cluster[]): string {
   return clusters
     .map((c) => {
@@ -227,13 +235,17 @@ export async function applyNames(
 
   if (pending.length === 0 || !opts.namer) return stats;
 
-  let named: Map<string, string>;
-  try {
-    named = await opts.namer.name(pending.map((p) => p.cluster));
-  } catch (err) {
-    // Every label already holds its backstop, so there is nothing to undo.
-    stats.error = err instanceof Error ? err.message : String(err);
-    return stats;
+  const named = new Map<string, string>();
+  for (let i = 0; i < pending.length; i += CLUSTERS_PER_CALL) {
+    const batch = pending.slice(i, i + CLUSTERS_PER_CALL);
+    try {
+      for (const [k, v] of await opts.namer.name(batch.map((p) => p.cluster))) named.set(k, v);
+    } catch (err) {
+      // Every label already holds its backstop, so there is nothing to undo — and a
+      // later batch failing must not discard the names an earlier one returned.
+      stats.error = err instanceof Error ? err.message : String(err);
+      break;
+    }
   }
 
   for (const p of pending) {
