@@ -32,6 +32,11 @@ jobs:
           # A fork's PR gets no secrets, so naming would fail anyway; every area then
           # carries its hub-symbol name, which is still reviewable.
           name-areas: ${{ github.event.pull_request.head.repo.fork == false }}
+          # Linked only once Pages is actually serving: set the repo variable
+          # BLAST_VIEWER_BASE (e.g. https://nanonets.github.io/Graft) after pointing
+          # Pages at the gh-pages branch that blast-pages.yml writes. Unset, the
+          # comment simply has no link rather than a link that 404s.
+          viewer-url: ${{ vars.BLAST_VIEWER_BASE != '' && format('{0}/pr/{1}/', vars.BLAST_VIEWER_BASE, github.event.pull_request.number) || '' }}
         env:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
           # Wire format stays `openai` for any OpenAI-compatible gateway; these two

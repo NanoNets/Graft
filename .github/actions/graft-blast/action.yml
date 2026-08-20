@@ -30,6 +30,19 @@ inputs:
     description: Post/update the PR comment. Set false to only produce the outputs.
     required: false
     default: "true"
+  viewer-url:
+    description: >-
+      Public URL of the exported viewer for this PR, linked from the comment. Leave
+      empty to omit the link. The comment holds five circles and a table; the graph
+      a reviewer can actually click through lives here.
+    required: false
+    default: ""
+  export-viewer:
+    description: >-
+      Write the standalone viewer to this directory (`graft viz --export`). Empty
+      skips the export. Publishing it is the caller's job — see blast-pages.yml.
+    required: false
+    default: ""
   token:
     description: "Token used to post the comment. Needs `pull-requests: write` permission."
     required: false
@@ -99,6 +112,17 @@ runs:
         # the comment actually shows instead of summarising the whole repo.
         $GRAFT build .
 
+    - name: Export the interactive viewer
+      if: inputs.export-viewer != ''
+      shell: bash
+      env:
+        OUT: ${{ inputs.export-viewer }}
+        TITLE: PR #${{ github.event.pull_request.number }}
+        GRAFT: ${{ inputs.graft-cmd }}
+      run: |
+        set -euo pipefail
+        $GRAFT viz . --export "$OUT" --title "$TITLE"
+
     - name: Compute the blast radius
       id: blast
       shell: bash
@@ -106,6 +130,7 @@ runs:
         BASE: ${{ inputs.base != '' && inputs.base || format('origin/{0}', github.event.pull_request.base.ref) }}
         DEPTH: ${{ inputs.depth }}
         NAME_AREAS: ${{ inputs.name-areas }}
+        VIEWER_URL: ${{ inputs.viewer-url }}
         GRAFT: ${{ inputs.graft-cmd }}
       run: |
         set -euo pipefail
@@ -114,6 +139,9 @@ runs:
         # --name never fails the step: with no key, a spent quota or a refused call
         # it prints one line on stderr and every area keeps its hub-symbol name.
         $GRAFT blast . --base "$BASE" --depth "$DEPTH" $name --format markdown > blast.md
+        if [ -n "$VIEWER_URL" ]; then
+          printf '\n[**Open the interactive graph →**](%s) — click an area to see its dependent symbols at file:line.\n' "$VIEWER_URL" >> blast.md
+        fi
         cat blast.md >> "$GITHUB_STEP_SUMMARY"
         {
           echo "markdown<<GRAFT_EOF"

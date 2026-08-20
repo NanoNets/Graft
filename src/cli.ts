@@ -471,7 +471,9 @@ program
   .argument(...DIR_ARG)
   .option("-p, --port <port>", "port to serve on", "4400")
   .option("--no-open", "don't open the browser")
-  .action(async (dirArg: string | undefined, opts: { port: string; open: boolean }) => {
+  .option("--export <dir>", "write one self-contained index.html instead of serving (for CI, GitHub Pages, or a build artifact)")
+  .option("--title <text>", "subtitle shown beside the repo name in an exported page (e.g. \"PR #151\")")
+  .action(async (dirArg: string | undefined, opts: { port: string; open: boolean; export?: string; title?: string }) => {
     const dir = queryRoot(dirArg);
     const { existsSync } = await import("node:fs");
     const { resolve, basename } = await import("node:path");
@@ -488,6 +490,23 @@ program
       process.exit(1);
     }
     const viewerDir = fileURLToPath(new URL("./viewer/", import.meta.url)); // prebuilt
+
+    if (opts.export) {
+      const { exportViz } = await import("./viz/export.js");
+      const out = exportViz({
+        contextDir,
+        viewerDir,
+        outDir: resolve(opts.export),
+        repoName: basename(root),
+        subtitle: opts.title,
+      });
+      const kb = Math.round(out.bytes / 1024);
+      console.log(
+        `graft viz → ${out.file} (${kb} kB, ${out.contextNodes} concept nodes, ${out.codeNodes} code nodes)`,
+      );
+      return;
+    }
+
     const srv = await startVizServer({
       contextDir,
       viewerDir,
