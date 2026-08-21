@@ -107,17 +107,17 @@ test('an empty batch is not a request', async () => {
   assert.deepEqual(hits, []);
 });
 
-test('the default host is Nanonets, not PostHog cloud', () => {
+test('the default host is the one the other server-side integration uses', () => {
   const saved = process.env.GRAFT_POSTHOG_HOST;
   delete process.env.GRAFT_POSTHOG_HOST;
-  assert.equal(posthogHost(), 'https://e.nanonets.com');
+  assert.equal(posthogHost(), 'https://events.nanonets.com');
   process.env.GRAFT_POSTHOG_HOST = saved;
 });
 
 test('a trailing slash on the configured host does not produce a double slash', () => {
   const saved = process.env.GRAFT_POSTHOG_HOST;
-  process.env.GRAFT_POSTHOG_HOST = 'https://e.nanonets.com///';
-  assert.equal(posthogHost(), 'https://e.nanonets.com');
+  process.env.GRAFT_POSTHOG_HOST = 'https://events.nanonets.com///';
+  assert.equal(posthogHost(), 'https://events.nanonets.com');
   process.env.GRAFT_POSTHOG_HOST = saved;
 });
 

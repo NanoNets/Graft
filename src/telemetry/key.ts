@@ -23,19 +23,25 @@ const BAKED_KEY = '';
 /**
  * Nanonets' own PostHog host, not `us.i.posthog.com`.
  *
- * Every other Nanonets product ingests through these proxies rather than
- * PostHog directly (see `assign/frontend/src/lib/posthog.ts`, which dual-inits
- * against `e.nanonets.com` and `events.nanonets.com` on one project token), so
- * pointing graft at PostHog Cloud would put its events in a project nobody
- * looks at. `e.nanonets.com` is the US Cloud proxy — plain PostHog ingest
- * semantics — rather than the self-hosted `events.nanonets.com`, whose path and
- * compression quirks that same file documents at length.
+ * Every Nanonets product ingests through a nanonets.com proxy rather than
+ * PostHog directly, on one shared project token, so pointing graft at PostHog
+ * Cloud would put its events in a project nobody looks at.
+ *
+ * `events.` rather than `e.` because graft is server-side, and this is the host
+ * the other server-side integration already uses (the agents-platform Go
+ * backend sets `POSTHOG_HOST=https://events.nanonets.com`). The one documented
+ * objection to it — 400 `invalid_payload` — was gzip-compressed ingest from
+ * `posthog-js` in a browser, fixed there with `disable_compression: true`. We
+ * send plain uncompressed JSON from Node, so that failure mode cannot apply.
+ *
+ * That host is documented as serving the older `/e/` path, which is exactly
+ * what the `/batch/` → `/e/` fallback in send.ts exists to handle.
  *
  * The HOST is safe to commit; the KEY is not, and stays empty here. That
  * asymmetry is the point: with no key, a fork built from this source sends
  * nothing no matter where the host points.
  */
-const BAKED_HOST = 'https://e.nanonets.com';
+const BAKED_HOST = 'https://events.nanonets.com';
 
 export function posthogKey(): string {
   return process.env.GRAFT_POSTHOG_KEY || BAKED_KEY;

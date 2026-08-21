@@ -113,11 +113,11 @@ Any one of these fully disables telemetry:
 
 ## Where the events go
 
-Official builds send to `https://e.nanonets.com`, Nanonets' own PostHog front
-door, so graft's numbers sit in the same project as the rest of the product
-rather than in a separate one. The client posts to `/batch/` and falls back to
-`/e/` if a host does not serve it, which is what lets the same build work
-against either the cloud proxy or the self-hosted one.
+Official builds send to `https://events.nanonets.com`, Nanonets' own PostHog
+front door, so graft's numbers sit in the same project as the rest of the
+product rather than in a separate one. The client posts to `/batch/` and falls
+back to `/e/` if a host does not serve it, which is what lets the same build
+work against either proxy.
 
 The host is a publish-time setting (`GRAFT_POSTHOG_HOST`) and PostHog itself is
 open source and self-hostable, so the endpoint can move without any code change.
