@@ -140,3 +140,32 @@ test('a build_failed event carries a code, never the error text', () => {
   assert.equal(JSON.stringify(ev).includes('private-repo'), false);
   assert.equal(ev.properties.stage, 'graph');
 });
+
+// --- the allowlist must reject by design, not by exception ---
+
+test('a prototype key is not an event: EVENTS.constructor must not look like a hit', () => {
+  const home = sandbox('tel-proto-event');
+  for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(track(name, { command: 'ask' }, { home, env: OPEN }), null, `${name} was accepted`);
+  }
+  assert.deepEqual(peek(home), []);
+});
+
+test('a prototype key as a PROPERTY name is dropped like any other unlisted key', () => {
+  const home = sandbox('tel-proto-prop');
+  const ev = track('query', { command: 'ask', __proto__: 'x', constructor: 'y' } as never, { home, env: OPEN });
+  assert.ok(ev);
+  assert.equal(ev.properties.command, 'ask');
+  assert.equal(Object.hasOwn(ev.properties, 'constructor'), false);
+});
+
+test('langsValue drops anything that is not a plain language token', () => {
+  // The failure this guards: a value that carries file or path metadata rather
+  // than a language name.
+  assert.equal(langsValue(['ts', 'src/secret project/auth.ts']), 'ts');
+  assert.equal(langsValue(['go', 'a'.repeat(40)]), 'go');
+  assert.equal(langsValue(['ts', '../../etc/passwd']), 'ts');
+  assert.equal(langsValue(['ts', 'my repo']), 'ts', 'a space is not a language token');
+  // Real language labels survive, including the awkward ones.
+  assert.equal(langsValue(['c++', 'c#', 'objective-c', 'f#']), 'c#,c++,f#,objective-c');
+});

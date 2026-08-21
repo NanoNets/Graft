@@ -105,7 +105,11 @@ export function startMcpServer(root: string, dirOverride?: string, version = '0'
           (r) => {
             // No `hit`: `isError` means the tool failed, which is not the same
             // question as "did the graph have an answer". Absent beats wrong.
-            track('query', { command: TOOL_COMMAND[name], surface: 'mcp' }, { repo: root, host: 'mcp' });
+            // hasOwn for the same reason as track()'s: a client is free to send
+            // `{"name":"constructor"}`, and a plain lookup would hand `track` a
+            // function rather than undefined.
+            const command = Object.hasOwn(TOOL_COMMAND, name) ? TOOL_COMMAND[name] : undefined;
+            track('query', { command, surface: 'mcp' }, { repo: root, host: 'mcp' });
             reply(id, { content: [{ type: 'text', text: r.text }], isError: r.isError });
           },
           (err) => replyError(id, -32603, err instanceof Error ? err.message : String(err)),

@@ -89,8 +89,12 @@ export function track(
 ): QueuedEvent | null {
   try {
     if (!telemetryOn(ctx.home, ctx.env)) return null;
+    // `Object.hasOwn`, not `EVENTS[event]`: a bare object literal inherits from
+    // Object.prototype, so `EVENTS['constructor']` is truthy and would sail past
+    // a plain existence check — only failing later, on a TypeError swallowed by
+    // the catch below. The allowlist must reject by design, not by exception.
+    if (!Object.hasOwn(EVENTS, event)) return null;
     const allowed = EVENTS[event];
-    if (!allowed) return null; // unknown event: not in the contract, not sent
 
     const properties = commonProps(ctx);
     for (const [k, v] of Object.entries(props)) {

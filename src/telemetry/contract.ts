@@ -176,12 +176,25 @@ export function savedTokensBucket(n: number): string {
 }
 
 /**
- * Languages, normalised and capped.
+ * Languages, normalised, filtered to a safe shape, and capped.
  *
  * Sorted so `["go","ts"]` and `["ts","go"]` aggregate as one value, deduped, and
  * cut to eight — a repo with a very long tail of languages is itself a
  * distinguishing fact, and the tail answers no question we have.
+ *
+ * The character filter is the part that matters. This is the only property in
+ * the contract that is not drawn from a closed set defined in this file: the
+ * values come from the parser registry, several modules away, via
+ * `languageLabelOf() ?? container.name ?? generic.name ?? "unknown"`. That is
+ * safe today, but it means the no-free-text guarantee would rest on a promise
+ * made elsewhere — and a future generic extractor naming itself after the
+ * extension it matched would quietly turn this into a channel for file
+ * metadata. Anything outside `[a-z0-9+#._-]`, or longer than 24 characters, is
+ * therefore dropped here rather than trusted.
  */
 export function langsValue(langs: readonly string[]): string {
-  return [...new Set(langs.map((l) => l.toLowerCase().trim()).filter(Boolean))].sort().slice(0, 8).join(',');
+  const clean = langs
+    .map((l) => l.toLowerCase().trim())
+    .filter((l) => l.length > 0 && l.length <= 24 && /^[a-z0-9+#._-]+$/.test(l));
+  return [...new Set(clean)].sort().slice(0, 8).join(',');
 }
