@@ -38,8 +38,14 @@ test('a closed session is rolled up into one bucketed event', () => {
   assert.equal(ev.properties.graft_reads_bucket, '50-199');
   assert.equal(ev.properties.source_reads_bucket, '5-19');
   assert.equal(ev.properties.saved_tokens_bucket, '5-20k');
-  // The raw counters must not ride along.
-  assert.equal(JSON.stringify(ev).includes('56'), false);
+  // The raw counters must not ride along. Checked against the property VALUES,
+  // not a substring of the serialised event: the event carries two random UUIDs,
+  // and '56' is two hex digits — a substring check here fails whenever a uuid
+  // happens to contain them, which is often.
+  const values = Object.values(ev.properties);
+  for (const raw of ['56', '12', '7400']) {
+    assert.equal(values.includes(raw), false, `the raw counter ${raw} was sent as a property value`);
+  }
 });
 
 test('a live session is left alone', () => {
