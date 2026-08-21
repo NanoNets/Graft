@@ -261,6 +261,105 @@ test("PHP closures: `graft check` stays fresh after build (no name drift)", asyn
   }
 });
 
+// Issue #144: an anonymous class (`new class implements I {…}`) previously
+// produced no node and no heritage edge — its methods were mis-attributed to
+// the enclosing function (`…#make.run`), so the type and its interface
+// contract were invisible. It now mints an `{anonymous}` class node
+// (mirroring the `{closure}` naming), carries its `implements`/`extends`
+// edges, and owns the methods declared in its body.
+const ANON_PHP = `<?php
+namespace Poc;
+
+interface Runnable {}
+
+class Base
+{
+    public function label(): string
+    {
+        return 'b';
+    }
+}
+
+function make(): Runnable
+{
+    return new class implements Runnable {
+        public function run(): int { return 1; }
+    };
+}
+
+function decorate(): Base
+{
+    return new class extends Base {
+        public function label(): string { return 'd'; }
+    };
+}
+`;
+
+function makeAnonFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "graft-php-anon-"));
+  writeFileSync(join(dir, "composer.json"), `{"name": "poc/anon"}\n`);
+  writeFileSync(join(dir, "poc.php"), ANON_PHP);
+  return dir;
+}
+
+test("PHP anonymous classes: mint a class node that owns its methods (#144)", () => {
+  const { nodes } = extractFile("poc.php", ANON_PHP, "php");
+  const ids = nodes.map((n) => n.id);
+
+  const anon = nodes.find((n) => n.id === "poc.php#make.{anonymous}");
+  assert.equal(anon?.kind, "class", `expected an {anonymous} class node, got: ${ids.join(", ")}`);
+
+  // the method nests under the anonymous class, not the enclosing function
+  const run = nodes.find((n) => n.id === "poc.php#make.{anonymous}.run");
+  assert.equal(run?.kind, "method");
+  assert.equal(run?.owner, "{anonymous}", "run's owner is the anonymous class");
+  assert.ok(!ids.includes("poc.php#make.run"), "run must not attach to the enclosing function");
+
+  // control: enclosing functions and named classes are unchanged
+  assert.equal(nodes.find((n) => n.id === "poc.php#make")?.kind, "function");
+  assert.equal(nodes.find((n) => n.id === "poc.php#Base.label")?.owner, "Base");
+});
+
+test("PHP anonymous classes: implements/extends edges resolve (#144)", async () => {
+  const dir = makeAnonFixture();
+  try {
+    await buildGraph(dir);
+    const graph = readGraph(wiringPath(join(dir, "graft")))!;
+
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.relation === "implements" &&
+          e.source === "poc.php#make.{anonymous}" &&
+          e.target === "poc.php#Runnable",
+      ),
+      "anonymous class should have a resolved implements edge to Runnable",
+    );
+    assert.ok(
+      graph.edges.some(
+        (e) =>
+          e.relation === "extends" &&
+          e.source === "poc.php#decorate.{anonymous}" &&
+          e.target === "poc.php#Base",
+      ),
+      "anonymous class should have a resolved extends edge to Base",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PHP anonymous classes: siblings in one scope dedupe like {closure}", () => {
+  const src = `<?php
+$a = new class { public function one(): int { return 1; } };
+$b = new class { public function two(): int { return 2; } };
+`;
+  const { nodes } = extractFile("dup.php", src, "php");
+  const ids = nodes.map((n) => n.id);
+  assert.ok(ids.includes("dup.php#{anonymous}"), `expected an {anonymous} node, got: ${ids.join(", ")}`);
+  assert.ok(ids.includes("dup.php#{anonymous}~2"), `expected a deduplicated {anonymous}~2 node, got: ${ids.join(", ")}`);
+});
+
 test("PHP extraction: closures become nodes and own the calls inside them", async () => {
   const dir = makeFixture();
   try {
