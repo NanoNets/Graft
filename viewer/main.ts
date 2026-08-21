@@ -280,6 +280,14 @@ async function loadAll(): Promise<void> {
   const where = [context.meta.repoName, context.meta.subtitle].filter(Boolean).join(" · ");
   $("repoName").textContent = where;
   document.title = `graft viz — ${where}`;
+  // A blast export ships one tab: its Code tab would be the repo's whole wiring
+  // graph, which answers nothing about the pull request the page is about.
+  const tabs = context.meta.tabs;
+  if (tabs) {
+    document.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) => {
+      b.hidden = !tabs.includes(b.dataset.tab as Tab);
+    });
+  }
   // An exported page says which tab holds its content: a structural build has no
   // concept nodes, so the default Context tab would open on an empty canvas.
   const wanted = context.meta.defaultTab;
