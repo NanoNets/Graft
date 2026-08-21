@@ -15,6 +15,7 @@ import { buildGraph } from "../src/graph/build.js";
 import { readGraph, wiringPath } from "../src/graph/write.js";
 import { checkGraph } from "../src/graph/check.js";
 import { contextDirFor } from "../src/context/node-file.js";
+import { skeleton } from "../src/ask/ask.js";
 
 const RUST = `pub struct Config {
     name: String,
@@ -289,4 +290,72 @@ test("buildGraph + checkGraph handle a breadth-tier (.rs) repo end-to-end", asyn
   // identically, so a fresh graph reads as in-sync, not perpetually stale.
   const chk = await checkGraph(dir);
   assert.equal(chk.ok, true, `check OK on a breadth-tier repo (added=${chk.added}, removed=${chk.removed})`);
+});
+
+// #134: Dart is a breadth-tier language with no vendored tags.scm, so the
+// node-kind walker minted class_body / locals and skipped top-level functions.
+// Issue fixture — top-level const + functions + a method that calls a top-level fn.
+const DART = `const int kThreshold = 3;
+
+bool isReady(int count) => count >= kThreshold;
+
+String describe(int count) {
+  final label = isReady(count) ? 'ready' : 'waiting';
+  return label;
+}
+
+class Counter {
+  int value = 0;
+
+  bool ready() => isReady(value);
+}
+`;
+
+test("genericLangOf routes .dart to the breadth tier", () => {
+  assert.equal(genericLangOf("lib/example.dart")?.name, "dart");
+});
+
+test("Dart top-level functions/consts become symbols; call edges resolve; body locals stay out (#134)", async () => {
+  await warmGenericGrammars(["dart"]);
+  assert.ok(isWarm("dart"), "dart grammar should warm");
+  const { nodes, rawEdges } = extractGeneric("lib/example.dart", DART, "dart");
+  const symbols = nodes.filter((n) => n.kind !== "file");
+  const byName = new Map(symbols.map((n) => [n.name, n]));
+
+  assert.equal(byName.get("isReady")?.kind, "function", "isReady is a top-level function");
+  assert.equal(byName.get("describe")?.kind, "function", "describe is a top-level function");
+  assert.equal(byName.get("kThreshold")?.kind, "constant", "kThreshold is a top-level const");
+  assert.equal(byName.get("Counter")?.kind, "class");
+  assert.equal(byName.get("ready")?.kind, "method", "Counter.ready is a method");
+
+  assert.ok(!symbols.some((n) => n.name === "label"), "function-body local `label` is not a symbol");
+  assert.ok(
+    !symbols.some((n) => n.kind === "class" && n.name === "int"),
+    `no bogus class int (got ${symbols.filter((n) => n.kind === "class").map((n) => n.name).join(", ")})`,
+  );
+
+  const edges = resolveEdges(nodes, rawEdges);
+  const calls = edges
+    .filter((e) => e.relation === "calls")
+    .map((e) => `${e.source.split("#")[1]}→${e.target.split("#")[1]}`);
+  assert.ok(calls.includes("describe→isReady"), `describe → isReady (got ${calls.join(", ")})`);
+  assert.ok(calls.includes("ready→isReady"), `Counter.ready → isReady (got ${calls.join(", ")})`);
+});
+
+test("Dart file-level skeleton lists the API, not function-body locals (#134)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "graft-dart-"));
+  mkdirSync(join(dir, "lib"));
+  writeFileSync(join(dir, "lib", "example.dart"), DART);
+
+  await buildGraph(dir, { reuse: false });
+  const r = skeleton(dir, "lib/example.dart");
+  const names = r.entries.map((e) => e.name);
+  for (const want of ["isReady", "describe", "kThreshold", "Counter", "ready"]) {
+    assert.ok(names.includes(want), `skeleton includes ${want} (got ${names.join(", ")})`);
+  }
+  assert.ok(!names.includes("label"), "skeleton omits function-body local `label`");
+  assert.ok(
+    !r.entries.some((e) => e.kind === "class" && e.name === "int"),
+    "skeleton has no bogus class int",
+  );
 });
