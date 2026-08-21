@@ -79,10 +79,14 @@ export function formatDebug(home?: string): string {
       '  Run a graft command first — events are written locally and flushed once a day.',
     ].join('\n');
   }
+  // A literal placeholder, never the key itself. This output is written to be
+  // pasted into an issue; the project key is not the user's to share and is not
+  // needed to audit what graft sends.
+  const body = { api_key: '<omitted — graft\'s own ingestion key>', ...buildBatch(events) };
   return [
     `telemetry: ${events.length} event(s) queued. This is the exact body a flush would POST`,
     `to ${posthogHost()}/batch/ — running this command sends nothing.`,
     '',
-    JSON.stringify(buildBatch(events), null, 2),
+    JSON.stringify(body, null, 2),
   ].join('\n');
 }

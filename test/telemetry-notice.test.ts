@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { firstRunNotice, formatDebug, formatStatus } from '../src/telemetry/notice.js';
+import { buildBatch } from '../src/telemetry/send.js';
 import { enqueue } from '../src/telemetry/queue.js';
 import { readState } from '../src/telemetry/identity.js';
 import { tmpRepo } from './helpers.js';
@@ -75,6 +76,29 @@ test('debug prints the exact batch and sends nothing', () => {
   assert.equal(body.batch[0].event, 'query');
   assert.equal(body.batch[0].properties.$process_person_profile, false, 'anonymous event');
   assert.equal(body.batch[0].properties.distinct_id, 'abc');
+});
+
+test('debug never prints the project key — this output is written to be pasted into an issue', () => {
+  const h = home('notice-debug-key', { installId: 'x' });
+  process.env.GRAFT_POSTHOG_KEY = 'phc_do_not_print_me';
+  enqueue({ event: 'query', properties: { command: 'ask' }, distinct_id: 'abc' }, h);
+  const out = formatDebug(h);
+  assert.equal(out.includes('phc_do_not_print_me'), false, 'the ingestion key leaked into terminal output');
+  // The field is still shown, so the output is an honest picture of the request.
+  assert.match(out, /"api_key": "<omitted/);
+});
+
+test('buildBatch itself carries no key, so no logging path can reach one', () => {
+  process.env.GRAFT_POSTHOG_KEY = 'phc_do_not_print_me';
+  const batch = buildBatch([{ event: 'query', properties: {}, distinct_id: 'abc' }]);
+  assert.equal('api_key' in batch, false);
+  assert.equal(JSON.stringify(batch).includes('phc_do_not_print_me'), false);
+});
+
+test('status prints the endpoint but never the key', () => {
+  const h = home('notice-status-key', { installId: 'x' });
+  process.env.GRAFT_POSTHOG_KEY = 'phc_do_not_print_me';
+  assert.equal(formatStatus(h).includes('phc_do_not_print_me'), false);
 });
 
 test('debug on an empty queue explains rather than printing an empty batch', () => {

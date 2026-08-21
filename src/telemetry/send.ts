@@ -25,11 +25,18 @@ export interface SendResult {
   error?: string;
 }
 
-/** The exact JSON that goes over the wire. Built separately from the send so
- *  `graft telemetry debug` can print it without a network call. */
+/**
+ * The events as PostHog wants them — everything the wire body contains EXCEPT
+ * the project key.
+ *
+ * The key is deliberately not in here. `graft telemetry debug` prints this
+ * object so a user can audit exactly what graft sends, and a command that exists
+ * to be pasted into a bug report must not also paste our ingestion key into it.
+ * `sendBatch` adds the key at the moment of the request and nowhere else, which
+ * keeps the key entirely out of every code path that can reach a terminal.
+ */
 export function buildBatch(events: unknown[]): Record<string, unknown> {
   return {
-    api_key: posthogKey(),
     batch: events.map((e) => {
       const ev = e as { event: string; properties?: Record<string, string>; timestamp?: string; distinct_id?: string };
       return {
@@ -54,7 +61,8 @@ export async function sendBatch(events: unknown[]): Promise<SendResult> {
     const res = await fetch(`${posthogHost()}/batch/`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(buildBatch(events)),
+      // The one place the key is ever attached: the request body itself.
+      body: JSON.stringify({ api_key: key, ...buildBatch(events) }),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
     // 4xx is our bug (a bad key, a malformed batch) and retrying it forever
