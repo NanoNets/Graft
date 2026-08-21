@@ -16,7 +16,7 @@ import type { PlannedWrite } from './plan.js';
 export interface McpWrite {
   id: string;
   path: string;
-  action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable';
+  action: 'created' | 'updated' | 'unchanged' | 'skipped-unparseable' | 'skipped';
 }
 
 /** A planned MCP write, plus the detail needed to actually perform it. */

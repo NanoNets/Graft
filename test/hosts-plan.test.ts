@@ -43,6 +43,15 @@ test('claude writes are all repo-scoped — the claude layer never touches ~', (
   assert.ok(claude.writes.every((w) => w.path.startsWith(repo)));
 });
 
+test('claude plan omits .mcp.json and the hooks shim when those flags are off', () => {
+  const repo = fresh();
+  const claude = planInit(repo, { home: fullHome(), ids: ['claude'], mcp: false, hooks: false })[0];
+  assert.equal(claude.writes.length, 3);
+  assert.ok(!claude.writes.some((w) => w.path.endsWith('.mcp.json')));
+  assert.ok(!claude.writes.some((w) => w.path.includes('graft-hooks.cjs')));
+  assert.ok(claude.writes.some((w) => w.path.endsWith('settings.json')));
+});
+
 test('the three ~/.codex writes are scoped global', () => {
   const home = fullHome();
   const agents = planInit(fresh(), { home, ids: ['agents'] })[0];
