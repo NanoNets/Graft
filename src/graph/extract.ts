@@ -608,6 +608,22 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
     };
   }
 
+  // PHP anonymous classes (`new class implements I {…}`): minted as a class
+  // node named `{anonymous}` (mirroring `{closure}`, deduplicated per file by
+  // mintId). Without this the type vanished — no node, no heritage edge — and
+  // its methods mis-attributed to the enclosing function (issue #144). The
+  // class kind makes the walk emit heritageEdges (base_clause /
+  // class_interface_clause are direct children) and own the nested methods.
+  if (ctx.lang === "php" && node.type === "anonymous_class") {
+    const body = node.childForFieldName("body");
+    return {
+      name: "{anonymous}",
+      kind: "class",
+      headerEnd: body ? body.startIndex : node.endIndex,
+      hashNode: node,
+    };
+  }
+
   const mapped = ctx.kinds[node.type];
   if (mapped) {
     const name = node.childForFieldName("name")?.text;
