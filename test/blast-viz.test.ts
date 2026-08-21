@@ -110,3 +110,32 @@ test("blast viz: the page is titled after the repository, not the checkout direc
   execFileSync("git", ["-C", dir, "remote", "set-url", "origin", "https://github.com/NanoNets/Graft"]);
   assert.equal(repoLabel(dir), "Graft", "and an https remote with no .git suffix reads the same");
 });
+
+test("blast viz: an empty radius says why, instead of publishing a blank canvas", () => {
+  // A lockfile- or workflow-only PR has no radius, and the page published for it
+  // was a blank canvas behind a link promising a diagram — indistinguishable from
+  // a broken export.
+  const r = report();
+  r.areas = [];
+  r.modules = [];
+  r.changed = [
+    { path: ".github/workflows/x.yml", status: "modified", ranges: [{ start: 1, end: 1 }] },
+    { path: "package-lock.json", status: "modified", ranges: [{ start: 1, end: 1 }] },
+  ];
+  r.unindexed = [".github/workflows/x.yml", "package-lock.json"];
+
+  const g = blastVizGraph(r);
+  assert.equal(g.nodes.length, 0);
+  assert.match(g.meta.emptyNote ?? "", /no parser claims 2 changed files/);
+  assert.match(g.meta.emptyNote ?? "", /\.github\/workflows\/x\.yml, package-lock\.json/);
+
+  // A radius that exists needs no excuse — the note must not appear on a real page.
+  assert.equal(blastVizGraph(report()).meta.emptyNote, undefined);
+
+  // Changed code with no dependents is a different answer from unparsed files.
+  const orphan = report();
+  orphan.areas = [];
+  orphan.modules = [];
+  orphan.unindexed = [];
+  assert.match(blastVizGraph(orphan).meta.emptyNote ?? "", /no resolved dependents/);
+});

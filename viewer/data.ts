@@ -25,6 +25,8 @@ export interface VizGraph {
     /** Set by `graft viz --export`: the tab whose graph actually has content. */
     defaultTab?: "context" | "code";
     nodeCount: number; edgeCount: number; skippedFiles?: number; droppedEdges?: number;
+    /** Why the graph is empty, when it is — set by `blast --export-viz`. */
+    emptyNote?: string;
   };
   nodes: VizNode[];
   edges: VizEdge[];

@@ -149,10 +149,16 @@ function setTab(tab: Tab): void {
     }
   } else {
     const graph = activeGraph();
-    if (!graph) {
-      showEmpty(tab === "code"
+    if (!graph || graph.nodes.length === 0) {
+      // A graph that exists but holds no nodes used to fall through to the canvas
+      // and render nothing at all — worst on an exported page, where the reader
+      // arrived from a link that promised a diagram.
+      // The note names changed FILES, and a path on a fork's branch is written by
+      // whoever opened the pull request — it reaches a published page, so it is
+      // escaped rather than trusted.
+      showEmpty(graph?.meta.emptyNote ? escapeText(graph.meta.emptyNote) : (tab === "code"
         ? "No code graph yet — run <code>graft graph</code> to generate <span class=\"mono\">graph.json</span>."
-        : "No context graph — run <code>graft init</code> first.");
+        : "No context graph — run <code>graft init</code> first."));
     } else {
       empty.hidden = true;
       view.resetView();
@@ -164,6 +170,10 @@ function setTab(tab: Tab): void {
   renderLegend();
   updateShownCount();
   updateCounts();
+}
+
+function escapeText(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 }
 
 function showEmpty(html: string): void {

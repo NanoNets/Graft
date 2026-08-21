@@ -36,6 +36,10 @@ export interface VizGraph {
     edgeCount: number;
     skippedFiles: number;
     droppedEdges: number;
+    /** Why there is nothing to draw, when there is nothing to draw. A published
+     * page cannot answer a question a reader asks of the console, so an empty
+     * canvas has to say what it means — see `blastVizGraph`. */
+    emptyNote?: string;
   };
   nodes: VizNode[];
   edges: VizEdge[];
