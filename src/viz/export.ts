@@ -67,8 +67,19 @@ function inlineJson(value: unknown): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
+/** The two tags this exporter rewrites, verbatim from viewer/index.html. */
+const LINK_TAG = '<link rel="stylesheet" href="/style.css">';
+const SCRIPT_TAG = '<script type="module" src="/app.js"></script>';
+
 export function exportViz(opts: VizExportOptions): VizExportResult {
   const html = readFileSync(join(opts.viewerDir, "index.html"), "utf8");
+
+  // Checked on the SOURCE, before anything is inlined. Checking the assembled page
+  // instead looks equivalent and is not: a stylesheet comment or a bundled string
+  // containing one of these tags would fail an export that was in fact correct.
+  if (!html.includes(LINK_TAG) || !html.includes(SCRIPT_TAG)) {
+    throw new Error("viz export: viewer/index.html no longer matches the asset tags this exporter rewrites");
+  }
   const css = readFileSync(join(opts.viewerDir, "style.css"), "utf8");
   const js = readFileSync(join(opts.viewerDir, "app.js"), "utf8");
 
@@ -99,14 +110,8 @@ export function exportViz(opts: VizExportOptions): VizExportResult {
   // full of them — the first version of this put the original `<script src>` tag
   // back into the page via a stray `$&` in app.js. A function is taken verbatim.
   const page = html
-    .replace('<link rel="stylesheet" href="/style.css">', () => `<style>\n${css}\n</style>`)
-    .replace('<script type="module" src="/app.js"></script>', () => `${data}\n<script type="module">\n${js}\n</script>`);
-
-  // A replacement that silently did nothing would ship a page fetching /app.js from
-  // the domain root, which 404s on Pages and shows an empty viewer.
-  if (page.includes('href="/style.css"') || page.includes('src="/app.js"')) {
-    throw new Error("viz export: viewer/index.html no longer matches the asset tags this exporter rewrites");
-  }
+    .replace(LINK_TAG, () => `<style>\n${css}\n</style>`)
+    .replace(SCRIPT_TAG, () => `${data}\n<script type="module">\n${js}\n</script>`);
 
   mkdirSync(opts.outDir, { recursive: true });
   const file = join(opts.outDir, "index.html");

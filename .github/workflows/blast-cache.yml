@@ -10,8 +10,9 @@ name: Blast cache
 on:
   push:
     branches: [main]
-  # graft/ holds LLM-written names keyed by content hash; a manual run is the way to
-  # refill the cache after the 7-day eviction window on a quiet repo.
+  # graft/ holds the concept layer and the LLM-written area names, both keyed by
+  # content hash; a manual run is the way to refill the cache after the 7-day
+  # eviction window on a quiet repo.
   workflow_dispatch:
 
 permissions:
@@ -24,6 +25,10 @@ concurrency:
 jobs:
   prime:
     runs-on: ubuntu-latest
+    # The first deep pass is ~13 minutes; incremental ones are seconds. A ceiling
+    # well above that turns a hung provider into a failed job rather than six hours
+    # of a runner waiting.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,14 +45,19 @@ jobs:
       - name: Build the CLI from this commit
         run: npm ci && npm run build
 
-      - name: Build the graph and name every area
+      - name: Build the graph, the concept layer, and name every area
         env:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
           GRAFT_BASE_URL: ${{ secrets.GRAFT_BASE_URL }}
           GRAFT_MODEL: ${{ secrets.GRAFT_MODEL }}
         run: |
           set -euo pipefail
-          node dist/cli.js build .
+          # --deep HERE and nowhere else. A PR must never pay for it (thirteen
+          # minutes, ~356 calls), but the cache a PR restores is built on main, and
+          # concept nodes are what let both the comment and the exported viewer show
+          # feature names instead of hub symbols. Incremental after the first run:
+          # every summary and crux is keyed by content hash.
+          node dist/cli.js build . --deep --allow-partial
           # A wide window on purpose: the blast radius of the last fifty commits
           # covers most of what any PR will reach, and naming batches them. Falls
           # back to the root commit when the history is shorter than the window.

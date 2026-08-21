@@ -154,3 +154,15 @@ test("viz export: refuses to write a page whose asset tags it did not rewrite", 
     "a silently un-inlined page 404s wherever it is published — fail loudly instead",
   );
 });
+
+test("viz export: asset-path text inside the assets does not fail a correct export", () => {
+  // The guard used to inspect the assembled page, so a stylesheet comment or a
+  // bundled string mentioning one of the tags failed an export that was fine.
+  const dir = viewerDir('const doc = \'<script type="module" src="/app.js"></script>\';');
+  writeFileSync(join(dir, "style.css"), '/* replaces <link rel="stylesheet" href="/style.css"> */ x{}');
+
+  const res = exportViz({ contextDir: contextDir(), viewerDir: dir, outDir: out(), repoName: "demo" });
+  const page = readFileSync(res.file, "utf8");
+  assert.match(page, /replaces <link rel="stylesheet" href="\/style\.css">/, "the comment survives inlining");
+  assert.match(page, /window\.__GRAFT_DATA__/, "and the export still happened");
+});

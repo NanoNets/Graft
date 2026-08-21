@@ -202,6 +202,23 @@ test("blast: an unknown --base names the CI cause (checkout depth), not a git in
   assert.match(r.stderr, /fetch-depth: 0/);
 });
 
+test("blast: an area is named after its most-depended-on function, not the last one seen", () => {
+  const d = builtRepo();
+  // `add` is called by total (and transitively by report); `unused` is called by
+  // nothing. Editing both must label the area `add`, whichever order the walk sees
+  // them in — before this, the label was whatever symbol the file ended on.
+  writeFileSync(
+    join(d, "src", "math.ts"),
+    "export function add(a: number, b: number): number {\n  return a + b + 0;\n}\n" +
+      "export function unused(): number {\n  return 41 + 1;\n}\n",
+  );
+
+  const report = blastJson([d]);
+  assert.equal(report.areas.length, 1);
+  assert.equal(report.areas[0].seedNames[0], "add", `ranked hub, got ${report.areas[0].seedNames.join(", ")}`);
+  assert.equal(report.areas[0].label, "add");
+});
+
 test("blast: a clean tree reports the last commit rather than nothing at all", () => {
   const d = builtRepo();
   writeFileSync(join(d, "src", "math.ts"), MATH_EDITED);

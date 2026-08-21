@@ -277,6 +277,9 @@ function changedAreas(
 ): ChangedArea[] {
   const changedTests = new Set(changed.filter((c) => TEST_PATH.test(c.path)).map((c) => c.path));
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  /** How many edges point AT each node — how central it is in the graph. */
+  const inDegree = new Map<string, number>();
+  for (const e of graph.edges) inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
   /** Incoming edge sources per node id, resolved to the source's file path. */
   const incoming = new Map<string, Set<string>>();
   for (const e of graph.edges) {
@@ -304,6 +307,8 @@ function changedAreas(
   coarsen(groups, MAX_AREAS);
 
   const byKey = new Map<string, ChangedArea>();
+  /** Hub candidates per area, ranked once every seed has been seen. */
+  const candidates = new Map<ChangedArea, { name: string; behavioural: boolean; degree: number }[]>();
   for (const [dir, paths] of groups) {
     const area: ChangedArea = {
       label: dir, labelSource: "symbol", key: dir,
@@ -326,13 +331,11 @@ function changedAreas(
           if (!area.testFiles.includes(t)) area.testFiles.push(t);
           if (changedTests.has(t) && !area.changedTestFiles.includes(t)) area.changedTestFiles.push(t);
         }
-        if (!behavioural) {
-          // Types last: a label naming an interface says less than one naming the
-          // function that changed beside it.
-          area.seedNames.push(node.name);
-          continue;
-        }
-        area.seedNames.unshift(node.name);
+        candidates.set(area, [
+          ...(candidates.get(area) ?? []),
+          { name: node.name, behavioural, degree: inDegree.get(node.id) ?? 0 },
+        ]);
+        if (!behavioural) continue;
         area.behavioural++;
         if (from.size > 0) area.reached++;
         else area.unreached.push(node.name);
@@ -341,6 +344,13 @@ function changedAreas(
   }
 
   for (const area of byKey.values()) {
+    // The hub is the most-depended-on function in the area, not whichever symbol the
+    // file walk happened to end on: `LlmFailureGate` rather than `transportRetries`.
+    // Behaviour outranks types, since nothing calls an interface.
+    area.seedNames = (candidates.get(area) ?? [])
+      .sort((a, b) =>
+        Number(b.behavioural) - Number(a.behavioural) || b.degree - a.degree || a.name.localeCompare(b.name))
+      .map((c) => c.name);
     const concept = sharedConcept(area.files, index);
     area.label = concept ?? hubLabel(area.seedNames, area.key);
     area.labelSource = concept ? "concept" : "symbol";
