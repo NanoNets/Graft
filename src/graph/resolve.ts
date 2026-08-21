@@ -156,10 +156,17 @@ export function resolveEdges(
         // A named import gives both halves needed for sound resolution: the module
         // it came from and the exported name. Resolve inside that file only, so a
         // same-named symbol elsewhere in the repo cannot become a false edge.
-        const targetFile = resolveImport(e.specifier, e.file, byId);
+        const targetFile = e.file.endsWith(".php")
+          ? resolvePhpUse(e.specifier, phpFilesBySuffix)
+          : resolveImport(e.specifier, e.file, byId);
         if (!byId.has(targetFile)) continue; // external or unresolved module
         const candidates = perFileName.get(targetFile)?.get(e.name) ?? [];
         if (candidates.length === 1) add(e.source, candidates[0].id, "references", "extracted");
+      } else if (e.file.endsWith(".php") && byId.get(e.source)?.origin === "ast") {
+        // PHP attribute without a `use` import (same-file or globally unique class).
+        const refKinds: Kind[] = ["class", "interface", "trait", "enum"];
+        const hit = resolveName(e.name, e.file, refKinds, perFileName, globalName);
+        if (hit && hit.id !== e.source) add(e.source, hit.id, "references", hit.confidence);
       } else if (byId.get(e.source)?.origin === "generic") {
         // Breadth tier: a bare-name structural reference (extends / implements /
         // object-creation / module alias) the grammar marked but cannot type. Resolve
