@@ -355,6 +355,7 @@ graft blast [dir]                    # blast radius of a diff: what depends on t
 graft blast --base origin/main       # diff against the merge base with HEAD — what a PR job runs
 graft blast --format markdown        # a PR comment: the areas a change can reach, per-symbol detail collapsed under it
 graft blast --base origin/main --name  # name those areas with one cached LLM call, instead of a full --deep build
+graft blast --export-viz site/       # also write the interactive page for this radius (what a PR comment links to)
 graft blast --depth all --format json  # the full transitive closure, machine-readable
 
 graft check [dir]                    # fail (exit 1) if graft/ has drifted from the code (never auto-refreshes — it's the drift report)

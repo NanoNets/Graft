@@ -23,6 +23,8 @@ export interface BlastCliOptions {
   /** Ask a model to name the clusters that have no concept name (one call, cached).
    * Opt-in: a local `graft blast` must not need a key or a network round-trip. */
   name?: boolean;
+  /** Write the interactive page for this radius here (one self-contained file). */
+  exportViz?: string;
   /** The top-level `--dir` override. */
   globalDir?: string;
 }
@@ -80,6 +82,7 @@ export async function runBlastCommand(dir: string, opts: BlastCliOptions): Promi
 
   const report = blastRadiusIn(graph, contextDir, diff.files, diff.basis, depth);
   if (opts.name) await nameClusters(graph, report, contextDir);
+  if (opts.exportViz) await exportRadius(report, contextDir, root, opts.exportViz);
 
   if (format === "json") {
     console.log(JSON.stringify(report, null, 2));
@@ -129,4 +132,28 @@ async function nameClusters(graph: GraphV1, report: BlastReport, contextDir: str
     if (stats.declined > 0) bits.push(`${stats.declined} left as symbols (mixed)`);
     console.error(`• --name: ${bits.join(", ")}`);
   }
+}
+
+/**
+ * Write the interactive page for this radius: the same viewer `graft viz` serves,
+ * with the blast graph as its Context tab.
+ *
+ * Done here rather than in `viz` because the radius is what a reviewer opened the
+ * link for, and only `blast` has it — `viz --export` on its own can offer the deep
+ * tier's concept map, which a PR build no longer produces.
+ */
+async function exportRadius(report: BlastReport, contextDir: string, root: string, outDir: string): Promise<void> {
+  const { basename, resolve: resolvePath } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { exportViz } = await import("../viz/export.js");
+  const { blastVizGraph } = await import("./viz.js");
+
+  const out = exportViz({
+    contextDir,
+    viewerDir: fileURLToPath(new URL("../viewer/", import.meta.url)), // prebuilt, ships in dist
+    outDir: resolvePath(outDir),
+    repoName: basename(root),
+    contextGraph: blastVizGraph(report),
+  });
+  console.error(`• --export-viz: ${out.file} (${Math.round(out.bytes / 1024)} kB, ${out.contextNodes} areas, ${out.codeNodes} code nodes)`);
 }
