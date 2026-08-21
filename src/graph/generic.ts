@@ -219,8 +219,13 @@ export function extractGeneric(rel: string, source: string, langName: string): E
     const parser = new tsMod.Parser();
     parser.setLanguage(entry.language as never);
     tree = parser.parse((i: number) => source.slice(i, i + PARSE_CHUNK));
-  } catch {
-    return { nodes, rawEdges };
+  } catch (err) {
+    // A grammar that throws (e.g. a WASM "memory access out of bounds" from an
+    // external scanner) is not a per-file syntax problem: swallowing it here left
+    // the file with only its file node and the build reporting success. Rethrow so
+    // build.ts records it in `errors`, the CLI prints it, and the extract cache
+    // remembers the failure instead of caching an empty result as clean.
+    throw new Error(`${langName} grammar threw: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!tree) return { nodes, rawEdges };
 
