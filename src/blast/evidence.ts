@@ -84,6 +84,31 @@ export function seedEvidence(seed: Seed, file: ChangedFile | undefined): Evidenc
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * The first line inside a span that mentions one of `needles`, with its number.
+ *
+ * This is the whole trick behind "why is this symbol here": the edge says A calls
+ * B, and this finds the line where it does it. Shared so `blast`'s panel, its
+ * comment and `graft callers` all quote the same line for the same edge.
+ */
+export function referenceLine(
+  path: string,
+  span: string,
+  needles: RegExp[],
+  read: (path: string) => string[] | null,
+): { n: number; text: string } | null {
+  const range = spanRange(span);
+  const lines = read(path);
+  if (!range || !lines) return null;
+  for (const [i, text] of lines.slice(range.start - 1, range.end).entries()) {
+    if (needles.some((re) => re.test(text))) return { n: range.start + i, text };
+  }
+  return null;
+}
+
+/** A symbol name, matched as a whole word — `export` must not hit `exportViz`. */
+export const wordRe = (name: string): RegExp => new RegExp(`\\b${escapeRe(name)}\\b`);
+
+/**
  * Evidence for one dependent symbol: the line that reaches the diff.
  *
  * Nothing changed here, so there is no hunk to show — the useful line is the one
@@ -99,35 +124,32 @@ export function impactedEvidence(
   reach: ReachTerms,
   read: (path: string) => string[] | null,
 ): Evidence | null {
-  const span = spanRange(sym.span);
-  const lines = read(sym.path);
-  if (!span || !lines) return null;
-
-  const body = lines.slice(span.start - 1, span.end);
-  for (const [i, text] of body.entries()) {
-    const hit = reach.names.find((n) => new RegExp(`\\b${escapeRe(n)}\\b`).test(text));
-    if (hit !== undefined) {
-      return {
-        label: labelFor(sym.name, sym.path, sym.span),
-        note: `${sym.relation} ${hit}`,
-        lines: [{ n: span.start + i, sign: " ", text }],
-      };
-    }
-    // A file-level dependent usually reaches the diff through its import line, and
-    // that line names a MODULE, not one of the changed symbols.
-    const mod = reach.modules.find((re) => re.test(text));
-    if (mod !== undefined) {
-      return {
-        label: labelFor(sym.name, sym.path, sym.span),
-        note: sym.relation,
-        lines: [{ n: span.start + i, sign: " ", text }],
-      };
-    }
+  // A changed symbol's own name is the strongest signal; a file-level dependent
+  // usually reaches the diff through its import line, which names a MODULE
+  // instead, so both are tried in that order.
+  const byName = referenceLine(sym.path, sym.span, reach.names.map(wordRe), read);
+  if (byName) {
+    const hit = reach.names.find((n) => wordRe(n).test(byName.text));
+    return {
+      label: labelFor(sym.name, sym.path, sym.span),
+      note: `${sym.relation} ${hit}`,
+      lines: [{ n: byName.n, sign: " ", text: byName.text }],
+    };
   }
 
-  // No line names the diff — an indirect reach, or a symbol whose whole file is
-  // the span. Quoting its first line means quoting `/**`, which answers nothing;
-  // the path stays in `sources` and the panel simply says less.
+  const byModule = referenceLine(sym.path, sym.span, reach.modules, read);
+  if (byModule) {
+    return {
+      label: labelFor(sym.name, sym.path, sym.span),
+      note: sym.relation,
+      lines: [{ n: byModule.n, sign: " ", text: byModule.text }],
+    };
+  }
+
+  // No line names the diff — an indirect reach (a dynamic import, a re-export),
+  // or a symbol whose whole file is the span. Quoting its first line means
+  // quoting `/**`, so the block is dropped instead: the path stays in `sources`
+  // and the panel simply says less.
   return null;
 }
 
