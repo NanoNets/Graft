@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **Node 24 no longer aborts breadth-tier builds with `Fatal process out of
+  memory: Zone`.** The broader `tree-sitter-wasm` grammar bundle avoids the V8
+  Turboshaft failure triggered by the previous bundle. CI now exercises every
+  breadth grammar under Node 24 to keep that runtime compatibility pinned
+  ([#122]).
 - **`npm install -g @nanonets/graft@latest` could silently do nothing.** The
   generated shims (`.claude/helpers/graft-*.cjs`, and Codex's
   `~/.codex/hooks/graft/`) locate the installed package at runtime from four
