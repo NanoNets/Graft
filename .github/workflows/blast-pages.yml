@@ -53,18 +53,42 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Same cache the comment job reads (see blast-cache.yml). Both jobs name the
+      # same clusters, so sharing the cache is what keeps the page's bubbles worded
+      # exactly like the comment's — two independent LLM calls could word them
+      # differently and make the link look like a different analysis.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: pr/graft
+          key: graft-${{ github.event.pull_request.base.sha }}
+          restore-keys: |
+            graft-
+
       - name: Build the graph and export the radius
         working-directory: pr
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # `--name` reads a key, so the page gets the same concept names the comment
+          # shows instead of hub-symbol fallbacks. The PR's code is never executed
+          # here (see the header) — naming only sends its source text to the model,
+          # and every returned label is sanitised before it reaches the page.
+          GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
+          GRAFT_BASE_URL: ${{ secrets.GRAFT_BASE_URL }}
+          GRAFT_MODEL: ${{ secrets.GRAFT_MODEL }}
         run: |
           set -euo pipefail
           node ../base/dist/cli.js build .
           # `blast --export-viz`, not `viz --export`: the page a reviewer opens from
           # the comment should be THIS PR's radius — the areas it changed and the
           # areas that depend on them — not the whole repository map.
-          node ../base/dist/cli.js blast . --base "origin/$BASE_REF" --export-viz ../site --format text > /dev/null
+          #
+          # `--name` is not optional here even though it costs one call: without it
+          # every bubble falls back to its hub symbol, so the page reads `cli.ts` and
+          # `exportViz` where the comment reads "CLI Entry Point" and "Visualization
+          # Export". The point of the page is that a reviewer recognises the feature.
+          node ../base/dist/cli.js blast . --base "origin/$BASE_REF" \
+            --name --title "PR #$PR_NUMBER" --export-viz ../site --format text > /dev/null
 
       - name: Publish to gh-pages
         env:
@@ -87,9 +111,14 @@ jobs:
           fi
           mkdir -p "pr/$PR_NUMBER"
           cp ../site/index.html "pr/$PR_NUMBER/index.html"
+          # Pages runs Jekyll over a branch source unless this file exists, and
+          # Jekyll would try to render the export as a template rather than serve
+          # it. Written every time, so a rebuilt or force-pushed branch cannot lose
+          # it and start silently mangling every viewer.
+          touch .nojekyll
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "pr/$PR_NUMBER"
+          git add .nojekyll "pr/$PR_NUMBER"
           git commit -m "viz: PR #$PR_NUMBER" || { echo "nothing changed"; exit 0; }
           git push origin gh-pages
 

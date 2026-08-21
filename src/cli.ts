@@ -585,8 +585,9 @@ program
   .option("--format <fmt>", "text (default) | markdown | mermaid | json")
   .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
   .option("--export-viz <dir>", "also write the interactive page for this radius (one self-contained index.html — for CI, GitHub Pages, or an artifact)")
+  .option("--title <text>", "subtitle beside the repo name on the exported page (e.g. \"PR #171\")")
   .option(...NO_REFRESH_FLAG)
-  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; exportViz?: string; refresh?: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; exportViz?: string; title?: string; refresh?: boolean }) => {
     const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const { runBlastCommand } = await import("./blast/blast-cli.js");
@@ -596,6 +597,7 @@ program
       format: opts.format,
       name: opts.name,
       exportViz: opts.exportViz,
+      title: opts.title,
       globalDir: program.opts<GlobalOpts>().dir,
     });
   });

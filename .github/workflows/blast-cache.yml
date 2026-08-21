@@ -10,8 +10,8 @@ name: Blast cache
 on:
   push:
     branches: [main]
-  # graft/ holds LLM-written names keyed by content hash; a manual run is the way to
-  # refill the cache after the 7-day eviction window on a quiet repo.
+  # graft/ holds the LLM-written area names, keyed by content hash; a manual run is
+  # the way to refill the cache after the 7-day eviction window on a quiet repo.
   workflow_dispatch:
 
 permissions:
@@ -24,6 +24,7 @@ concurrency:
 jobs:
   prime:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,7 +41,7 @@ jobs:
       - name: Build the CLI from this commit
         run: npm ci && npm run build
 
-      - name: Build the graph and name every area
+      - name: Build the graph, the concept layer, and name every area
         env:
           GRAFT_API_KEY: ${{ secrets.GRAFT_API_KEY }}
           GRAFT_BASE_URL: ${{ secrets.GRAFT_BASE_URL }}

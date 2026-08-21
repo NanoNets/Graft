@@ -8,7 +8,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { blastVizGraph } from "../src/blast/viz.js";
+import { repoLabel } from "../src/blast/blast-cli.js";
 import type { BlastReport, ChangedArea, ImpactedModule } from "../src/blast/blast.js";
 
 function mod(label: string, from: string[], symbols: number): ImpactedModule {
@@ -90,4 +95,18 @@ test("blast viz: nothing is capped, unlike the comment's diagram", () => {
 
   assert.equal(g.nodes.length, 13, "a pannable canvas has no reason to drop areas");
   assert.equal(g.edges.length, 12);
+});
+
+test("blast viz: the page is titled after the repository, not the checkout directory", () => {
+  // CI checks a pull request out into a directory named for the job — ours is `pr` —
+  // so a published page announced itself as "pr". The remote is the repository.
+  const dir = mkdtempSync(join(tmpdir(), "pr"));
+  assert.equal(repoLabel(dir), basename(dir), "no remote: the directory name is all there is");
+
+  execFileSync("git", ["-C", dir, "init", "-q"]);
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:NanoNets/Graft.git"]);
+  assert.equal(repoLabel(dir), "Graft", "an ssh remote names the repo, not the owner or the path");
+
+  execFileSync("git", ["-C", dir, "remote", "set-url", "origin", "https://github.com/NanoNets/Graft"]);
+  assert.equal(repoLabel(dir), "Graft", "and an https remote with no .git suffix reads the same");
 });
