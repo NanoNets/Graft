@@ -37,6 +37,7 @@ import { formatNonInteractiveHelp, formatPlan, runPicker } from "./cli-picker.js
 import { homedir } from "node:os";
 import { formatUpgradeReport, formatVersionReport, getNpmViewVersion, readCurrentVersion, runUpgrade } from "./cli-meta.js";
 import { patchBuildConfig, type BuildConfig } from "./util/state.js";
+import { normalizePathPrefix } from "./util/paths.js";
 import { formatUpdateNudge, maybeRefreshInBackground, readUpdateCache, refreshUpdateCache, writeStamp } from "./upkeep.js";
 import {
   errorCode,
@@ -296,6 +297,13 @@ program
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
+  .option(
+    "--only-dir <path>",
+    "only index files under this repo-relative path — repeatable; persisted, so a later build " +
+      "(and the hooks/refresh path) walks the same set; everything outside the list is skipped",
+    (val: string, prev: string[]) => [...prev, val],
+    [] as string[],
+  )
   .action(async (
     dir: string,
     opts: {
@@ -306,6 +314,7 @@ program
       lsp?: boolean;
       allowPartial?: boolean;
       includeDir?: string[];
+      onlyDir?: string[];
       followSubmodules?: boolean;
     },
     command: Command,
@@ -338,6 +347,23 @@ program
         }
       }
       buildConfigPatch.includeDirs = opts.includeDir;
+    }
+    // The whitelist is NOT persisted to `.graft/config.json`: it belongs with the
+    // graph (the fingerprint records it at build time), never in the source repo,
+    // so a `--only-dir` build leaves no trace under the repo being indexed.
+    let onlyDirs: string[] | undefined;
+    if (opts.onlyDir && opts.onlyDir.length > 0) {
+      // --only-dir takes a repo-relative path prefix, normalized to the same
+      // posix, no-`./`, no-trailing-slash form `--in` uses, so the prefix match
+      // is exact. A prefix that normalizes to "" (a bare "/" or ".") is rejected:
+      // it would mean "match nothing" or "match everything", neither of which is
+      // a deliberate whitelist.
+      const normalized = opts.onlyDir.map((p) => normalizePathPrefix(p)).filter((p) => p !== "");
+      if (normalized.length === 0) {
+        console.error("✗ --only-dir: expected a non-empty repo-relative path");
+        process.exit(1);
+      }
+      onlyDirs = normalized;
     }
     const followSubmodulesWasExplicit = command.getOptionValueSource("followSubmodules") === "cli";
     if (followSubmodulesWasExplicit && typeof opts.followSubmodules === "boolean") {
@@ -416,6 +442,7 @@ program
       concurrency,
       reuse: opts.reuse,
       lsp: opts.lsp,
+      onlyDirs,
       onProgress: ({ phase, index, total, file }) =>
         process.stderr.write(
           `\r${phase === "enrich" ? "summarizing" : "parsing"} ${index + 1}/${total}: ${file.slice(0, 50).padEnd(50)}`,
