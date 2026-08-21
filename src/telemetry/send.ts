@@ -66,9 +66,21 @@ export function buildBatch(events: unknown[]): Record<string, unknown> {
  */
 const INGEST_PATHS = ['/batch/', '/e/'] as const;
 
-/** A path that isn't there, as opposed to a request that was refused. */
-function pathMissing(status: number): boolean {
-  return status === 404 || status === 405;
+/**
+ * Whether the second path is worth trying.
+ *
+ * 404/405 is the obvious case: the path isn't there. 400 is included because it
+ * is the documented failure of this exact host — assign's
+ * `plans/2026-07-28-fix-agents-signup-event.md` records `events.nanonets.com`
+ * answering `400 invalid_payload` to a body it would not take, while the other
+ * proxy accepted the same events. Without 400 here, a host that rejects
+ * `/batch/` that way would never reach `/e/` and would simply never send.
+ *
+ * 401/403 are deliberately excluded: a rejected key fails identically on both
+ * paths, so a second request only doubles the noise.
+ */
+function worthAnotherPath(status: number): boolean {
+  return status === 400 || status === 404 || status === 405;
 }
 
 export async function sendBatch(events: unknown[]): Promise<SendResult> {
@@ -86,11 +98,11 @@ export async function sendBatch(events: unknown[]): Promise<SendResult> {
         body,
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
-      // 4xx other than a missing path is our bug (a bad key, a malformed body)
-      // and retrying it forever would pin the queue at its cap; only 5xx and
+      // A 4xx we don't retry is our bug (a bad key, a malformed body) and
+      // retrying it forever would pin the queue at its cap; only 5xx and
       // transport errors are worth putting back on the queue.
       last = { ok: res.ok, status: res.status };
-      if (res.ok || !pathMissing(res.status)) return last;
+      if (res.ok || !worthAnotherPath(res.status)) return last;
     } catch (e) {
       // A transport failure is about the host, not the path — a second attempt
       // down the same broken socket buys nothing.

@@ -74,6 +74,13 @@ test('neither path present: the failure is reported, not retried forever', async
   assert.equal(res.status, 404);
 });
 
+test('a 400 on /batch/ falls through to /e/ — the documented failure of events.nanonets.com', async () => {
+  reset();
+  status = 400;
+  await sendBatch(EVENTS);
+  assert.deepEqual(hits.map((h) => h.path), ['/batch/', '/e/'], 'a 400 must not be the end of the road');
+});
+
 test('a rejected key is NOT retried down the other path — 401 is an answer', async () => {
   reset();
   status = 401;
