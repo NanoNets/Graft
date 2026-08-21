@@ -31,9 +31,9 @@ export const NOTICE = [
  * shown before returning, so two concurrent commands print it at most twice
  * rather than every time.
  */
-export function firstRunNotice(home?: string): string | null {
+export function firstRunNotice(home?: string, env?: NodeJS.ProcessEnv): string | null {
   try {
-    if (offReason(home) !== null) return null; // nothing to disclose if nothing can be sent
+    if (offReason(home, env) !== null) return null; // nothing to disclose if nothing can be sent
     if (readState(home)?.noticeShownAt) return null;
     patchState({ noticeShownAt: new Date().toISOString() }, home);
     return NOTICE;
@@ -42,9 +42,10 @@ export function firstRunNotice(home?: string): string | null {
   }
 }
 
-/** `graft telemetry status`. */
-export function formatStatus(home?: string): string {
-  const reason = offReason(home);
+/** `graft telemetry status`. `env` is a test seam, as elsewhere in this module —
+ *  a real run must be gated on the real `DO_NOT_TRACK` and CI variables. */
+export function formatStatus(home?: string, env?: NodeJS.ProcessEnv): string {
+  const reason = offReason(home, env);
   const pending = peek(home).length;
   const lines = [
     reason === null
