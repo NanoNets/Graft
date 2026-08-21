@@ -771,6 +771,7 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
     // `superclass` holds `extends X`; `super_interfaces` holds `implements A, B`
     // (and, on an interface declaration, `extends A, B` — which tree-sitter-java
     // still spells `extends_interfaces`).
+    const typeParams = javaTypeParameterNames(node);
     for (const child of node.namedChildren) {
       const relation: Relation | null =
         child.type === "superclass"
@@ -779,8 +780,16 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
             ? "implements"
             : null;
       if (!relation) continue;
-      for (const t of typeIdentifiersIn(child)) {
-        edges.push({ source: classId, relation, name: t, file: ctx.rel });
+      for (const entry of javaSupertypeEntries(child)) {
+        const name = javaSupertypeName(entry);
+        // Belt-and-braces. A type VARIABLE is never a supertype, and erasing the
+        // arguments already removes every case measured on gson and spring-petclinic
+        // (identical output with this filter removed) — Java cannot extend or implement
+        // a type variable, so a surviving `T` would have to come from a shape neither
+        // repo contains. Kept because a wrong supertype is not a cosmetic edge: it
+        // feeds `classParents` and from there call resolution.
+        if (!name || typeParams.has(name)) continue;
+        edges.push({ source: classId, relation, name, file: ctx.rel });
       }
     }
     return edges;
@@ -827,15 +836,54 @@ function heritageEdges(node: Parser.SyntaxNode, classId: string, ctx: WalkCtx): 
   return edges;
 }
 
-/** Every `type_identifier` under a heritage clause, so `implements A, B<C>` yields
- * each named type rather than the clause's raw text. */
-function typeIdentifiersIn(node: Parser.SyntaxNode): string[] {
-  const out: string[] = [];
+/**
+ * The supertypes a heritage clause names, one node each — NOT every `type_identifier`
+ * beneath it.
+ *
+ * `superclass` wraps a single type; `super_interfaces`/`extends_interfaces` wrap a
+ * `type_list` of them. Descending blindly instead walked into `type_arguments`, so
+ * `implements Comparable<Item>` reported `Item` as a supertype too.
+ */
+function javaSupertypeEntries(clause: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  const list = clause.namedChildren.find((c) => c.type === "type_list");
+  return list ? [...list.namedChildren] : [...clause.namedChildren];
+}
+
+/**
+ * What a supertype entry is CALLED, or null when this pass cannot say.
+ *
+ * Type arguments are erased, because they are not part of the supertype's identity:
+ *
+ *     Base           |  Base<Item>          -> Base
+ *
+ * A qualified name is kept WHOLE rather than reduced to its final segment:
+ *
+ *     Outer.Inner    |  Outer.Inner<K>      -> Outer.Inner
+ *
+ * Heritage keeps an unresolved base as the edge target by design ("usually an
+ * external/imported type — keep the name"), so the full string is both truthful and
+ * unable to false-match a node id, where a bare `Inner` could collide with an
+ * unrelated in-repo type. That differs from construction (#103), which drops a
+ * qualified name instead — construction has no keep-the-name contract to fall back on.
+ */
+function javaSupertypeName(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "generic_type") return javaSupertypeName(node.namedChildren[0]);
+  if (node.type === "scoped_type_identifier") return node.text;
+  return node.type === "type_identifier" ? node.text : null;
+}
+
+/** The names a declaration binds as its own type parameters (`class C<T, U>` → T, U),
+ * so they can never be mistaken for supertypes. */
+function javaTypeParameterNames(decl: Parser.SyntaxNode): ReadonlySet<string> {
+  const params = decl.childForFieldName("type_parameters");
+  if (!params) return new Set();
+  const out = new Set<string>();
   const visit = (n: Parser.SyntaxNode): void => {
-    if (n.type === "type_identifier") out.push(n.text);
+    if (n.type === "type_identifier") out.add(n.text);
     for (const c of n.namedChildren) visit(c);
   };
-  visit(node);
+  visit(params);
   return out;
 }
 
