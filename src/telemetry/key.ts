@@ -34,8 +34,8 @@ const BAKED_KEY = '';
  * `posthog-js` in a browser, fixed there with `disable_compression: true`. We
  * send plain uncompressed JSON from Node, so that failure mode cannot apply.
  *
- * That host is documented as serving the older `/e/` path, which is exactly
- * what the `/batch/` → `/e/` fallback in send.ts exists to handle.
+ * Probed directly, that host answers 401 to a well-formed batch with a bad key,
+ * so it serves `/batch/` and parses the body — see the note in send.ts.
  *
  * The HOST is safe to commit; the KEY is not, and stays empty here. That
  * asymmetry is the point: with no key, a fork built from this source sends

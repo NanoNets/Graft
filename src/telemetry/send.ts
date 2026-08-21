@@ -54,60 +54,38 @@ export function buildBatch(events: unknown[]): Record<string, unknown> {
 }
 
 /**
- * Ingest paths, in the order they are tried.
+ * The ingest path.
  *
- * `/batch/` is PostHog's documented batch endpoint and what US Cloud (and the
- * `e.nanonets.com` proxy in front of it) expects. `/e/` is the older capture
- * path, which also accepts a `{api_key, batch}` body — it is the fallback
- * because the self-hosted `events.nanonets.com` proxy is documented in
- * `assign/frontend/src/lib/posthog.ts` as serving `/e/` and rejecting the newer
- * `/i/v0/e/`. Trying the second only on a 404/405 means a host that speaks
- * `/batch/` pays nothing for the fallback existing.
+ * `/batch/` only, with no fallback. An earlier revision also tried `/e/`,
+ * because assign's `frontend/src/lib/posthog.ts` documents `events.nanonets.com`
+ * as serving the older path and answering `400 invalid_payload` to bodies it
+ * will not take. Probed directly, that host returns **401** to a well-formed
+ * batch with a bad key — so `/batch/` is there and does parse the body, and the
+ * historical 400 was gzip from `posthog-js` in a browser, which we never send.
+ *
+ * The fallback was therefore a second request that could not fire, and a branch
+ * production never exercises is worse than no branch. If a future host needs
+ * `/e/`, point `GRAFT_POSTHOG_HOST` at it and add the path back with evidence.
  */
-const INGEST_PATHS = ['/batch/', '/e/'] as const;
-
-/**
- * Whether the second path is worth trying.
- *
- * 404/405 is the obvious case: the path isn't there. 400 is included because it
- * is the documented failure of this exact host — assign's
- * `plans/2026-07-28-fix-agents-signup-event.md` records `events.nanonets.com`
- * answering `400 invalid_payload` to a body it would not take, while the other
- * proxy accepted the same events. Without 400 here, a host that rejects
- * `/batch/` that way would never reach `/e/` and would simply never send.
- *
- * 401/403 are deliberately excluded: a rejected key fails identically on both
- * paths, so a second request only doubles the noise.
- */
-function worthAnotherPath(status: number): boolean {
-  return status === 400 || status === 404 || status === 405;
-}
+const INGEST_PATH = '/batch/';
 
 export async function sendBatch(events: unknown[]): Promise<SendResult> {
   if (events.length === 0) return { ok: true };
   const key = posthogKey();
   if (!key) return { ok: false, error: 'no key' };
-  // The one place the key is ever attached: the request body itself.
-  const body = JSON.stringify({ api_key: key, ...buildBatch(events) });
-  let last: SendResult = { ok: false, error: 'unsent' };
-  for (const path of INGEST_PATHS) {
-    try {
-      const res = await fetch(`${posthogHost()}${path}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-      });
-      // A 4xx we don't retry is our bug (a bad key, a malformed body) and
-      // retrying it forever would pin the queue at its cap; only 5xx and
-      // transport errors are worth putting back on the queue.
-      last = { ok: res.ok, status: res.status };
-      if (res.ok || !worthAnotherPath(res.status)) return last;
-    } catch (e) {
-      // A transport failure is about the host, not the path — a second attempt
-      // down the same broken socket buys nothing.
-      return { ok: false, error: e instanceof Error ? e.name : 'unknown' };
-    }
+  try {
+    const res = await fetch(`${posthogHost()}${INGEST_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // The one place the key is ever attached: the request body itself.
+      body: JSON.stringify({ api_key: key, ...buildBatch(events) }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+    // A 4xx is our bug (a bad key, a malformed body) and retrying it forever
+    // would pin the queue at its cap; only 5xx and transport errors go back on
+    // the queue — see shouldRequeue in flush.ts.
+    return { ok: res.ok, status: res.status };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.name : 'unknown' };
   }
-  return last;
 }

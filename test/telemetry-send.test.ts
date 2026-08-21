@@ -1,12 +1,10 @@
 /**
  * The send path, against a real local server rather than a mock.
  *
- * The fallback exists because Nanonets runs two PostHog front doors: the US
- * Cloud proxy speaks PostHog's documented `/batch/`, while the self-hosted proxy
- * is documented (in assign's `lib/posthog.ts`) as serving the older `/e/`. Which
- * one graft is pointed at is a publish-time setting, so the client has to cope
- * with either without being reconfigured — and an untested fallback is worse
- * than none, hence this file.
+ * One path, `/batch/`, verified by probe against `events.nanonets.com` (401 to a
+ * well-formed batch with a bad key — the path is there and parses the body).
+ * These cover what the client does with each answer it can get back, since that
+ * is what decides whether a week of events survives or is thrown away.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,48 +44,32 @@ function reset(): void { hits = []; missing = new Set(); status = 200; }
 
 const EVENTS = [{ event: 'query', properties: { command: 'ask' }, distinct_id: 'abc', timestamp: '2026-01-01T00:00:00Z' }];
 
-test('a host that speaks /batch/ is used directly, with no second request', async () => {
+test('the batch goes to /batch/, in one request', async () => {
   reset();
   const res = await sendBatch(EVENTS);
   assert.equal(res.ok, true);
-  assert.deepEqual(hits.map((h) => h.path), ['/batch/'], 'the fallback must cost nothing when unneeded');
+  assert.deepEqual(hits.map((h) => h.path), ['/batch/']);
   assert.equal(hits[0].body.api_key, 'phc_send_test');
   assert.equal(hits[0].body.batch[0].event, 'query');
   assert.equal(hits[0].body.batch[0].properties.$process_person_profile, false);
 });
 
-test('a host with no /batch/ falls back to /e/ with the same body', async () => {
+test('a 404 is reported rather than retried elsewhere', async () => {
   reset();
   missing.add('/batch/');
   const res = await sendBatch(EVENTS);
-  assert.equal(res.ok, true);
-  assert.deepEqual(hits.map((h) => h.path), ['/e/']);
-  assert.equal(hits[0].body.api_key, 'phc_send_test');
-  assert.equal(hits[0].body.batch[0].event, 'query');
-});
-
-test('neither path present: the failure is reported, not retried forever', async () => {
-  reset();
-  missing.add('/batch/'); missing.add('/e/');
-  const res = await sendBatch(EVENTS);
   assert.equal(res.ok, false);
   assert.equal(res.status, 404);
+  assert.deepEqual(hits, [], 'no second path is attempted');
 });
 
-test('a 400 on /batch/ falls through to /e/ — the documented failure of events.nanonets.com', async () => {
-  reset();
-  status = 400;
-  await sendBatch(EVENTS);
-  assert.deepEqual(hits.map((h) => h.path), ['/batch/', '/e/'], 'a 400 must not be the end of the road');
-});
-
-test('a rejected key is NOT retried down the other path — 401 is an answer', async () => {
+test('a rejected key is reported as 401 — the state the probe produced', async () => {
   reset();
   status = 401;
   const res = await sendBatch(EVENTS);
   assert.equal(res.ok, false);
   assert.equal(res.status, 401);
-  assert.deepEqual(hits.map((h) => h.path), ['/batch/'], 'a bad key fails the same way on /e/');
+  assert.deepEqual(hits.map((h) => h.path), ['/batch/']);
 });
 
 test('a 500 is reported so the queue keeps the batch', async () => {
