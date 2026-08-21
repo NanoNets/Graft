@@ -53,14 +53,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Build the graph and export the viewer
+      - name: Build the graph and export the radius
         working-directory: pr
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           node ../base/dist/cli.js build .
-          node ../base/dist/cli.js viz . --export ../site --title "PR #$PR_NUMBER"
+          # `blast --export-viz`, not `viz --export`: the page a reviewer opens from
+          # the comment should be THIS PR's radius — the areas it changed and the
+          # areas that depend on them — not the whole repository map.
+          node ../base/dist/cli.js blast . --base "origin/$BASE_REF" --export-viz ../site --format text > /dev/null
 
       - name: Publish to gh-pages
         env:

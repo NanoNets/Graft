@@ -68,7 +68,13 @@ export const CHIP_HINT: Record<string, string> = {
 };
 
 /** Node-type → CSS custom property, per tab. */
-const CONTEXT_COLORS: Record<string, string> = { system: "--sys", concept: "--con", file: "--fil", api: "--api" };
+// `changed` / `affected` come from `graft blast --export-viz`, where the graph is a
+// PR's blast radius rather than the concept map: amber for what the diff touched,
+// blue for what depends on it. The legend labels itself from these type names.
+const CONTEXT_COLORS: Record<string, string> = {
+  system: "--sys", concept: "--con", file: "--fil", api: "--api",
+  changed: "--fil", affected: "--sys",
+};
 const CODE_COLORS: Record<string, string> = {
   file: "--k-file", class: "--k-class", function: "--k-fn", method: "--k-method",
   interface: "--k-iface", type: "--k-type", enum: "--k-enum",

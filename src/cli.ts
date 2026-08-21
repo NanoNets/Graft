@@ -584,8 +584,9 @@ program
   .option("-d, --depth <n>", 'hops to walk over incoming edges, or "all" for the full closure (default 2)')
   .option("--format <fmt>", "text (default) | markdown | mermaid | json")
   .option("--name", "name the affected areas with one cached LLM call (needs GRAFT_API_KEY); without it, areas are named after their hub symbol")
+  .option("--export-viz <dir>", "also write the interactive page for this radius (one self-contained index.html — for CI, GitHub Pages, or an artifact)")
   .option(...NO_REFRESH_FLAG)
-  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; refresh?: boolean }) => {
+  .action(async (dirArg: string | undefined, opts: { base?: string; depth?: string; format?: string; name?: boolean; exportViz?: string; refresh?: boolean }) => {
     const dir = queryRoot(dirArg);
     await refreshBefore(dir, opts);
     const { runBlastCommand } = await import("./blast/blast-cli.js");
@@ -594,6 +595,7 @@ program
       depth: opts.depth,
       format: opts.format,
       name: opts.name,
+      exportViz: opts.exportViz,
       globalDir: program.opts<GlobalOpts>().dir,
     });
   });

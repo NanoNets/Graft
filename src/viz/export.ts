@@ -16,7 +16,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assembleContextGraph } from "./assemble.js";
+import { assembleContextGraph, type VizGraph } from "./assemble.js";
 
 export interface VizExportOptions {
   contextDir: string;
@@ -27,6 +27,12 @@ export interface VizExportOptions {
   repoName: string;
   /** Shown in the appbar beside the repo name — e.g. "PR #151". */
   subtitle?: string;
+  /**
+   * Context graph to inline instead of assembling one from the deep tier's concept
+   * files. `graft blast --export-viz` passes the blast radius itself, which is how a
+   * PR gets a Context tab worth opening without a `--deep` build.
+   */
+  contextGraph?: VizGraph;
 }
 
 export interface VizExportResult {
@@ -72,7 +78,7 @@ export function exportViz(opts: VizExportOptions): VizExportResult {
   const css = readFileSync(join(opts.viewerDir, "style.css"), "utf8");
   const js = readFileSync(join(opts.viewerDir, "app.js"), "utf8");
 
-  const context = assembleContextGraph(opts.contextDir);
+  const context = opts.contextGraph ?? assembleContextGraph(opts.contextDir);
   const code = codeGraph(opts.contextDir);
 
   // Which tab to open on. The viewer starts on Context, which only a `--deep` build
@@ -81,7 +87,8 @@ export function exportViz(opts: VizExportOptions): VizExportResult {
   // PR path is now structural by design, opening on Context would show a canvas
   // with one dot while the whole wiring graph sat behind an unadvertised tab.
   const codeNodes = (code as { nodes?: unknown[] } | null)?.nodes?.length ?? 0;
-  const defaultTab = context.nodes.length > 1 || codeNodes === 0 ? "context" : "code";
+  // A supplied graph is the caller's whole point, so it is always the landing tab.
+  const defaultTab = opts.contextGraph || context.nodes.length > 1 || codeNodes === 0 ? "context" : "code";
   const contextGraph = {
     ...context,
     meta: { ...context.meta, repoName: opts.repoName, subtitle: opts.subtitle, defaultTab },
