@@ -19,12 +19,28 @@
 
 /** Rewritten at publish time. Do not hand-edit — see the module comment. */
 const BAKED_KEY = '';
-const BAKED_HOST = '';
+
+/**
+ * Nanonets' own PostHog host, not `us.i.posthog.com`.
+ *
+ * Every other Nanonets product ingests through these proxies rather than
+ * PostHog directly (see `assign/frontend/src/lib/posthog.ts`, which dual-inits
+ * against `e.nanonets.com` and `events.nanonets.com` on one project token), so
+ * pointing graft at PostHog Cloud would put its events in a project nobody
+ * looks at. `e.nanonets.com` is the US Cloud proxy — plain PostHog ingest
+ * semantics — rather than the self-hosted `events.nanonets.com`, whose path and
+ * compression quirks that same file documents at length.
+ *
+ * The HOST is safe to commit; the KEY is not, and stays empty here. That
+ * asymmetry is the point: with no key, a fork built from this source sends
+ * nothing no matter where the host points.
+ */
+const BAKED_HOST = 'https://e.nanonets.com';
 
 export function posthogKey(): string {
   return process.env.GRAFT_POSTHOG_KEY || BAKED_KEY;
 }
 
 export function posthogHost(): string {
-  return (process.env.GRAFT_POSTHOG_HOST || BAKED_HOST || 'https://us.i.posthog.com').replace(/\/+$/, '');
+  return (process.env.GRAFT_POSTHOG_HOST || BAKED_HOST).replace(/\/+$/, '');
 }

@@ -53,23 +53,49 @@ export function buildBatch(events: unknown[]): Record<string, unknown> {
   };
 }
 
+/**
+ * Ingest paths, in the order they are tried.
+ *
+ * `/batch/` is PostHog's documented batch endpoint and what US Cloud (and the
+ * `e.nanonets.com` proxy in front of it) expects. `/e/` is the older capture
+ * path, which also accepts a `{api_key, batch}` body — it is the fallback
+ * because the self-hosted `events.nanonets.com` proxy is documented in
+ * `assign/frontend/src/lib/posthog.ts` as serving `/e/` and rejecting the newer
+ * `/i/v0/e/`. Trying the second only on a 404/405 means a host that speaks
+ * `/batch/` pays nothing for the fallback existing.
+ */
+const INGEST_PATHS = ['/batch/', '/e/'] as const;
+
+/** A path that isn't there, as opposed to a request that was refused. */
+function pathMissing(status: number): boolean {
+  return status === 404 || status === 405;
+}
+
 export async function sendBatch(events: unknown[]): Promise<SendResult> {
   if (events.length === 0) return { ok: true };
   const key = posthogKey();
   if (!key) return { ok: false, error: 'no key' };
-  try {
-    const res = await fetch(`${posthogHost()}/batch/`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      // The one place the key is ever attached: the request body itself.
-      body: JSON.stringify({ api_key: key, ...buildBatch(events) }),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
-    // 4xx is our bug (a bad key, a malformed batch) and retrying it forever
-    // would pin the queue at its cap; only 5xx and transport errors are worth
-    // putting back on the queue.
-    return { ok: res.ok, status: res.status };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.name : 'unknown' };
+  // The one place the key is ever attached: the request body itself.
+  const body = JSON.stringify({ api_key: key, ...buildBatch(events) });
+  let last: SendResult = { ok: false, error: 'unsent' };
+  for (const path of INGEST_PATHS) {
+    try {
+      const res = await fetch(`${posthogHost()}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      });
+      // 4xx other than a missing path is our bug (a bad key, a malformed body)
+      // and retrying it forever would pin the queue at its cap; only 5xx and
+      // transport errors are worth putting back on the queue.
+      last = { ok: res.ok, status: res.status };
+      if (res.ok || !pathMissing(res.status)) return last;
+    } catch (e) {
+      // A transport failure is about the host, not the path — a second attempt
+      // down the same broken socket buys nothing.
+      return { ok: false, error: e instanceof Error ? e.name : 'unknown' };
+    }
   }
+  return last;
 }

@@ -111,8 +111,13 @@ Any one of these fully disables telemetry:
    `npm run build` compiles with an empty key and the telemetry module is inert.
    Forks never send events anywhere.
 
-## Self-hosting note
+## Where the events go
 
-PostHog is open source and self-hostable. Official builds point at PostHog Cloud
-(US); the endpoint is a publish-time setting (`GRAFT_POSTHOG_HOST`), so the
-project can move to a self-hosted instance without any code change.
+Official builds send to `https://e.nanonets.com`, Nanonets' own PostHog front
+door, so graft's numbers sit in the same project as the rest of the product
+rather than in a separate one. The client posts to `/batch/` and falls back to
+`/e/` if a host does not serve it, which is what lets the same build work
+against either the cloud proxy or the self-hosted one.
+
+The host is a publish-time setting (`GRAFT_POSTHOG_HOST`) and PostHog itself is
+open source and self-hostable, so the endpoint can move without any code change.
