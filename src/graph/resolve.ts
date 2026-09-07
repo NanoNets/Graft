@@ -269,8 +269,15 @@ export function resolveEdges(
       }
     } else if (e.relation === "calls") {
       if (e.viaMember) {
-        if (!e.recvType) continue;
-        const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents, classTraits, e.argCount);
+        // Namespace-member calls (`MN.foo()`): no binding types `MN`, but when a
+        // definition was minted with owner `MN` — a `MN.foo = …` assignment, or a
+        // class literally named `MN` — the literal receiver IS the owner. Still an
+        // owner-qualified match, never the bare-name fallback #35 ruled out.
+        const recvType =
+          e.recvType ??
+          (e.nsReceiver && ownerMethod.has(`${e.nsReceiver}.${e.name}`) ? e.nsReceiver : undefined);
+        if (!recvType) continue;
+        const hit = resolveTypedMember(recvType, e.name!, e.file, ownerMethod, classParents, classTraits, e.argCount);
         if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
         if (hit) {
           add(e.source, hit.id, "calls", hit.confidence);

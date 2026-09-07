@@ -45,19 +45,27 @@ export function unsupportedExtensions(exts: string[]): string[] {
  * none of which ever see a CLI flag) behaves identically to the build that
  * saved those choices.
  */
-/** Keep only files whose repo-relative path is at or under one of `onlyDirs`.
- * No-op when `onlyDirs` is empty/absent. The whitelist is carried in the graph
- * itself (the fingerprint records it at build time), never in the source repo,
- * so a build and the query-path freshness probe read the identical set. */
+/** Keep only files whose repo-relative path is at or under one of `onlyDirs`,
+ * then drop any at or under one of `excludeDirs` (`--exclude-dir`: the
+ * complement, for a committed generated copy of real source that Git's ignore
+ * rules cannot hide). No-op when both are empty/absent. Both lists are carried
+ * in the graph itself (the fingerprint records them at build time), never in the
+ * source repo, so a build and the query-path freshness probe read the identical set. */
 export function filterByOnlyDirs(
   files: string[],
   root: string,
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): string[] {
-  if (!onlyDirs || onlyDirs.size === 0) return files;
+  const only = onlyDirs && onlyDirs.size > 0 ? [...onlyDirs] : undefined;
+  const exclude = excludeDirs && excludeDirs.size > 0 ? [...excludeDirs] : undefined;
+  if (!only && !exclude) return files;
+  const under = (rel: string, d: string): boolean => rel === d || rel.startsWith(`${d}/`);
   return files.filter((abs) => {
     const rel = relPosix(root, abs);
-    return [...onlyDirs].some((d) => rel === d || rel.startsWith(`${d}/`));
+    if (only && !only.some((d) => under(rel, d))) return false;
+    if (exclude && exclude.some((d) => under(rel, d))) return false;
+    return true;
   });
 }
 
@@ -69,6 +77,7 @@ export function listSourceFiles(
     followNestedRepos: readFollowNestedRepos(resolve(root)),
   }),
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): string[] {
   // A file is a source file if a depth-tier grammar (languageOf), a breadth-tier
   // grammar (genericLangOf) or a container (containerLangOf) claims its extension.
@@ -81,6 +90,7 @@ export function listSourceFiles(
     ),
     root,
     onlyDirs,
+    excludeDirs,
   );
 }
 
@@ -105,9 +115,10 @@ export function listSourceStats(
   outDir: string,
   repoFiles?: string[],
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): SourceStat[] {
   const out: SourceStat[] = [];
-  for (const abs of listSourceFiles(root, outDir, repoFiles, onlyDirs)) {
+  for (const abs of listSourceFiles(root, outDir, repoFiles, onlyDirs, excludeDirs)) {
     let s: { size: number; mtimeMs: number };
     try {
       s = statSync(abs);

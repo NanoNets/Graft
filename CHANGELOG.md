@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **JS/TS namespace-member functions are first-class nodes.** `NS.foo = (…) => …`,
+  `NS.foo = function () {}`, `exports.foo = …` and `Foo.prototype.bar = function`
+  now mint a method node owned by the receiver path (`NS`, `Foo`), and an untyped
+  `NS.foo()` call resolves owner-qualified against it — never by bare name (#35
+  still holds). Pre-ESM codebases and single-namespace apps define most of their
+  API this way; before, those functions had no node at all: `callers` answered
+  "no symbol", `skeleton` omitted them, and the calls in their bodies attributed
+  to the file. Measured on a 200-file app written in that style: 581 → 2,518
+  named symbols, 0 → 5,603 resolved calls into the namespace.
+- **`graft build --exclude-dir <path>`** — the complement of `--only-dir`, for a
+  committed generated copy of real source that `.gitignore` cannot hide (a tracked
+  file is always listed). Repeatable, normalized like `--only-dir`, and recorded in
+  the graph fingerprint so the hooks/refresh path, `graft check` and a later
+  `--deep` skip the same set.
+
 ## 0.17.0
 
 ### Added

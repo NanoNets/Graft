@@ -93,6 +93,9 @@ export interface GraphBuildOptions {
    * set, only files under these prefixes are indexed; the list is recorded in the
    * fingerprint so the freshness probe enumerates the same set. */
   onlyDirs?: string[];
+  /** Repo-relative directory prefixes to leave out (`--exclude-dir`), applied
+   * after `onlyDirs`; recorded in the fingerprint the same way. */
+  excludeDirs?: string[];
   onProgress?: (info: {
     phase: "parse" | "enrich";
     index: number;
@@ -162,7 +165,8 @@ export async function buildGraph(
     followNestedRepos: readFollowNestedRepos(root),
   });
   const onlyDirs = opts.onlyDirs && opts.onlyDirs.length > 0 ? new Set(opts.onlyDirs) : undefined;
-  const repoFiles = filterByOnlyDirs(walked, root, onlyDirs);
+  const excludeDirs = opts.excludeDirs && opts.excludeDirs.length > 0 ? new Set(opts.excludeDirs) : undefined;
+  const repoFiles = filterByOnlyDirs(walked, root, onlyDirs, excludeDirs);
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);
 
@@ -358,7 +362,7 @@ export async function buildGraph(
   // these source bytes." Nothing about the projections below — which is why it is
   // safe to write here, and why `graphOnly` builds (the query path, which stops
   // right after this line) are still recorded as fresh.
-  writeFingerprint(outDir, entries, opts.onlyDirs);
+  writeFingerprint(outDir, entries, opts.onlyDirs, opts.excludeDirs);
 
   // Tier-2 passive surface: project the nodes into per-file markdown cards, and
   // refresh the INDEX roster. Pure projection — no LLM, no network.

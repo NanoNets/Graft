@@ -30,6 +30,8 @@ export interface InitOptions {
   extensions?: string[];
   /** Repo-relative directory prefixes to limit the concept pass (`--only-dir`). */
   onlyDirs?: string[];
+  /** Repo-relative directory prefixes to leave out of the concept pass (`--exclude-dir`). */
+  excludeDirs?: string[];
   /** Progress callback for long builds. */
   onProgress?: (info: BuildProgress) => void;
 }
@@ -49,6 +51,8 @@ export interface GraphRunOptions {
   lsp?: boolean;
   /** Repo-relative directory prefixes to limit the build to (`--only-dir`). */
   onlyDirs?: string[];
+  /** Repo-relative directory prefixes to leave out (`--exclude-dir`). */
+  excludeDirs?: string[];
   onProgress?: GraphBuildOptions["onProgress"];
 }
 
@@ -65,6 +69,7 @@ export class Graft {
       contextDir: this.cfg.contextDir,
       extensions: opts.extensions,
       onlyDirs: opts.onlyDirs,
+      excludeDirs: opts.excludeDirs,
       model: this.modelLabel(),
       summarizer: this.summarizer(),
       synthesizer: this.synthesizer(),
@@ -96,6 +101,7 @@ export class Graft {
       reuse: opts.reuse,
       lsp: opts.lsp,
       onlyDirs: opts.onlyDirs,
+      excludeDirs: opts.excludeDirs,
       onProgress: opts.onProgress,
     });
   }

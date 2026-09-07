@@ -84,9 +84,10 @@ export async function checkGraph(
   // A `--only-dir` build records its whitelist in the fingerprint; read it back
   // so `check` diffs the same limited set instead of flagging every excluded
   // file as "added".
-  const fpOnlyDirs = readFingerprint(outDir)?.onlyDirs;
-  const onlyDirs = fpOnlyDirs && fpOnlyDirs.length > 0 ? new Set(fpOnlyDirs) : undefined;
-  const sourceFiles = listSourceFiles(root, outDir, undefined, onlyDirs);
+  const fp = readFingerprint(outDir);
+  const onlyDirs = fp?.onlyDirs && fp.onlyDirs.length > 0 ? new Set(fp.onlyDirs) : undefined;
+  const excludeDirs = fp?.excludeDirs && fp.excludeDirs.length > 0 ? new Set(fp.excludeDirs) : undefined;
+  const sourceFiles = listSourceFiles(root, outDir, undefined, onlyDirs, excludeDirs);
   await warmGenericGrammars(
     new Set(sourceFiles.map((f) => genericLangOf(f)?.name).filter((n): n is string => !!n)),
   );
