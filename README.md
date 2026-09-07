@@ -340,6 +340,7 @@ graft build --deep                   # add the LLM layer: concept nodes + per-sy
 graft build --extensions .ts .py     # only include these code extensions
 graft build --only-dir src --only-dir lib  # index only these repo-relative paths (repeatable; recorded in the graph, not the repo)
 graft build --exclude-dir cloud/src  # leave out a path — e.g. a committed generated copy of real source (repeatable; the complement of --only-dir)
+#                                      or commit a .graftignore (one repo-relative path per line): same effect in every checkout, no flag to remember
 graft build --no-reuse               # re-parse every file instead of replaying unchanged ones from cache
 graft build --follow-submodules      # include initialized submodules; persist the choice for builds + MCP refresh
 graft build --no-follow-submodules   # exclude submodules again and persist that choice (the default)

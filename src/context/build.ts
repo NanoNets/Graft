@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
-import { filterByOnlyDirs } from "../graph/source-files.js";
+import { filterByOnlyDirs, effectiveExcludeDirs } from "../graph/source-files.js";
 import { readFingerprint } from "../graph/fingerprint.js";
 import { contentHash } from "../util/id.js";
 import { relPosix } from "../util/paths.js";
@@ -132,7 +132,7 @@ export function listContextFiles(
     walked,
     root,
     resolveOnlyDirs(outDir, explicitOnlyDirs),
-    resolveExcludeDirs(outDir, explicitExcludeDirs),
+    effectiveExcludeDirs(root, resolveExcludeDirs(outDir, explicitExcludeDirs)),
   );
 }
 

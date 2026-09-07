@@ -46,7 +46,15 @@ test("--exclude-dir drops the prefix, records it in the fingerprint, and check/p
     runCli(["build", d]);
     const full = graphOf(d)!;
     assert.ok(full.nodes.some((n) => n.path === "cloud/src/app.js"), "copy indexed by default");
-    assert.equal(full.edges.filter((e) => e.relation === "calls" && e.source === "cloud/lib/runner.js#go").length, 0);
+    // A namespace member in two files fans out to both (see resolve.ts); the
+    // exclusion is what brings the answer back to the one real definition.
+    assert.deepEqual(
+      full.edges
+        .filter((e) => e.relation === "calls" && e.source === "cloud/lib/runner.js#go")
+        .map((e) => e.target)
+        .sort(),
+      ["cloud/src/app.js#MN.run", "src/app.js#MN.run"],
+    );
 
     runCli(["build", d, "--exclude-dir", "cloud/src"]);
     const limited = graphOf(d)!;

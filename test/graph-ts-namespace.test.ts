@@ -132,6 +132,32 @@ test("a typed local inside a namespace function still resolves (bindings scope s
   }
 });
 
+test("a namespace member defined in two files links the caller to both definitions", async () => {
+  const { dir, graph } = await graphOf({
+    "base.js": ["const MN = {};", "MN.sync = () => 1;", ""].join("\n"),
+    "overlay.js": ["MN.sync = () => 2;", ""].join("\n"),
+    "use.js": ["function tick() {", "  return MN.sync();", "}", ""].join("\n"),
+  });
+  try {
+    assert.deepEqual(calls(graph, "use.js#tick"), ["base.js#MN.sync", "overlay.js#MN.sync"]);
+    for (const e of graph.edges.filter((e) => e.source === "use.js#tick" && e.relation === "calls")) {
+      assert.equal(e.confidence, "inferred");
+    }
+    // A same-file definition still wins outright (extracted), no fan-out.
+    const g2 = await graphOf({
+      "base.js": ["const MN = {};", "MN.sync = () => 1;", "function local() {", "  return MN.sync();", "}", ""].join("\n"),
+      "overlay.js": ["MN.sync = () => 2;", ""].join("\n"),
+    });
+    try {
+      assert.deepEqual(calls(g2.graph, "base.js#local"), ["base.js#MN.sync"]);
+    } finally {
+      rmSync(g2.dir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("regression guard: an untyped member call with no namespace definition still drops", async () => {
   const { dir, graph } = await graphOf({
     "u.js": ["function foo() {", "  return 1;", "}", "function use(x) {", "  return x.foo();", "}", ""].join("\n"),

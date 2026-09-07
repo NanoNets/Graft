@@ -32,7 +32,7 @@ import {
 } from "./extract-cache.js";
 import { writeFingerprint } from "./fingerprint.js";
 import { seedGraph, type SeedResult } from "./seed.js";
-import { filterByOnlyDirs, listSourceStats } from "./source-files.js";
+import { filterByOnlyDirs, listSourceStats, effectiveExcludeDirs } from "./source-files.js";
 import { resolveEdges, type GoModule } from "./resolve.js";
 import { enrichGraph, type EnrichStats } from "./enrich.js";
 import { readGraph, writeGraph, wiringPath } from "./write.js";
@@ -165,7 +165,9 @@ export async function buildGraph(
     followNestedRepos: readFollowNestedRepos(root),
   });
   const onlyDirs = opts.onlyDirs && opts.onlyDirs.length > 0 ? new Set(opts.onlyDirs) : undefined;
-  const excludeDirs = opts.excludeDirs && opts.excludeDirs.length > 0 ? new Set(opts.excludeDirs) : undefined;
+  // `--exclude-dir` merged with the repo's committed `.graftignore`; only the
+  // flags go into the fingerprint, the file is re-read live on every enumeration.
+  const excludeDirs = effectiveExcludeDirs(root, opts.excludeDirs);
   const repoFiles = filterByOnlyDirs(walked, root, onlyDirs, excludeDirs);
   const files = listSourceStats(root, outDir, repoFiles);
   const discoveredScopes = discoverScopes(root, repoFiles);

@@ -18,6 +18,25 @@
   file is always listed). Repeatable, normalized like `--only-dir`, and recorded in
   the graph fingerprint so the hooks/refresh path, `graft check` and a later
   `--deep` skip the same set.
+- **A committed `.graftignore`.** One repo-relative path per line (`#` comments),
+  same effect as `--exclude-dir` but it travels with the repo: a fresh checkout,
+  a teammate's first `graft build`, and every hook/refresh honour it with no flag
+  and no fingerprint. Read live on each enumeration, so an edit takes effect on
+  the next build or refresh.
+- **A namespace member defined in several files links every caller to every
+  definition.** `MN.foo = …` in a base file and again in an overlay is one symbol
+  assigned twice, not two candidates to guess between, so `MN.foo()` now resolves
+  to both (confidence `inferred`) instead of dropping as ambiguous — which read as
+  "nothing calls this" for exactly the functions a second file overrides. Class
+  methods with several same-named owners still drop, as before.
+
+### Fixed
+
+- **The end-of-turn rebuild forgot `--only-dir`.** The Claude Code `Stop` hook's
+  background sync ran a plain `graft build`, so the first turn after a
+  whitelisted (or now excluded) build silently widened the graph back to the
+  whole tree; only the query-path refresh re-applied the fingerprint's lists. The
+  sync now passes them too, read straight off the fingerprint sidecar.
 
 ## 0.17.0
 

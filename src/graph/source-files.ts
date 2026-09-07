@@ -6,10 +6,10 @@
  * cycle: build → fingerprint → build). `build.ts` re-exports
  * {@link listSourceFiles} so its existing importers are unaffected.
  */
-import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
-import { relPosix } from "../util/paths.js";
+import { normalizePathPrefix, relPosix } from "../util/paths.js";
 import { readFollowNestedRepos, readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import { languageOf, depthExtensions } from "./extract.js";
 import { genericLangOf, genericExtensions } from "./generic.js";
@@ -69,6 +69,47 @@ export function filterByOnlyDirs(
   });
 }
 
+/** `<root>/.graftignore` — one repo-relative path per line (`#` comments and
+ * blank lines ignored), normalized like `--exclude-dir`; files at or under each
+ * path are left out of EVERY enumeration: build, `check`, the freshness probe,
+ * the hooks/refresh path and `--deep`. Unlike the two flags this file is meant
+ * to be committed: it exists for a path Git tracks that graft must never index
+ * (a generated copy of real source, which otherwise doubles every symbol and
+ * drops every owner-qualified call as ambiguous), and it has to hold in a fresh
+ * checkout with no flags and no fingerprint. Read live on each enumeration, so
+ * an edit takes effect on the next build or refresh without a rebuild command. */
+export const GRAFT_IGNORE_FILE = ".graftignore";
+
+export function readGraftIgnore(root: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(join(root, GRAFT_IGNORE_FILE), "utf8");
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const p = normalizePathPrefix(line);
+    if (p && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/** The exclusion set an enumeration under `root` uses: whatever the caller has
+ * (CLI flags, or the fingerprint's record of them) merged with the live
+ * `.graftignore`. `undefined` when both are empty, which every consumer treats
+ * as "no exclusions". */
+export function effectiveExcludeDirs(
+  root: string,
+  ...explicit: (Iterable<string> | undefined)[]
+): Set<string> | undefined {
+  const all = new Set<string>(readGraftIgnore(root));
+  for (const list of explicit) for (const d of list ?? []) all.add(d);
+  return all.size > 0 ? all : undefined;
+}
+
 export function listSourceFiles(
   root: string,
   outDir: string,
@@ -90,7 +131,7 @@ export function listSourceFiles(
     ),
     root,
     onlyDirs,
-    excludeDirs,
+    effectiveExcludeDirs(root, excludeDirs),
   );
 }
 
