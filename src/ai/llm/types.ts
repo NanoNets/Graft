@@ -120,6 +120,13 @@ export interface ChatModel {
  * 429 a shared gateway threw. Env-overridable because a metered corporate gateway
  * may want fewer, and a flaky local proxy more.
  */
+/**
+ * How much hidden reasoning a reasoning-capable model should spend before
+ * answering. Mirrors the OpenAI-compatible `reasoning_effort` parameter;
+ * `"none"` disables reasoning entirely.
+ */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
+
 export function transportRetries(): number {
   const raw = Number(process.env.GRAFT_LLM_RETRIES);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 4;

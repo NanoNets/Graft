@@ -11,7 +11,7 @@
  */
 import OpenAI from "openai";
 import { transportRetries } from "./types.js";
-import type { ChatModel, ChatRequest, ChatResponse, Message, ToolCall, ToolSpec, Usage } from "./types.js";
+import type { ChatModel, ChatRequest, ChatResponse, Message, ReasoningEffort, ToolCall, ToolSpec, Usage } from "./types.js";
 
 const PROVIDER = "openai";
 /** Synthetic tool used to coerce a plain JSON object out of `{ kind: "json" }`. */
@@ -25,6 +25,12 @@ export interface OpenAIChatModelOptions {
   label?: string;
   /** Extra default headers (e.g. OpenRouter's `X-Title`). */
   headers?: Record<string, string>;
+  /**
+   * Hidden-reasoning budget for reasoning-capable models. Set "none" when a
+   * server silently spends the whole max_tokens budget on reasoning and returns
+   * empty content. Omitted by default, leaving the model's own default in force.
+   */
+  reasoningEffort?: ReasoningEffort;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: OpenAI;
 }
@@ -134,10 +140,12 @@ export class OpenAIChatModel implements ChatModel {
   readonly label: string;
   private client: OpenAI;
   private model: string;
+  private reasoningEffort?: ReasoningEffort;
 
   constructor(opts: OpenAIChatModelOptions) {
     this.model = opts.model;
     this.label = opts.label ?? `${PROVIDER}:${opts.model}`;
+    this.reasoningEffort = opts.reasoningEffort;
     this.client =
       opts.client ??
       new OpenAI({
@@ -154,6 +162,12 @@ export class OpenAIChatModel implements ChatModel {
     const params: ChatParams = { model: this.model, messages };
     if (req.temperature !== undefined) params.temperature = req.temperature;
     if (req.maxTokens !== undefined) params.max_tokens = req.maxTokens;
+    // Sent up front, unlike the reasoning fallback in createChatCompletion: that
+    // one reacts to a 400, but a server can instead accept the request and return
+    // 200 with empty content, having spent the whole max_tokens budget on hidden
+    // reasoning (LM Studio does this). Nothing throws, so no catch-based fallback
+    // can reach it - the caller has to be able to say "no reasoning" up front.
+    if (this.reasoningEffort !== undefined) params.reasoning_effort = this.reasoningEffort;
 
     const fmt = req.responseFormat ?? { kind: "text" };
     if (fmt.kind === "json") {

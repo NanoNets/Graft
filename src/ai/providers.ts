@@ -3,6 +3,7 @@ import type { Synthesizer } from "./synthesize.js";
 import type { CruxSummarizer } from "./crux.js";
 import type { ChatModel } from "./llm/types.js";
 import type { ProviderKind } from "./llm/factory.js";
+import type { ReasoningEffort } from "./llm/types.js";
 
 /**
  * User-facing configuration. Anything omitted falls back to environment
@@ -26,6 +27,13 @@ export interface EngineConfig {
   model?: string;
   /** Base URL for OpenAI-compatible endpoints. Env: GRAFT_BASE_URL. */
   baseUrl?: string;
+  /**
+   * Hidden-reasoning budget for reasoning-capable models, on OpenAI-compatible
+   * providers. Env: GRAFT_REASONING_EFFORT. Unset leaves the model's own default.
+   * Set "none" against a server that spends the whole token budget on reasoning
+   * and returns empty content.
+   */
+  reasoningEffort?: ReasoningEffort;
 
   // --- advanced: bring your own components ---
   /** Override the whole transport (skips provider/apiKey/baseUrl). */
@@ -45,6 +53,7 @@ export interface ResolvedConfig {
   apiKey?: string;
   model: string;
   baseUrl?: string;
+  reasoningEffort?: ReasoningEffort;
   headers?: Record<string, string>;
   /** True when the key came from the deprecated OPENROUTER_* fallback. */
   usedLegacyEnv: boolean;
@@ -101,12 +110,16 @@ export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
       ? { "X-Title": "graft" }
       : undefined;
 
+  const reasoningEffort =
+    config.reasoningEffort ?? (env.GRAFT_REASONING_EFFORT as ReasoningEffort | undefined);
+
   return {
     contextDir: config.contextDir ?? env.GRAFT_DIR,
     provider,
     apiKey,
     model,
     baseUrl,
+    reasoningEffort,
     headers,
     usedLegacyEnv,
     chatModel: config.chatModel,

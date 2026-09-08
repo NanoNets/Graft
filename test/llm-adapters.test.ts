@@ -179,6 +179,44 @@ test("openai: does NOT paper over a rejected object tool_choice when multiple to
   assert.equal(callCount, 1); // no ambiguous retry — the caller asked for "a" specifically
 });
 
+test("openai: reasoningEffort is sent when set, and omitted when not", async () => {
+  const { client, box } = fakeOpenAI(openAiResp());
+  const req: ChatRequest = { messages: [{ role: "user", content: "hi" }] };
+
+  await new OpenAIChatModel({ apiKey: "k", model: "m", client }).create(req);
+  assert.equal("reasoning_effort" in box.params!, false, "omitted by default");
+
+  await new OpenAIChatModel({ apiKey: "k", model: "m", client, reasoningEffort: "none" }).create(req);
+  assert.equal(box.params!.reasoning_effort, "none");
+
+  await new OpenAIChatModel({ apiKey: "k", model: "m", client, reasoningEffort: "high" }).create(req);
+  assert.equal(box.params!.reasoning_effort, "high");
+});
+
+test("openai: reasoningEffort rides alongside a forced tool_choice", async () => {
+  // The reasoning fallback in createChatCompletion only fires on a 400. This is
+  // the up-front path, so both must be present on the very first request.
+  const { client, box } = fakeOpenAI(
+    openAiResp({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [{ type: "function", id: "1", function: { name: "emit_json", arguments: '{"a":1}' } }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    }),
+  );
+  await new OpenAIChatModel({ apiKey: "k", model: "m", client, reasoningEffort: "none" }).create({
+    messages: [{ role: "user", content: "hi" }],
+    responseFormat: { kind: "json" },
+  });
+  assert.equal(box.params!.reasoning_effort, "none");
+  assert.deepEqual(box.params!.tool_choice, { type: "function", function: { name: "emit_json" } });
+});
+
 // --- Anthropic adapter ------------------------------------------------------
 
 function fakeAnthropic(resp: unknown) {

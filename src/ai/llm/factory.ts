@@ -14,7 +14,7 @@
  * gateway's routing, failover, and guardrails behind a named provider instead
  * of a bare custom base URL.
  */
-import type { ChatModel } from "./types.js";
+import type { ChatModel, ReasoningEffort } from "./types.js";
 import { OpenAIChatModel } from "./openai.js";
 import { AnthropicChatModel } from "./anthropic.js";
 import { LiteLLMChatModel } from "./litellm.js";
@@ -29,6 +29,8 @@ export interface ChatModelConfig {
   baseUrl?: string;
   /** Extra default headers for OpenAI-compatible endpoints (e.g. OpenRouter `X-Title`). */
   headers?: Record<string, string>;
+  /** Hidden-reasoning budget for OpenAI-compatible endpoints. Ignored by anthropic. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export function createChatModel(cfg: ChatModelConfig): ChatModel {
@@ -41,6 +43,7 @@ export function createChatModel(cfg: ChatModelConfig): ChatModel {
         model: cfg.model,
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
+        reasoningEffort: cfg.reasoningEffort,
       });
     case "litellm":
       return new LiteLLMChatModel({
@@ -48,6 +51,7 @@ export function createChatModel(cfg: ChatModelConfig): ChatModel {
         model: cfg.model,
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
+        reasoningEffort: cfg.reasoningEffort,
       });
     case "orcarouter":
       return new OrcaRouterChatModel({
@@ -55,6 +59,7 @@ export function createChatModel(cfg: ChatModelConfig): ChatModel {
         model: cfg.model,
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
+        reasoningEffort: cfg.reasoningEffort,
       });
     default: {
       const _exhaustive: never = cfg.provider;
