@@ -15,7 +15,7 @@ import { buildGraph } from "../graph/build.js";
 import { contextDirFor } from "../context/node-file.js";
 import { loadGraphCached } from "../graph/load.js";
 import { checkoutRepository } from "./checkout.js";
-import { appJwt, installationFor, type AppCredentials, type Fetch } from "./identity.js";
+import { appJwt, installationFor, repoAccessGap, type AppCredentials, type Fetch, type RepoAccessGap } from "./identity.js";
 import { buildDigest, postDigest, readCommits, readSymbols, readThreads, type RepoDigest } from "./history.js";
 
 /** One request to build a repository into a brain. */
@@ -68,7 +68,15 @@ export interface BrainBuildDeps {
 /** Raised when the App cannot see the repository. Distinct because the caller
  * turns it into a specific answer — "install the app, or run it locally" — and
  * not into a 500. */
-export class RepoNotAccessibleError extends Error {}
+export class RepoNotAccessibleError extends Error {
+  constructor(
+    message: string,
+    /** Which gap it is, so the caller can send the user to the right place. */
+    readonly gap: RepoAccessGap = { reason: "not_installed", ownerId: null, installationId: null },
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Read the repository and hand its history to the brain.
@@ -94,8 +102,14 @@ export async function buildRepoIntoBrain(
     api,
   );
   if (installationId === null) {
+    // Which of the two gaps it is decides what the UI can offer, so it is
+    // resolved here rather than guessed there.
+    const gap = await repoAccessGap(deps.creds, job.owner, deps.fetch, (deps.now ?? Date.now)(), api);
     throw new RepoNotAccessibleError(
-      `graft is not installed on ${tag} — install the GitHub App on it, or build the brain locally with \`graft init --brain\``,
+      gap.reason === "repo_not_selected"
+        ? `graft is installed on ${job.owner} but ${tag} is not in the list of repositories it can see`
+        : `graft is not installed on ${job.owner}`,
+      gap,
     );
   }
 

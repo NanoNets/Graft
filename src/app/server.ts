@@ -182,7 +182,7 @@ export function createApp(
         return send(res, 202, "application/json", JSON.stringify(built));
       } catch (e) {
         if (e instanceof RepoNotAccessibleError) {
-          return send(res, 404, "application/json", JSON.stringify({ error: e.message }));
+          return send(res, 404, "application/json", JSON.stringify({ error: e.message, ...e.gap }));
         }
         const msg = e instanceof Error ? e.message : String(e);
         log(`brain build ${job.owner}/${job.repo} failed: ${msg}`);

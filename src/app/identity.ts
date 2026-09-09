@@ -101,6 +101,74 @@ export async function installationFor(
   return typeof parsed.id === "number" ? parsed.id : null;
 }
 
+/**
+ * Why a repository is unreachable, and where to send the user to fix it.
+ *
+ * Two failures look identical from `/repos/{o}/{r}/installation` — both 404 —
+ * and they need different sentences and different links. Either the App is not
+ * on the account at all, so they install it; or it is installed and this
+ * repository simply is not in its selected list, so they edit that list. Telling
+ * someone to install an App they already installed is the kind of dead end that
+ * ends the session.
+ *
+ * ownerId is the account's numeric id, which preselects the right account on
+ * GitHub's install screen. There is no equivalent for preselecting a repository;
+ * GitHub owns that checkbox list.
+ */
+export interface RepoAccessGap {
+  reason: "not_installed" | "repo_not_selected";
+  ownerId: number | null;
+  installationId: number | null;
+}
+
+/** Which of the two gaps applies to owner/repo. */
+export async function repoAccessGap(
+  creds: AppCredentials,
+  owner: string,
+  fetchImpl: Fetch,
+  nowMs: number = Date.now(),
+  api = "https://api.github.com",
+): Promise<RepoAccessGap> {
+  const headers = {
+    authorization: `Bearer ${appJwt(creds, nowMs)}`,
+    accept: "application/vnd.github+json",
+    "user-agent": "graft-app",
+  };
+  // An account is an org or a user and the endpoints differ, so try the org one
+  // and fall back rather than making the caller know which it is.
+  for (const path of [`/orgs/${owner}/installation`, `/users/${owner}/installation`]) {
+    try {
+      const res = await fetchImpl(`${api}${path}`, { headers });
+      if (!res.ok) continue;
+      const parsed = JSON.parse(await res.text()) as { id?: number; account?: { id?: number } };
+      return {
+        reason: "repo_not_selected",
+        ownerId: parsed.account?.id ?? null,
+        installationId: parsed.id ?? null,
+      };
+    } catch {
+      // Try the other shape; a network failure here only costs a less specific
+      // message, never the whole answer.
+    }
+  }
+  return { reason: "not_installed", ownerId: await ownerIdFor(owner, fetchImpl, api), installationId: null };
+}
+
+/** The account's numeric id, for preselecting it on the install screen. */
+async function ownerIdFor(owner: string, fetchImpl: Fetch, api: string): Promise<number | null> {
+  try {
+    // Unauthenticated: a public account's id is public, and this runs on a path
+    // where the App has no installation token to use anyway.
+    const res = await fetchImpl(`${api}/users/${owner}`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "graft-app" },
+    });
+    if (!res.ok) return null;
+    return (JSON.parse(await res.text()) as { id?: number }).id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export class InstallationTokens {
   private readonly cache = new Map<number, CacheEntry>();
 
