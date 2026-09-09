@@ -135,6 +135,21 @@ function userContent(input: FileCruxInput): string {
 }
 
 /** Normalize the tool's parsed argument object into a {@link NodeCrux} list. */
+/**
+ * The prompt lists targets as `- id=<id> | <kind> | lines L<a>-L<b>` and asks for
+ * the id "verbatim". Some models (Grok, #327) copy the whole displayed line, or
+ * the `id=` prefix, into the returned `id`; enrich then looks the result up by
+ * the bare node id, misses, and reports a complete summary as `empty-parsed`.
+ * Strip the echoed decoration so the summary lands on its node.
+ */
+export function normalizeTargetId(raw: string): string {
+  let id = raw.trim();
+  const sep = id.indexOf(" | ");
+  if (sep !== -1) id = id.slice(0, sep).trimEnd();
+  if (id.startsWith("id=")) id = id.slice(3).trim();
+  return id;
+}
+
 function parseResults(obj: { symbols?: unknown } | undefined): NodeCrux[] {
   if (!obj || !Array.isArray(obj.symbols)) return [];
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : 0);
@@ -142,7 +157,7 @@ function parseResults(obj: { symbols?: unknown } | undefined): NodeCrux[] {
     .map((s) => s as Record<string, unknown>)
     .filter((s) => typeof s.id === "string")
     .map((s) => ({
-      id: s.id as string,
+      id: normalizeTargetId(s.id as string),
       summary: typeof s.summary === "string" ? s.summary.trim() : "",
       crux_start: num(s.crux_start),
       crux_end: num(s.crux_end),

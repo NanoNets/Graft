@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChatSummarizer } from "../src/ai/summarize.js";
 import { ChatSynthesizer } from "../src/ai/synthesize.js";
-import { ChatCruxSummarizer } from "../src/ai/crux.js";
+import { ChatCruxSummarizer, normalizeTargetId } from "../src/ai/crux.js";
 import { recoverToolArgsFromContent } from "../src/ai/llm/recover-tool.js";
 import type { ChatModel, ChatRequest, ChatResponse, ToolCall } from "../src/ai/llm/types.js";
 
@@ -66,6 +66,45 @@ test("ChatCruxSummarizer forces record_symbols and normalizes numbers", async ()
   });
   assert.deepEqual(m.last?.responseFormat, { kind: "tool", name: "record_symbols" });
   assert.deepEqual(out, [{ id: "sym1", summary: "does x", crux_start: 3, crux_end: 5 }]);
+});
+
+test("ChatCruxSummarizer tolerates a model echoing the whole target line as the id (#327)", async () => {
+  // Grok copies `id=<id> | <kind> | lines L1-L5` verbatim into `id`; the summary must still land on the node.
+  const m = new FakeChatModel({
+    toolCalls: [
+      {
+        id: "1",
+        name: "record_symbols",
+        args: {
+          symbols: [
+            { id: "a.ts | file | lines L1-L5", summary: "whole file", crux_start: 1, crux_end: 5 },
+            { id: "id=sym1", summary: "does x", crux_start: 2, crux_end: 3 },
+            { id: "  sym2  ", summary: "does y", crux_start: 4, crux_end: 5 },
+          ],
+        },
+      },
+    ],
+  });
+  const out = await new ChatCruxSummarizer(m).describeFile({
+    path: "a.ts",
+    source: "l1\nl2\nl3\nl4\nl5\n",
+    nodes: [
+      { id: "a.ts", kind: "file", signature: null, startLine: 1, endLine: 5 },
+      { id: "sym1", kind: "function", signature: null, startLine: 2, endLine: 3 },
+      { id: "sym2", kind: "function", signature: null, startLine: 4, endLine: 5 },
+    ],
+  });
+  assert.deepEqual(
+    out.map((r) => r.id),
+    ["a.ts", "sym1", "sym2"],
+  );
+});
+
+test("normalizeTargetId leaves ids that contain ' | ' only inside the kind suffix alone", () => {
+  assert.equal(normalizeTargetId("src/a.ts#f"), "src/a.ts#f");
+  assert.equal(normalizeTargetId("src/a.ts#f | function | lines L3-L9"), "src/a.ts#f");
+  assert.equal(normalizeTargetId("id=src/a.ts#f | function | lines L3-L9"), "src/a.ts#f");
+  assert.equal(normalizeTargetId("id=src/a.ts#f"), "src/a.ts#f");
 });
 
 test("structured ops degrade gracefully when the model returns no tool call", async () => {
