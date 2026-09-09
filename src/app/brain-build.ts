@@ -113,13 +113,15 @@ export async function buildRepoIntoBrain(
   const token = (JSON.parse(await tokenRes.text()) as { token: string }).token;
 
   // Whether the repository is private decides what the UI may show before
-  // signup, so it is read rather than assumed.
-  const isPrivate = await repoIsPrivate(job.owner, job.repo, token, deps.fetch, api);
+  // signup, and the default branch is not discoverable from a shallow
+  // single-ref fetch (there is no origin/HEAD to resolve), so both are read from
+  // the API in one call rather than guessed.
+  const meta = await repoMeta(job.owner, job.repo, token, deps.fetch, api);
 
   const checkout = checkoutRepository({
     owner: job.owner,
     repo: job.repo,
-    ref: job.ref,
+    ref: job.ref || meta.defaultBranch,
     token,
     api: deps.githubHost,
     log,
@@ -148,8 +150,8 @@ export async function buildRepoIntoBrain(
       owner: job.owner,
       name: job.repo,
       headSha: checkout.headSha,
-      defaultBranch: checkout.branch,
-      isPrivate,
+      defaultBranch: job.ref || meta.defaultBranch,
+      isPrivate: meta.isPrivate,
       commits,
       threads,
       symbols,
@@ -180,15 +182,21 @@ export async function buildRepoIntoBrain(
   }
 }
 
-/** Whether the repository is private. Unknown counts as private: saying a repo
- * is public when it is not would leak its name into a pre-signup screen. */
-async function repoIsPrivate(
+/**
+ * The repository's visibility and default branch, in one call.
+ *
+ * Unknown counts as private: saying a repo is public when it is not would leak
+ * its name into a pre-signup screen. An unknown default branch is left empty,
+ * and the checkout then falls back to whatever the remote's HEAD points at,
+ * which is the same thing by another route.
+ */
+async function repoMeta(
   owner: string,
   repo: string,
   token: string,
   fetchImpl: Fetch,
   api: string,
-): Promise<boolean> {
+): Promise<{ isPrivate: boolean; defaultBranch: string }> {
   try {
     const res = await fetchImpl(`${api}/repos/${owner}/${repo}`, {
       headers: {
@@ -197,9 +205,13 @@ async function repoIsPrivate(
         "user-agent": "graft-app",
       },
     });
-    if (!res.ok) return true;
-    return (JSON.parse(await res.text()) as { private?: boolean }).private !== false;
+    if (!res.ok) return { isPrivate: true, defaultBranch: "" };
+    const parsed = JSON.parse(await res.text()) as { private?: boolean; default_branch?: string };
+    return {
+      isPrivate: parsed.private !== false,
+      defaultBranch: (parsed.default_branch ?? "").trim(),
+    };
   } catch {
-    return true;
+    return { isPrivate: true, defaultBranch: "" };
   }
 }

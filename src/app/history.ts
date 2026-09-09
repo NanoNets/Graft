@@ -121,14 +121,16 @@ export function readCommits(root: string, max = MAX_COMMITS): HistoryCommit[] {
 /** How many pull requests to read, and how many comment pages per thread. */
 const MAX_THREADS = 200;
 const MAX_COMMENT_PAGES = 3;
+/** How many threads' comments are fetched at once. Two requests per pull
+ * request, so this is the real cost of a repository read; 8 keeps it quick
+ * without crowding an installation's rate limit. */
+const THREAD_FETCH_CONCURRENCY = 8;
 
 interface PullListItem {
   number?: number;
   title?: string;
   body?: string | null;
   merge_commit_sha?: string | null;
-  comments?: number;
-  review_comments?: number;
 }
 
 interface CommentItem {
@@ -141,9 +143,16 @@ interface CommentItem {
  * Closed pull requests and their discussion, most-discussed first.
  *
  * Closed only: an open PR's discussion has not concluded, so mining a rule out
- * of it would record a proposal as a decision. Most-discussed first because the
- * budget is finite and a twenty-comment thread contains an argument while a
- * zero-comment one contains a rubber stamp.
+ * of it would record a proposal as a decision.
+ *
+ * Comment counts have to be discovered by fetching, not by reading the list.
+ * GitHub's `GET /pulls` list response carries NO `comments` or
+ * `review_comments` field — those exist only on the single-PR GET — so an
+ * earlier version that pre-filtered on them read `undefined` for every pull
+ * request, scored them all zero and skipped the lot. The failure was silent and
+ * total: every repository came back with no discussion at all. So the comments
+ * are fetched for the most recently updated closed pull requests, and the
+ * ranking happens afterwards, on counts that are real.
  *
  * Bot comments are dropped. A CI bot posting a coverage table is the single
  * largest source of text in a busy repo's threads and it establishes nothing.
@@ -177,35 +186,39 @@ export async function readThreads(
     pulls.push(...batch);
   }
 
-  const ranked = pulls
-    .filter((p) => typeof p.number === "number")
-    .sort((a, b) => discussionSize(b) - discussionSize(a))
-    .slice(0, max);
+  const candidates = pulls.filter((p): p is PullListItem & { number: number } => typeof p.number === "number").slice(0, max);
 
+  // Bounded concurrency rather than one at a time: two requests per pull
+  // request over 200 of them is 400 sequential round trips, which is minutes of
+  // a person waiting on a progress screen.
   const threads: HistoryThread[] = [];
-  for (const p of ranked) {
-    // Nothing was said, so there is nothing to mine. Skipped before spending
-    // two API calls on it.
-    if (discussionSize(p) === 0) continue;
-    const number = p.number as number;
-    const comments = [
-      ...(await readComments(`${api}/repos/${owner}/${repo}/issues/${number}/comments`, headers, fetchImpl)),
-      ...(await readComments(`${api}/repos/${owner}/${repo}/pulls/${number}/comments`, headers, fetchImpl)),
-    ];
-    if (comments.length === 0) continue;
-    threads.push({
-      number,
-      title: (p.title ?? "").trim(),
-      body: (p.body ?? "").trim(),
-      mergeSha: (p.merge_commit_sha ?? "").trim(),
-      comments,
-    });
+  for (let i = 0; i < candidates.length; i += THREAD_FETCH_CONCURRENCY) {
+    const slice = candidates.slice(i, i + THREAD_FETCH_CONCURRENCY);
+    const fetched = await Promise.all(
+      slice.map(async (p) => {
+        const [issueComments, reviewComments] = await Promise.all([
+          readComments(`${api}/repos/${owner}/${repo}/issues/${p.number}/comments`, headers, fetchImpl),
+          readComments(`${api}/repos/${owner}/${repo}/pulls/${p.number}/comments`, headers, fetchImpl),
+        ]);
+        const comments = [...issueComments, ...reviewComments];
+        if (comments.length === 0) return null;
+        return {
+          number: p.number,
+          title: (p.title ?? "").trim(),
+          body: (p.body ?? "").trim(),
+          mergeSha: (p.merge_commit_sha ?? "").trim(),
+          comments,
+        } satisfies HistoryThread;
+      }),
+    );
+    for (const t of fetched) if (t) threads.push(t);
   }
-  return threads;
-}
 
-function discussionSize(p: PullListItem): number {
-  return (p.comments ?? 0) + (p.review_comments ?? 0);
+  // Most-discussed first, because the digest renderer spends its budget in this
+  // order and a twenty-comment thread contains an argument while a one-comment
+  // thread contains a rubber stamp.
+  threads.sort((a, b) => b.comments.length - a.comments.length);
+  return threads;
 }
 
 /** One comment endpoint, paginated, bots removed. */
