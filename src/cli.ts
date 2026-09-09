@@ -102,6 +102,10 @@ program
   .option(
     "--reasoning-effort <level>",
     "hidden-reasoning budget: none | minimal | low | medium | high (env GRAFT_REASONING_EFFORT)",
+  )
+  .option(
+    "--extra-body <json>",
+    "JSON object merged into the LLM request body, for gateway-specific params (env GRAFT_LLM_EXTRA_BODY)",
   );
 
 interface GlobalOpts {
@@ -111,6 +115,7 @@ interface GlobalOpts {
   apiKey?: string;
   baseUrl?: string;
   reasoningEffort?: string;
+  extraBody?: string;
 }
 
 /** Config drawn from the global CLI flags (env + defaults fill the rest). */
@@ -123,6 +128,7 @@ function cliConfig(): EngineConfig {
     apiKey: o.apiKey,
     baseUrl: o.baseUrl,
     reasoningEffort: o.reasoningEffort as EngineConfig["reasoningEffort"],
+    extraBody: o.extraBody,
   };
 }
 

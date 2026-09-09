@@ -11,7 +11,7 @@
  */
 import OpenAI from "openai";
 import { transportRetries } from "./types.js";
-import type { ChatModel, ChatRequest, ChatResponse, Message, ReasoningEffort, ToolCall, ToolSpec, Usage } from "./types.js";
+import type { ChatModel, ChatRequest, ChatResponse, ExtraBody, Message, ReasoningEffort, ToolCall, ToolSpec, Usage } from "./types.js";
 
 const PROVIDER = "openai";
 /** Synthetic tool used to coerce a plain JSON object out of `{ kind: "json" }`. */
@@ -31,6 +31,11 @@ export interface OpenAIChatModelOptions {
    * empty content. Omitted by default, leaving the model's own default in force.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Provider-specific parameters merged into the request body, for a parameter
+   * the OpenAI schema has no name for. See {@link ExtraBody}.
+   */
+  extraBody?: ExtraBody;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: OpenAI;
 }
@@ -136,16 +141,48 @@ function isRejectedToolsWithReasoning(err: unknown): boolean {
   );
 }
 
+/**
+ * Body keys this adapter owns, and the only ones a passthrough may not set.
+ * `messages`/`tools`/`tool_choice` carry the structured-output coercion the
+ * caller asked for, `model` is what the graph manifest label is built from, and
+ * `stream` would change the response shape out from under {@link fromResponse}.
+ * Everything else is the caller's business — including `temperature` and
+ * `reasoning_effort`, where overriding graft's value is the point.
+ */
+const RESERVED_BODY_KEYS = new Set(["model", "messages", "tools", "tool_choice", "stream"]);
+
+/**
+ * Drop reserved keys once, at construction, rather than per request: a
+ * passthrough is set once for a whole run, so a silent drop on every call would
+ * either say nothing or say it thousands of times. Warn and continue instead of
+ * throwing — the rest of the body is still what the caller's gateway needs.
+ */
+function sanitizeExtraBody(extra: ExtraBody | undefined, label: string): ExtraBody | undefined {
+  if (!extra) return undefined;
+  const kept: ExtraBody = {};
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(extra)) {
+    if (RESERVED_BODY_KEYS.has(key)) dropped.push(key);
+    else kept[key] = value;
+  }
+  if (dropped.length > 0) {
+    console.warn(`graft: ignoring reserved extra-body key(s) for ${label}: ${dropped.join(", ")}`);
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
 export class OpenAIChatModel implements ChatModel {
   readonly label: string;
   private client: OpenAI;
   private model: string;
   private reasoningEffort?: ReasoningEffort;
+  private extraBody?: ExtraBody;
 
   constructor(opts: OpenAIChatModelOptions) {
     this.model = opts.model;
     this.label = opts.label ?? `${PROVIDER}:${opts.model}`;
     this.reasoningEffort = opts.reasoningEffort;
+    this.extraBody = sanitizeExtraBody(opts.extraBody, this.label);
     this.client =
       opts.client ??
       new OpenAI({
@@ -184,6 +221,12 @@ export class OpenAIChatModel implements ChatModel {
     } else if (tools) {
       params.tools = tools;
     }
+
+    // Merged last, so a caller who names a key graft also sets — reasoning_effort
+    // and temperature are the ones that matter — gets their value on the wire.
+    // That is the whole point of the escape hatch: the stack in front of the
+    // model, not this adapter, is what decides which spelling actually works.
+    if (this.extraBody) Object.assign(params as unknown as Record<string, unknown>, this.extraBody);
 
     const resp = await this.createChatCompletion(params);
     return this.fromResponse(resp, fmt.kind);
