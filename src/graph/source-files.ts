@@ -6,10 +6,10 @@
  * cycle: build → fingerprint → build). `build.ts` re-exports
  * {@link listSourceFiles} so its existing importers are unaffected.
  */
-import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { walkDir } from "../ingest/fs.js";
-import { relPosix } from "../util/paths.js";
+import { normalizePathPrefix, relPosix } from "../util/paths.js";
 import { readFollowNestedRepos, readFollowSubmodules, readIncludeDirs } from "../util/state.js";
 import { languageOf, depthExtensions } from "./extract.js";
 import { genericLangOf, genericExtensions } from "./generic.js";
@@ -45,20 +45,69 @@ export function unsupportedExtensions(exts: string[]): string[] {
  * none of which ever see a CLI flag) behaves identically to the build that
  * saved those choices.
  */
-/** Keep only files whose repo-relative path is at or under one of `onlyDirs`.
- * No-op when `onlyDirs` is empty/absent. The whitelist is carried in the graph
- * itself (the fingerprint records it at build time), never in the source repo,
- * so a build and the query-path freshness probe read the identical set. */
+/** Keep only files whose repo-relative path is at or under one of `onlyDirs`,
+ * then drop any at or under one of `excludeDirs` (`--exclude-dir`: the
+ * complement, for a committed generated copy of real source that Git's ignore
+ * rules cannot hide). No-op when both are empty/absent. Both lists are carried
+ * in the graph itself (the fingerprint records them at build time), never in the
+ * source repo, so a build and the query-path freshness probe read the identical set. */
 export function filterByOnlyDirs(
   files: string[],
   root: string,
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): string[] {
-  if (!onlyDirs || onlyDirs.size === 0) return files;
+  const only = onlyDirs && onlyDirs.size > 0 ? [...onlyDirs] : undefined;
+  const exclude = excludeDirs && excludeDirs.size > 0 ? [...excludeDirs] : undefined;
+  if (!only && !exclude) return files;
+  const under = (rel: string, d: string): boolean => rel === d || rel.startsWith(`${d}/`);
   return files.filter((abs) => {
     const rel = relPosix(root, abs);
-    return [...onlyDirs].some((d) => rel === d || rel.startsWith(`${d}/`));
+    if (only && !only.some((d) => under(rel, d))) return false;
+    if (exclude && exclude.some((d) => under(rel, d))) return false;
+    return true;
   });
+}
+
+/** `<root>/.graftignore` — one repo-relative path per line (`#` comments and
+ * blank lines ignored), normalized like `--exclude-dir`; files at or under each
+ * path are left out of EVERY enumeration: build, `check`, the freshness probe,
+ * the hooks/refresh path and `--deep`. Unlike the two flags this file is meant
+ * to be committed: it exists for a path Git tracks that graft must never index
+ * (a generated copy of real source, which otherwise doubles every symbol and
+ * drops every owner-qualified call as ambiguous), and it has to hold in a fresh
+ * checkout with no flags and no fingerprint. Read live on each enumeration, so
+ * an edit takes effect on the next build or refresh without a rebuild command. */
+export const GRAFT_IGNORE_FILE = ".graftignore";
+
+export function readGraftIgnore(root: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(join(root, GRAFT_IGNORE_FILE), "utf8");
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const p = normalizePathPrefix(line);
+    if (p && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/** The exclusion set an enumeration under `root` uses: whatever the caller has
+ * (CLI flags, or the fingerprint's record of them) merged with the live
+ * `.graftignore`. `undefined` when both are empty, which every consumer treats
+ * as "no exclusions". */
+export function effectiveExcludeDirs(
+  root: string,
+  ...explicit: (Iterable<string> | undefined)[]
+): Set<string> | undefined {
+  const all = new Set<string>(readGraftIgnore(root));
+  for (const list of explicit) for (const d of list ?? []) all.add(d);
+  return all.size > 0 ? all : undefined;
 }
 
 export function listSourceFiles(
@@ -69,6 +118,7 @@ export function listSourceFiles(
     followNestedRepos: readFollowNestedRepos(resolve(root)),
   }),
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): string[] {
   // A file is a source file if a depth-tier grammar (languageOf), a breadth-tier
   // grammar (genericLangOf) or a container (containerLangOf) claims its extension.
@@ -81,6 +131,7 @@ export function listSourceFiles(
     ),
     root,
     onlyDirs,
+    effectiveExcludeDirs(root, excludeDirs),
   );
 }
 
@@ -105,9 +156,10 @@ export function listSourceStats(
   outDir: string,
   repoFiles?: string[],
   onlyDirs?: ReadonlySet<string>,
+  excludeDirs?: ReadonlySet<string>,
 ): SourceStat[] {
   const out: SourceStat[] = [];
-  for (const abs of listSourceFiles(root, outDir, repoFiles, onlyDirs)) {
+  for (const abs of listSourceFiles(root, outDir, repoFiles, onlyDirs, excludeDirs)) {
     let s: { size: number; mtimeMs: number };
     try {
       s = statSync(abs);

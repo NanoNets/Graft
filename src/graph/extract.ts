@@ -17,7 +17,13 @@ import Swift from "tree-sitter-swift";
 import PHP from "tree-sitter-php";
 import { basename } from "node:path";
 import { contentHash } from "../util/id.js";
-import { collectBindings, goReceiverVarOf, resolveRecvType, type FileBindings } from "./bindings.js";
+import {
+  collectBindings,
+  goReceiverVarOf,
+  resolveRecvType,
+  tsMemberAssignmentTarget,
+  type FileBindings,
+} from "./bindings.js";
 import type { Kind, NodeV1, Relation } from "./types.js";
 
 export type Language = "typescript" | "tsx" | "python" | "go" | "java" | "kotlin" | "swift" | "php" | "r";
@@ -98,6 +104,12 @@ export interface RawEdge {
   /** calls with viaMember: the receiver's resolved type name (from bindings /
    * self / this / Go receiver), when a confident local clue exists. */
   recvType?: string;
+  /** calls with viaMember and NO recvType (TS/JS only): the literal receiver
+   * text when it is a plain identifier path (`MN`, `MN.sub`). resolve.ts tries
+   * it as an OWNER — an owner-qualified match against definitions minted by a
+   * `MN.foo = …` assignment (or a class literally named `MN`) — and never as a
+   * bare-name fallback (#35). */
+  nsReceiver?: string;
   /** calls without viaMember: which kinds the bare-name match may resolve to.
    * Every other language's bare-name call is always a free function, so this
    * is absent for them (resolve.ts defaults to `["function"]`). R (Phase 4) is
@@ -372,6 +384,9 @@ interface DefDescriptor {
   owner?: string;
   arity?: number; // declared parameter count — overload disambiguation (Java)
   variadic?: boolean; // last parameter is a vararg, so `arity` is a minimum
+  /** Overrides the per-language export test when the definition shape itself
+   * settles it (`exports.foo = …` / `module.exports.foo = …` is CommonJS export). */
+  exported?: boolean;
 }
 
 /** tree-sitter's string `parse()` fails with "Invalid argument" on any input
@@ -588,7 +603,8 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
       span: `L${desc.hashNode.startPosition.row + 1}-L${desc.hashNode.endPosition.row + 1}`,
       signature: clean(ctx.source.slice(desc.hashNode.startIndex, desc.headerEnd)),
       exported:
-        ctx.lang === "python"
+        desc.exported ??
+        (ctx.lang === "python"
           ? !desc.name.startsWith("_")
           : ctx.lang === "go"
             ? goExported(desc.name)
@@ -602,7 +618,7 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
                     ? swiftExported(node)
                     : ctx.lang === "php"
                       ? phpExported(node)
-                      : tsExported(node),
+                      : tsExported(node)),
       origin: "ast",
       body_hash: contentHash(desc.hashNode.text),
       body_text: searchBody(desc.hashNode.text),
@@ -766,7 +782,15 @@ function walk(node: Parser.SyntaxNode, ctx: WalkCtx, out: NodeV1[], edges: RawEd
         });
       } else {
         const recvType = resolveRecvType(callee.receiver, ctx);
-        edges.push(recvType ? { ...callEdge, recvType } : callEdge);
+        if (recvType) {
+          edges.push({ ...callEdge, recvType });
+        } else if (callee.viaMember && callee.receiver && isNamespaceReceiver(callee.receiver, ctx.lang)) {
+          // Untyped `MN.foo()`: carry the receiver so resolve.ts can try it as an
+          // owner (a `MN.foo = …` definition), see RawEdge.nsReceiver.
+          edges.push({ ...callEdge, nsReceiver: callee.receiver });
+        } else {
+          edges.push(callEdge);
+        }
       }
     }
   } else if (ctx.lang === "php" && node.type === "use_declaration") {
@@ -1173,6 +1197,33 @@ function describe(node: Parser.SyntaxNode, ctx: WalkCtx): DefDescriptor | null {
         headerEnd: vbody ? vbody.startIndex : node.endIndex,
         hashNode: node,
       };
+    }
+  }
+
+  // JS/TS namespace-member functions: `NS.foo = (…) => …`, `NS.foo = function () {}`,
+  // `exports.foo = …`, `Foo.prototype.bar = function () {}`. Pre-ESM code — and
+  // any app built on one namespace object — defines most of its API this way;
+  // without this branch those functions had no node, no callers, and the calls
+  // in their bodies attributed to the file. Minted as METHODS owned by the
+  // receiver path (`MN`), so `NS.foo()` resolves owner-qualified through
+  // resolve.ts's ownerMethod index (see RawEdge.nsReceiver), never by bare name.
+  if ((ctx.lang === "typescript" || ctx.lang === "tsx") && node.type === "assignment_expression") {
+    const value = node.childForFieldName("right");
+    if (value && FUNCTION_VALUE_TYPES.has(value.type)) {
+      const target = tsMemberAssignmentTarget(node.childForFieldName("left"));
+      if (target) {
+        const vbody = value.childForFieldName("body");
+        const commonJs = target.owner === "exports" || target.owner === "module.exports";
+        return {
+          name: target.name,
+          idName: `${target.owner}.${target.name}`,
+          kind: "method",
+          owner: target.owner,
+          headerEnd: vbody ? vbody.startIndex : node.endIndex,
+          hashNode: node,
+          ...(commonJs ? { exported: true } : {}),
+        };
+      }
     }
   }
   return null;
@@ -2449,7 +2500,8 @@ function phpScopeReceiver(scope: Parser.SyntaxNode | null): string | undefined {
   return undefined;
 }
 
-/** ts `member_expression` node's receiver text: `this`, `this.x`, or a bare identifier. */
+/** ts `member_expression` node's receiver text: `this`, `this.x`, a bare
+ * identifier, or a dotted identifier path (`MN.sub` for `MN.sub.fn()`). */
 function tsReceiver(fn: Parser.SyntaxNode): string | undefined {
   const obj = fn.childForFieldName("object");
   if (obj?.type === "this") return "this";
@@ -2458,8 +2510,39 @@ function tsReceiver(fn: Parser.SyntaxNode): string | undefined {
     const innerObj = obj.childForFieldName("object");
     const innerProp = obj.childForFieldName("property");
     if (innerObj?.type === "this" && innerProp) return `this.${innerProp.text}`;
+    // A dotted namespace path (`MN.sub.fn()`): the receiver is `MN.sub`, the
+    // owner a `MN.sub.fn = …` assignment was minted under (RawEdge.nsReceiver).
+    return tsIdentifierPath(obj);
   }
   return undefined;
+}
+
+/** `a.b.c` as text when every segment is a plain identifier / property name —
+ * else undefined (a call, computed key, `this`, or optional chain in the path). */
+function tsIdentifierPath(node: Parser.SyntaxNode): string | undefined {
+  const segs: string[] = [];
+  let cur: Parser.SyntaxNode | null = node;
+  while (cur) {
+    if (cur.type === "identifier") {
+      segs.unshift(cur.text);
+      return segs.join(".");
+    }
+    if (cur.type !== "member_expression") return undefined;
+    const p = cur.childForFieldName("property");
+    if (p?.type !== "property_identifier") return undefined;
+    segs.unshift(p.text);
+    cur = cur.childForFieldName("object");
+  }
+  return undefined;
+}
+
+/** TS/JS only: a receiver that may be a namespace object rather than a value —
+ * a plain identifier path that is not `this`/`super` (those already resolve
+ * through the enclosing class). */
+function isNamespaceReceiver(receiver: string, lang: Language): boolean {
+  if (lang !== "typescript" && lang !== "tsx") return false;
+  if (receiver === "this" || receiver === "super" || receiver.startsWith("this.")) return false;
+  return /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(receiver);
 }
 
 /** R has no import statement at the grammar level — `library(x)`, `require(x)`,

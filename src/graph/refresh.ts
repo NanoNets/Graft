@@ -212,8 +212,13 @@ export async function ensureFreshGraph(root: string, opts: RefreshOptions = {}):
       // A `--only-dir` build recorded its whitelist in the fingerprint; re-apply it
       // here so an auto-rebuild keeps the same limited file set instead of silently
       // widening to the whole tree.
-      const onlyDirs = readFingerprint(outDir)?.onlyDirs;
-      await buildGraph(dir, { contextDir: opts.contextDir, graphOnly: true, onlyDirs });
+      const fp = readFingerprint(outDir);
+      await buildGraph(dir, {
+        contextDir: opts.contextDir,
+        graphOnly: true,
+        onlyDirs: fp?.onlyDirs,
+        excludeDirs: fp?.excludeDirs,
+      });
       invalidateGraphCaches(outDir);
       return { refreshed: true, drift: drift ?? undefined, note: seedNote };
     } finally {

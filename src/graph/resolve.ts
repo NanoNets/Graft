@@ -269,9 +269,30 @@ export function resolveEdges(
       }
     } else if (e.relation === "calls") {
       if (e.viaMember) {
-        if (!e.recvType) continue;
-        const hit = resolveTypedMember(e.recvType, e.name!, e.file, ownerMethod, classParents, classTraits, e.argCount);
-        if (hit === "ambiguous") continue; // drop — never guess past an ambiguous owner
+        // Namespace-member calls (`MN.foo()`): no binding types `MN`, but when a
+        // definition was minted with owner `MN` — a `MN.foo = …` assignment, or a
+        // class literally named `MN` — the literal receiver IS the owner. Still an
+        // owner-qualified match, never the bare-name fallback #35 ruled out.
+        const recvType =
+          e.recvType ??
+          (e.nsReceiver && ownerMethod.has(`${e.nsReceiver}.${e.name}`) ? e.nsReceiver : undefined);
+        if (!recvType) continue;
+        const hit = resolveTypedMember(recvType, e.name!, e.file, ownerMethod, classParents, classTraits, e.argCount);
+        if (hit === "ambiguous") {
+          // A class method with several same-named owners is a real ambiguity —
+          // drop, never guess. A NAMESPACE member is not: `MN.foo = …` in two
+          // files is one symbol assigned twice (a base and an overlay; the last
+          // load wins), so a change to either definition reaches the caller.
+          // Link the call to every definition — the honest blast radius — rather
+          // than to none, which would read as "nothing calls this" for exactly
+          // the functions a second file overrides.
+          if (!e.recvType && e.nsReceiver) {
+            for (const c of ownerMethod.get(`${recvType}.${e.name}`) ?? []) {
+              if (reachable(e.file, c.path)) add(e.source, c.id, "calls", "inferred");
+            }
+          }
+          continue;
+        }
         if (hit) {
           add(e.source, hit.id, "calls", hit.confidence);
           continue;

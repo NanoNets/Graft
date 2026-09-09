@@ -95,7 +95,50 @@ export function defName(node: Parser.SyntaxNode, lang: Language): string | null 
     const value = node.childForFieldName("value");
     if (value && FN_VALUE_TYPES.has(value.type)) return node.childForFieldName("name")?.text ?? null;
   }
+  // `NS.foo = (…) => …` pushes the same segment extract.ts mints for it
+  // (`NS.foo`), so a binding set inside the body is keyed under the same path.
+  if ((lang === "typescript" || lang === "tsx") && node.type === "assignment_expression") {
+    const value = node.childForFieldName("right");
+    if (value && FN_VALUE_TYPES.has(value.type)) {
+      const target = tsMemberAssignmentTarget(node.childForFieldName("left"));
+      if (target) return `${target.owner}.${target.name}`;
+    }
+  }
   return null;
+}
+
+/**
+ * The `{ owner, name }` a JS/TS member assignment names, when its left side is a
+ * plain dotted identifier path: `MN.foo` → owner `MN`, name `foo`; `MN.sub.fn` →
+ * owner `MN.sub`; `Foo.prototype.bar` → owner `Foo` (the ES5 class idiom — the
+ * method belongs to `Foo`, and `this.x()` inside it resolves against `Foo`).
+ * Null for anything else: computed keys (`NS[k] = …`), `this.x = …` (its owner
+ * is the enclosing class, a different mechanism), and any call or optional
+ * chain in the path. Shared by extract.ts's `describe` and this file's `defName`
+ * so the two scope stacks agree on the segment such a definition pushes.
+ */
+export function tsMemberAssignmentTarget(
+  left: Parser.SyntaxNode | null,
+): { owner: string; name: string } | null {
+  if (!left || left.type !== "member_expression") return null;
+  const prop = left.childForFieldName("property");
+  if (prop?.type !== "property_identifier") return null;
+  const path: string[] = [];
+  let cur: Parser.SyntaxNode | null = left.childForFieldName("object");
+  for (;;) {
+    if (!cur) return null;
+    if (cur.type === "identifier") {
+      path.unshift(cur.text);
+      break;
+    }
+    if (cur.type !== "member_expression") return null;
+    const p = cur.childForFieldName("property");
+    if (p?.type !== "property_identifier") return null;
+    path.unshift(p.text);
+    cur = cur.childForFieldName("object");
+  }
+  if (path.length >= 2 && path[path.length - 1] === "prototype") path.pop();
+  return { owner: path.join("."), name: prop.text };
 }
 
 /** The scope segment a Swift definition pushes, mirroring extract.ts's

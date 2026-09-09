@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **JS/TS namespace-member functions are first-class nodes.** `NS.foo = (…) => …`,
+  `NS.foo = function () {}`, `exports.foo = …` and `Foo.prototype.bar = function`
+  now mint a method node owned by the receiver path (`NS`, `Foo`), and an untyped
+  `NS.foo()` call resolves owner-qualified against it — never by bare name (#35
+  still holds). Pre-ESM codebases and single-namespace apps define most of their
+  API this way; before, those functions had no node at all: `callers` answered
+  "no symbol", `skeleton` omitted them, and the calls in their bodies attributed
+  to the file. Measured on a 200-file app written in that style: 581 → 2,518
+  named symbols, 0 → 5,603 resolved calls into the namespace.
+- **`graft build --exclude-dir <path>`** — the complement of `--only-dir`, for a
+  committed generated copy of real source that `.gitignore` cannot hide (a tracked
+  file is always listed). Repeatable, normalized like `--only-dir`, and recorded in
+  the graph fingerprint so the hooks/refresh path, `graft check` and a later
+  `--deep` skip the same set.
+- **A committed `.graftignore`.** One repo-relative path per line (`#` comments),
+  same effect as `--exclude-dir` but it travels with the repo: a fresh checkout,
+  a teammate's first `graft build`, and every hook/refresh honour it with no flag
+  and no fingerprint. Read live on each enumeration, so an edit takes effect on
+  the next build or refresh.
+- **A namespace member defined in several files links every caller to every
+  definition.** `MN.foo = …` in a base file and again in an overlay is one symbol
+  assigned twice, not two candidates to guess between, so `MN.foo()` now resolves
+  to both (confidence `inferred`) instead of dropping as ambiguous — which read as
+  "nothing calls this" for exactly the functions a second file overrides. Class
+  methods with several same-named owners still drop, as before.
+
+### Fixed
+
+- **The end-of-turn rebuild forgot `--only-dir`.** The Claude Code `Stop` hook's
+  background sync ran a plain `graft build`, so the first turn after a
+  whitelisted (or now excluded) build silently widened the graph back to the
+  whole tree; only the query-path refresh re-applied the fingerprint's lists. The
+  sync now passes them too, read straight off the fingerprint sidecar.
+
 ## 0.17.0
 
 ### Added
