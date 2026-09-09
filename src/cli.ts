@@ -17,6 +17,9 @@ import { buildGraphIfMissing, runInit } from "./claude/init.js";
 import { statuslineWanted } from "./claude/settings-merge.js";
 import { runHostsInit } from "./hosts/init.js";
 import { hostIds } from "./hosts/registry.js";
+import { parseBrainArg, connectBrain, pullBrain, brainStatus } from "./brain/connect.js";
+import { rulesForPointers } from "./brain/attach.js";
+import { clearLink, type BrainLink } from "./brain/link.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
@@ -926,10 +929,23 @@ program
   .option("--dry-run", "print every file init would touch, then exit without writing")
   .option("-y, --yes", "skip the picker and wire every detected agent (the pre-0.8 default)")
   .option("--no-global", "skip writes outside this repo (the ~/.codex/ config + hooks)")
-  .action(async (dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean; hooks?: boolean; statusline?: boolean; dryRun?: boolean; yes?: boolean; global?: boolean }) => {
+  .option("--brain <handoff>", "attach a Trail brain: <brainId>:<token> (or a bare brain id with GRAFT_BRAIN_TOKEN set)")
+  .action(async (dir: string, opts: { build?: boolean; agents?: string[]; allAgents?: boolean; listAgents?: boolean; mcp?: boolean; hooks?: boolean; statusline?: boolean; dryRun?: boolean; yes?: boolean; global?: boolean; brain?: string }) => {
     if (opts.listAgents) {
       for (const id of [...hostIds(), "claude"]) console.log(id);
       return;
+    }
+    // Parsed before anything is written: a mistyped handoff should cost the user
+    // an error, not a half-wired repo they have to `graft uninstall` out of.
+    let brainLink: BrainLink | undefined;
+    if (opts.brain) {
+      const parsed = parseBrainArg(opts.brain);
+      if ("error" in parsed) {
+        console.error(`✗ --brain: ${parsed.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      brainLink = parsed;
     }
     const repo = resolve(dir);
     const explicit = Array.isArray(opts.agents) ? opts.agents : undefined;
@@ -1015,6 +1031,18 @@ program
     for (const target of targets) {
       if (target !== repo) console.error(`\n— ${relative(repo, target)}/`);
       wireTarget(target, ids, { home, cliPath, plan, opts, wantClaude });
+    }
+
+    // The brain comes last, after the graph exists: its rules are anchored to
+    // symbols, and `graft brain status` can only report how many of them resolve
+    // once there is a graph to resolve them against.
+    if (brainLink) {
+      const res = await connectBrain(repo, brainLink, { home, ids });
+      if (res.warning) console.error(`⚠ brain: ${res.warning}`);
+      else console.error(`✓ brain: pulled ${res.ruleCount} rule(s) from ${brainLink.brainId}`);
+      for (const w of res.writes) console.error(`✓ brain rules: ${w.path} (${w.action})`);
+      if (res.ruleCount > 0 && res.writes.length === 0)
+        console.error("· no instruction file to write rules into — graft ask still carries them");
     }
 
     // One epilogue for the whole run. A workspace parent holds no nodes of its
@@ -1188,6 +1216,104 @@ program
         ? `\n⚠ ${bad.length} file(s) could not be parsed and were left as-is — see above.`
         : "\n✓ graft fully removed. `graft init` re-wires from scratch.",
     );
+  });
+
+const brain = program
+  .command("brain")
+  .description("The Trail brain attached to this repo: the rules mined from its own history");
+
+brain
+  .command("connect")
+  .description("Attach a brain to this repo and pull its rules")
+  .argument("<handoff>", "<brainId>:<token>, or a bare brain id with GRAFT_BRAIN_TOKEN set")
+  .argument("[dir]", "target repo directory", ".")
+  .action(async (handoff: string, dir: string) => {
+    const parsed = parseBrainArg(handoff);
+    if ("error" in parsed) {
+      console.error(`✗ ${parsed.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    const repo = resolve(dir);
+    const res = await connectBrain(repo, parsed, { home: homedir() });
+    if (res.warning) {
+      console.error(`⚠ ${res.warning}`);
+      return;
+    }
+    console.error(`✓ pulled ${res.ruleCount} rule(s) from ${parsed.brainId}`);
+    for (const w of res.writes) console.error(`✓ ${w.path} (${w.action})`);
+  });
+
+brain
+  .command("pull")
+  .description("Re-pull the attached brain's rules and rewrite the agent instruction files")
+  .argument("[dir]", "target repo directory", ".")
+  .action(async (dir: string) => {
+    const repo = resolve(dir);
+    const res = await pullBrain(repo, { home: homedir() });
+    if (!res) {
+      console.error("· no brain attached — run `graft brain connect <brainId>:<token>`");
+      return;
+    }
+    if (res.warning) {
+      console.error(`⚠ ${res.warning}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(`✓ pulled ${res.ruleCount} rule(s)`);
+    for (const w of res.writes) console.error(`✓ ${w.path} (${w.action})`);
+  });
+
+brain
+  .command("status")
+  .description("Show the attached brain, how many rules are cached, and how many still match the code")
+  .argument("[dir]", "target repo directory", ".")
+  .option("--json", "machine-readable output")
+  .action((dir: string, opts: { json?: boolean }) => {
+    const repo = resolve(dir);
+    const { link, rules, fetchedAt } = brainStatus(repo);
+    // Resolve every cached rule against the CURRENT graph, so the count of stale
+    // rules is the real one rather than what was true at pull time. This is the
+    // number worth surfacing: it says how far the codebase has drifted from what
+    // the team decided.
+    const graph = loadGraphCached(contextDirFor(repo, program.opts<GlobalOpts>().dir));
+    const applied = rulesForPointers(
+      (graph?.nodes ?? []).map((n) => `${n.path}:${n.span}`),
+      rules,
+      graph,
+    );
+    if (opts.json) {
+      console.log(JSON.stringify({ brainId: link?.brainId ?? null, cached: rules.length, fetchedAt, anchored: applied.length, stale: applied.filter((a) => a.stale).length }, null, 2));
+      return;
+    }
+    if (!link) {
+      console.error("· no brain attached — run `graft brain connect <brainId>:<token>`");
+      return;
+    }
+    console.error(`brain ${link.brainId}`);
+    console.error(`  ${rules.length} rule(s) cached${fetchedAt ? `, pulled ${new Date(fetchedAt).toISOString()}` : ""}`);
+    if (!graph) {
+      console.error("  no graph yet — run `graft build` to see which rules still match the code");
+      return;
+    }
+    const stale = applied.filter((a) => a.stale);
+    console.error(`  ${applied.length} anchored to symbols in this repo`);
+    console.error(
+      stale.length
+        ? `  ${stale.length} describe code that has changed since:`
+        : "  none describe code that has changed since",
+    );
+    for (const a of stale.slice(0, 10)) console.error(`    - ${a.rule}\n      ${a.pointer}`);
+  });
+
+brain
+  .command("disconnect")
+  .description("Forget the attached brain (its rules stay in the instruction files until the next init)")
+  .argument("[dir]", "target repo directory", ".")
+  .action((dir: string) => {
+    const repo = resolve(dir);
+    clearLink(resolve(dir));
+    console.error(`✓ detached the brain from ${repo}`);
   });
 
 program.parseAsync().catch((err) => {
