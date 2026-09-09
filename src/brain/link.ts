@@ -126,7 +126,10 @@ export async function fetchRules(
   link: BrainLink,
   fetchImpl: typeof fetch = fetch,
 ): Promise<BrainRule[] | null> {
-  const url = `${baseUrlFor(link)}/api/brains/${encodeURIComponent(link.brainId)}/rules/anchors`;
+  // The PUBLIC, token-authenticated route: graft runs on a laptop with no
+  // session, and the token it holds is scoped to this one brain rather than the
+  // workspace. The protected route is for the app itself.
+  const url = `${baseUrlFor(link)}/api/public/brains/${encodeURIComponent(link.brainId)}/rules/anchors`;
   try {
     const res = await fetchImpl(url, {
       headers: { authorization: `Bearer ${link.token}`, accept: 'application/json' },
