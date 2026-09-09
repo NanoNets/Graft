@@ -160,8 +160,10 @@ export function createApp(
       } catch {
         return send(res, 400, "text/plain", "bad json");
       }
-      if (!job.owner || !job.repo || !job.brainId || !job.brainToken) {
-        return send(res, 400, "application/json", JSON.stringify({ error: "owner, repo, brainId and brainToken are required" }));
+      // brainId/brainToken are optional: without them the digest comes back in
+      // the response for the caller to ingest itself. See BrainBuildJob.
+      if (!job.owner || !job.repo) {
+        return send(res, 400, "application/json", JSON.stringify({ error: "owner and repo are required" }));
       }
       // Synchronous on purpose: the caller is a person waiting on a screen, and
       // the platform's own import job is what makes the SLOW half (extraction and

@@ -16,7 +16,7 @@ import { contextDirFor } from "../context/node-file.js";
 import { loadGraphCached } from "../graph/load.js";
 import { checkoutRepository } from "./checkout.js";
 import { appJwt, installationFor, type AppCredentials, type Fetch } from "./identity.js";
-import { buildDigest, postDigest, readCommits, readSymbols, readThreads } from "./history.js";
+import { buildDigest, postDigest, readCommits, readSymbols, readThreads, type RepoDigest } from "./history.js";
 
 /** One request to build a repository into a brain. */
 export interface BrainBuildJob {
@@ -24,9 +24,20 @@ export interface BrainBuildJob {
   repo: string;
   /** Branch to read; empty means the repository's default. */
   ref?: string;
-  /** The brain the rules land in, and the workspace key to write it with. */
-  brainId: string;
-  brainToken: string;
+  /**
+   * The brain the rules land in, and the workspace key to write it with.
+   *
+   * Both optional, and omitting them changes the mode: with them, the digest is
+   * posted straight to the brain and only a job id comes back; without them the
+   * digest is RETURNED and the caller ingests it itself.
+   *
+   * The second mode is what the platform's own proxy uses. It already holds the
+   * user's session and can write to the brain directly, so handing graft a
+   * workspace key just to have it call back would mean minting a credential per
+   * build for no gain.
+   */
+  brainId?: string;
+  brainToken?: string;
   /** Platform base URL. Defaults to production. */
   brainBaseUrl?: string;
   /** File the rules as approved rather than as drafts. Onboarding sets it:
@@ -35,11 +46,14 @@ export interface BrainBuildJob {
 }
 
 export interface BrainBuildResult {
+  /** Set only when the digest was posted; empty in return-the-digest mode. */
   jobId: string;
   headSha: string;
   commits: number;
   threads: number;
   symbols: number;
+  /** Set only in return-the-digest mode. */
+  digest?: RepoDigest;
 }
 
 export interface BrainBuildDeps {
@@ -142,6 +156,15 @@ export async function buildRepoIntoBrain(
       autoApprove: job.autoApprove ?? false,
     });
 
+    const counts = {
+      headSha: checkout.headSha,
+      commits: commits.length,
+      threads: threads.length,
+      symbols: symbols.length,
+    };
+    if (!job.brainId || !job.brainToken) {
+      return { jobId: "", ...counts, digest };
+    }
     const { jobId } = await postDigest(
       job.brainBaseUrl ?? "https://agents.nanonets.com",
       job.brainId,
@@ -149,13 +172,7 @@ export async function buildRepoIntoBrain(
       digest,
       deps.fetch,
     );
-    return {
-      jobId,
-      headSha: checkout.headSha,
-      commits: commits.length,
-      threads: threads.length,
-      symbols: symbols.length,
-    };
+    return { jobId, ...counts };
   } finally {
     // Always: the clone was made with an installation token and is not something
     // to leave in /tmp.
