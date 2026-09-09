@@ -66,6 +66,41 @@ interface CacheEntry {
  * Tokens last an hour and a busy repository can fire a dozen webhooks a minute;
  * without the cache every one of them spends a round trip and a signature.
  */
+/**
+ * The installation id for one repository.
+ *
+ * Every existing caller gets the id from a webhook payload, because every
+ * existing caller is reacting to one. A request that names a repository instead
+ * has to look it up, and this is the only endpoint that answers it: it is
+ * App-JWT authed, so it works before any installation token exists.
+ *
+ * Returns null when the App is not installed on the repository — which is the
+ * expected answer for "the user pasted a repo we cannot see", not an error.
+ */
+export async function installationFor(
+  creds: AppCredentials,
+  owner: string,
+  repo: string,
+  fetchImpl: Fetch,
+  nowMs: number = Date.now(),
+  api = "https://api.github.com",
+): Promise<number | null> {
+  const res = await fetchImpl(`${api}/repos/${owner}/${repo}/installation`, {
+    headers: {
+      authorization: `Bearer ${appJwt(creds, nowMs)}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "graft-app",
+    },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`installation lookup for ${owner}/${repo} failed: ${res.status} ${body.slice(0, 200)}`);
+  }
+  const parsed = JSON.parse(await res.text()) as { id?: number };
+  return typeof parsed.id === "number" ? parsed.id : null;
+}
+
 export class InstallationTokens {
   private readonly cache = new Map<number, CacheEntry>();
 
