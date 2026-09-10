@@ -20,6 +20,8 @@ import { hostIds } from "./hosts/registry.js";
 import { parseBrainArg, connectBrain, pullBrain, brainStatus } from "./brain/connect.js";
 import { rulesForPointers } from "./brain/attach.js";
 import { clearLink, type BrainLink } from "./brain/link.js";
+import { buildLocalDigest, pushDigest } from "./brain/push.js";
+import { readLink } from "./brain/link.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
 import { ensureFreshChildren, ensureFreshGraph, refreshNote } from "./graph/refresh.js";
@@ -1262,6 +1264,48 @@ brain
     }
     console.error(`✓ pulled ${res.ruleCount} rule(s)`);
     for (const w of res.writes) console.error(`✓ ${w.path} (${w.action})`);
+  });
+
+brain
+  .command("push")
+  .description("Read THIS repo on your machine and build its brain — no GitHub App, works on private repos")
+  .argument("[dir]", "target repo directory", ".")
+  .option("--no-approve", "leave the mined rules as drafts for review")
+  .action(async (dir: string, opts: { approve?: boolean }) => {
+    const repo = resolve(dir);
+    const link = readLink(repo);
+    if (!link) {
+      console.error("· no brain attached — run `graft brain connect <brainId>:<token>` first");
+      process.exitCode = 1;
+      return;
+    }
+    // The graph is what symbol anchors are resolved against, so a rule mined
+    // here can later go stale on its own. Without one the ingest still works;
+    // its rules simply govern the repo rather than a symbol in it.
+    const graph = loadGraphCached(contextDirFor(repo, program.opts<GlobalOpts>().dir));
+    if (!graph) console.error("· no graph yet — run `graft build` first so rules can be anchored to symbols");
+
+    console.error("· reading this repository (messages and docs only — no code leaves your machine)…");
+    const built = await buildLocalDigest(repo, graph, { autoApprove: opts.approve !== false });
+    if ("error" in built) {
+      console.error(`✗ ${built.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    const d = built.digest;
+    if (built.warning) console.error(`⚠ ${built.warning}`);
+    console.error(
+      `· ${d.commits.length} commits, ${d.threads.length} discussions, ${d.symbols.length} symbols, ${d.sources.length} stated sources`,
+    );
+
+    const sent = await pushDigest(link, d);
+    if ("error" in sent) {
+      console.error(`✗ ${sent.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(`✓ sent ${d.owner}/${d.name} to brain ${link.brainId}`);
+    console.error("· the brain is mining it now; `graft brain pull` once it finishes to get the rules back");
   });
 
 brain

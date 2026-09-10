@@ -17,6 +17,18 @@ import { loadGraphCached } from "../graph/load.js";
 import { checkoutRepository } from "./checkout.js";
 import { appJwt, installationFor, repoAccessGap, type AppCredentials, type Fetch, type RepoAccessGap } from "./identity.js";
 import { buildDigest, postDigest, readCommits, readSymbols, readThreads, type RepoDigest } from "./history.js";
+import {
+  budgetSources,
+  readAgentInstructions,
+  readBranchProtection,
+  readCodeowners,
+  readCodifiedRules,
+  readDecisionDocs,
+  readDeclinedIssues,
+  readReverts,
+  readTestNames,
+  type HistorySource,
+} from "./sources.js";
 
 /** One request to build a repository into a brain. */
 export interface BrainBuildJob {
@@ -52,6 +64,7 @@ export interface BrainBuildResult {
   commits: number;
   threads: number;
   symbols: number;
+  sources: number;
   /** Set only in return-the-digest mode. */
   digest?: RepoDigest;
 }
@@ -158,7 +171,23 @@ export async function buildRepoIntoBrain(
       log(`${tag}: pull-request discussion unavailable (${e instanceof Error ? e.message : e}); mining commits only`);
     }
 
-    log(`${tag}: read ${commits.length} commits, ${threads.length} threads, ${symbols.length} symbols`);
+    // Everything the repo already states as a rule. All best-effort: the file
+    // readers cannot fail the build, and the two API readers swallow their own
+    // errors, so a repo with none of this still gets a brain from its history.
+    const sources = budgetSources([
+      ...readAgentInstructions(checkout.dir),
+      ...readDecisionDocs(checkout.dir),
+      ...readCodeowners(checkout.dir),
+      ...readCodifiedRules(checkout.dir),
+      ...readReverts(checkout.dir),
+      ...readTestNames(symbols.map((s) => ({ name: s.name, path: s.path }))),
+      ...(await readBranchProtection(job.owner, job.repo, meta.defaultBranch, token, deps.fetch, api)),
+      ...(await readDeclinedIssues(job.owner, job.repo, token, deps.fetch, api)),
+    ]);
+
+    log(
+      `${tag}: read ${commits.length} commits, ${threads.length} threads, ${symbols.length} symbols, ${sources.length} stated sources`,
+    );
 
     const digest = buildDigest({
       owner: job.owner,
@@ -169,6 +198,7 @@ export async function buildRepoIntoBrain(
       commits,
       threads,
       symbols,
+      sources,
       autoApprove: job.autoApprove ?? false,
     });
 
@@ -177,6 +207,7 @@ export async function buildRepoIntoBrain(
       commits: commits.length,
       threads: threads.length,
       symbols: symbols.length,
+      sources: sources.length,
     };
     if (!job.brainId || !job.brainToken) {
       return { jobId: "", ...counts, digest };

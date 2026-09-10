@@ -13,6 +13,7 @@
 import { spawnSync } from "node:child_process";
 import type { GraphV1 } from "../graph/types.js";
 import type { Fetch } from "./identity.js";
+import type { HistorySource } from "./sources.js";
 
 /** One commit's rule-bearing content. */
 export interface HistoryCommit {
@@ -58,6 +59,10 @@ export interface RepoDigest {
     comments: Array<{ body: string; path?: string }>;
   }>;
   symbols: HistorySymbol[];
+  /** Everything in the repo that is already a rule, or nearly one: instruction
+   * files, decision records, config, ownership, reverts, test names. One array
+   * rather than a field per kind, so adding a source is adding an entry. */
+  sources: HistorySource[];
   auto_approve: boolean;
 }
 
@@ -292,6 +297,7 @@ export function buildDigest(input: {
   commits: HistoryCommit[];
   threads: HistoryThread[];
   symbols: HistorySymbol[];
+  sources: HistorySource[];
   autoApprove: boolean;
 }): RepoDigest {
   const byPath = new Map<string, string[]>();
@@ -325,6 +331,7 @@ export function buildDigest(input: {
       comments: t.comments,
     })),
     symbols: input.symbols,
+    sources: input.sources,
     auto_approve: input.autoApprove,
   };
 }
