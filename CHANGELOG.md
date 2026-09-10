@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.17.0
+
+### Added
+
+- **Claude Code sessions now report the dollar value of what graft saved** (#282),
+  not just the token count — the running total on the statusline is priced, so
+  the payoff of routing a lookup through the graph instead of reading files whole
+  is visible in the terminal.
+- **`graft init` also writes the Claude Code wiring into `~`** (#276), so
+  worktrees and fresh shells created off the same home keep graft available
+  instead of losing the hooks and statusline the moment you leave the repo root.
+
+### Fixed
+
+- The **PR-review GitHub App** keeps its review pages on disk (#278) so posted
+  links survive a restart, reviews **merged and closed PRs** via the head ref
+  diffed against the merge base (#279, #280) so a merged PR keeps a working graph
+  link, and **runs each review in its own process** (#281) so one slow review no
+  longer blocks the server.
+- **Green main** (#277): the telemetry test clears every CI environment variable
+  before asserting, and the CodeQL action pins are realigned.
+
 ## 0.16.0
 
 ### Added
