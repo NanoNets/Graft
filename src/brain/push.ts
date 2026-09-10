@@ -109,6 +109,45 @@ async function isPrivate(owner: string, name: string, token: string | null, fetc
   }
 }
 
+/** What the brain is waiting for, when it is waiting for something. */
+export interface ExpectedRepo {
+  slug: string;
+  status: string;
+  brainName: string;
+}
+
+/**
+ * The repository this brain expects, or null when it expects none.
+ *
+ * The website records it when the user chooses the local route, so this is how
+ * the CLI knows whether the directory it is standing in is the one they asked
+ * for. Mining the wrong repo into a brain is silent and very hard to notice
+ * afterwards — the rules simply describe someone else's codebase — so the round
+ * trip is worth it.
+ *
+ * Null on any failure, which keeps an older brain (or an unreachable one)
+ * working exactly as it did before this check existed.
+ */
+export async function fetchExpectedRepo(link: BrainLink, fetchImpl: typeof fetch = fetch): Promise<ExpectedRepo | null> {
+  try {
+    const res = await fetchImpl(`${baseUrlFor(link)}/api/public/brains/${encodeURIComponent(link.brainId)}/repo`, {
+      headers: { authorization: `Bearer ${link.token}`, accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { repo?: { slug?: string; status?: string } | null; brain_name?: string };
+    if (!body.repo?.slug) return null;
+    return { slug: body.repo.slug, status: String(body.repo.status ?? ""), brainName: String(body.brain_name ?? "") };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether two repo slugs name the same repository. GitHub is case-insensitive. */
+export function sameRepo(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 /** Build the digest for the checkout at `root`. Reads nothing but text. */
 export async function buildLocalDigest(
   root: string,

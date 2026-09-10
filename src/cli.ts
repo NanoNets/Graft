@@ -20,7 +20,7 @@ import { hostIds } from "./hosts/registry.js";
 import { parseBrainArg, connectBrain, pullBrain, brainStatus } from "./brain/connect.js";
 import { rulesForPointers } from "./brain/attach.js";
 import { clearLink, type BrainLink } from "./brain/link.js";
-import { buildLocalDigest, pushDigest } from "./brain/push.js";
+import { buildLocalDigest, fetchExpectedRepo, pushDigest, repoSlugFromGit, sameRepo } from "./brain/push.js";
 import { readLink } from "./brain/link.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
@@ -1257,6 +1257,14 @@ brain
       console.error(`⚠ ${res.warning}`);
       return;
     }
+    if (res.ruleCount === 0) {
+      // The normal case on the local route: the brain exists but nothing has
+      // read the repo yet. Saying "0 rules" without saying why reads as a
+      // failure, and the next step is the whole point.
+      console.error("✓ attached this repo to the brain — it has no rules yet");
+      console.error("· run `graft brain push` to read this repository into it");
+      return;
+    }
     console.error(`✓ pulled ${res.ruleCount} rule(s) from ${parsed.brainId}`);
     for (const w of res.writes) console.error(`✓ ${w.path} (${w.action})`);
   });
@@ -1294,13 +1302,28 @@ brain
       process.exitCode = 1;
       return;
     }
+    // What the website said this brain is for. Checked BEFORE any reading, so
+    // standing in the wrong checkout costs a message rather than a brain full
+    // of another repository's rules — a mistake that is silent afterwards,
+    // because the rules look perfectly plausible, just not about your code.
+    const here = repoSlugFromGit(repo);
+    const expected = await fetchExpectedRepo(link);
+    if (expected && here && !sameRepo(expected.slug, `${here.owner}/${here.name}`)) {
+      console.error(`✗ this brain is for ${expected.slug}, but you are in ${here.owner}/${here.name}`);
+      console.error(`  cd into ${expected.slug} and run this again, or attach a different brain here.`);
+      process.exitCode = 1;
+      return;
+    }
+
     // The graph is what symbol anchors are resolved against, so a rule mined
     // here can later go stale on its own. Without one the ingest still works;
     // its rules simply govern the repo rather than a symbol in it.
     const graph = loadGraphCached(contextDirFor(repo, program.opts<GlobalOpts>().dir));
     if (!graph) console.error("· no graph yet — run `graft build` first so rules can be anchored to symbols");
 
-    console.error("· reading this repository (messages and docs only — no code leaves your machine)…");
+    const label = expected?.slug ?? (here ? `${here.owner}/${here.name}` : "this repository");
+    console.error(`· reading ${label} — commit messages, pull-request discussion and the docs in the tree.`);
+    console.error("  No file contents leave this machine.");
     const built = await buildLocalDigest(repo, graph, { autoApprove: opts.approve !== false });
     if ("error" in built) {
       console.error(`✗ ${built.error}`);
@@ -1319,8 +1342,10 @@ brain
       process.exitCode = 1;
       return;
     }
-    console.error(`✓ sent ${d.owner}/${d.name} to brain ${link.brainId}`);
-    console.error("· the brain is mining it now; `graft brain pull` once it finishes to get the rules back");
+    const brainLabel = expected?.brainName ? `“${expected.brainName}”` : link.brainId;
+    console.error(`✓ sent ${d.owner}/${d.name} to ${brainLabel}`);
+    console.error("· it is being mined into rules now — a few minutes. Watch it finish in your browser.");
+    console.error("  The rules reach this repo on their own; nothing else to run.");
   });
 
 brain
