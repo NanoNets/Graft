@@ -52,6 +52,7 @@ const { server, queue } = createApp({
   // it stays off until someone deliberately turns it on.
   brainBuildSecret: process.env.GRAFT_BRAIN_BUILD_SECRET,
   brainBaseUrl: process.env.GRAFT_BRAIN_URL,
+  publicToken: process.env.GRAFT_PUBLIC_GITHUB_TOKEN || process.env.GITHUB_TOKEN,
 });
 
 /**

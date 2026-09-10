@@ -12,7 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import type { GraphV1 } from "../graph/types.js";
-import type { Fetch } from "./identity.js";
+import { ghHeaders, type Fetch } from "./identity.js";
 import type { HistorySource } from "./sources.js";
 
 /** One commit's rule-bearing content. */
@@ -170,11 +170,7 @@ export async function readThreads(
   api = "https://api.github.com",
   max = MAX_THREADS,
 ): Promise<HistoryThread[]> {
-  const headers = {
-    authorization: `Bearer ${token}`,
-    accept: "application/vnd.github+json",
-    "user-agent": "graft-app",
-  };
+  const headers = ghHeaders(token);
 
   const pulls: PullListItem[] = [];
   // 100 per page, up to the cap. Sorted by GitHub as most-recently-updated,

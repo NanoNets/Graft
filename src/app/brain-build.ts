@@ -15,7 +15,7 @@ import { buildGraph } from "../graph/build.js";
 import { contextDirFor } from "../context/node-file.js";
 import { loadGraphCached } from "../graph/load.js";
 import { checkoutRepository } from "./checkout.js";
-import { appJwt, installationFor, repoAccessGap, type AppCredentials, type Fetch, type RepoAccessGap } from "./identity.js";
+import { appJwt, ghHeaders, installationFor, repoAccessGap, type AppCredentials, type Fetch, type RepoAccessGap } from "./identity.js";
 import { buildDigest, postDigest, readCommits, readSymbols, readThreads, type RepoDigest } from "./history.js";
 import {
   budgetSources,
@@ -76,6 +76,16 @@ export interface BrainBuildDeps {
   githubHost?: string;
   log?: (msg: string) => void;
   now?: () => number;
+  /**
+   * Token used for a public repository the App is not installed on.
+   *
+   * Optional, and the read works without it: a public repo clones anonymously
+   * and answers the API anonymously too. What it buys is the rate limit —
+   * anonymous is 60 requests an hour for the whole box, which the pull-request
+   * walk exhausts on the first repository of the day, after which every later
+   * build quietly degrades to commits only.
+   */
+  publicToken?: string;
 }
 
 /** Raised when the App cannot see the repository. Distinct because the caller
@@ -94,9 +104,13 @@ export class RepoNotAccessibleError extends Error {
 /**
  * Read the repository and hand its history to the brain.
  *
- * Public repositories still go through the installation lookup, because the App
- * needs a token to clone at any useful rate limit, and a repository the App is
- * not installed on is exactly the case the UI has to distinguish.
+ * An installation is the preferred way in: it is the only way into a private
+ * repository, and it carries a rate limit worth having. It is not required for
+ * a public one, though — those clone anonymously and answer the API
+ * anonymously — so a failed installation lookup is a reason to try the open
+ * door, not a reason to stop. Only a repository that is private or unreadable
+ * both ways is one we genuinely cannot see, and that is the case the UI turns
+ * into "read it on your machine".
  */
 export async function buildRepoIntoBrain(
   job: BrainBuildJob,
@@ -114,36 +128,34 @@ export async function buildRepoIntoBrain(
     (deps.now ?? Date.now)(),
     api,
   );
-  if (installationId === null) {
-    // Which of the two gaps it is decides what the UI can offer, so it is
-    // resolved here rather than guessed there.
-    const gap = await repoAccessGap(deps.creds, job.owner, deps.fetch, (deps.now ?? Date.now)(), api);
-    throw new RepoNotAccessibleError(
-      gap.reason === "repo_not_selected"
-        ? `graft is installed on ${job.owner} but ${tag} is not in the list of repositories it can see`
-        : `graft is not installed on ${job.owner}`,
-      gap,
-    );
-  }
-
-  const tokenRes = await deps.fetch(`${api}/app/installations/${installationId}/access_tokens`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${appJwt(deps.creds, (deps.now ?? Date.now)())}`,
-      accept: "application/vnd.github+json",
-      "user-agent": "graft-app",
-    },
-  });
-  if (!tokenRes.ok) {
-    throw new Error(`installation token for ${tag} failed: ${tokenRes.status}`);
-  }
-  const token = (JSON.parse(await tokenRes.text()) as { token: string }).token;
-
   // Whether the repository is private decides what the UI may show before
   // signup, and the default branch is not discoverable from a shallow
-  // single-ref fetch (there is no origin/HEAD to resolve), so both are read from
-  // the API in one call rather than guessed.
-  const meta = await repoMeta(job.owner, job.repo, token, deps.fetch, api);
+  // single-ref fetch (there is no origin/HEAD to resolve), so both are read
+  // from the API rather than guessed.
+  let token = "";
+  let meta: RepoMeta | null = null;
+  if (installationId !== null) {
+    token = await installationToken(deps, installationId, tag, api);
+    meta = await repoMeta(job.owner, job.repo, token, deps.fetch, api);
+  } else {
+    // No installation. If the repository answers anonymously and says it is
+    // public, that is all the access this read needs.
+    token = deps.publicToken ?? "";
+    meta = await repoMeta(job.owner, job.repo, token, deps.fetch, api);
+    if (!meta || meta.isPrivate) {
+      // Which of the two gaps it is decides what the UI can offer, so it is
+      // resolved here rather than guessed there.
+      const gap = await repoAccessGap(deps.creds, job.owner, deps.fetch, (deps.now ?? Date.now)(), api);
+      throw new RepoNotAccessibleError(
+        gap.reason === "repo_not_selected"
+          ? `graft is installed on ${job.owner} but ${tag} is not in the list of repositories it can see`
+          : `graft is not installed on ${job.owner}`,
+        gap,
+      );
+    }
+    log(`${tag}: no installation, reading it as a public repository${token ? "" : " anonymously"}`);
+  }
+  if (!meta) meta = { isPrivate: true, defaultBranch: "" };
 
   const checkout = checkoutRepository({
     owner: job.owner,
@@ -227,36 +239,46 @@ export async function buildRepoIntoBrain(
   }
 }
 
+/** What the repository says about itself. */
+interface RepoMeta {
+  isPrivate: boolean;
+  defaultBranch: string;
+}
+
 /**
  * The repository's visibility and default branch, in one call.
  *
- * Unknown counts as private: saying a repo is public when it is not would leak
- * its name into a pre-signup screen. An unknown default branch is left empty,
- * and the checkout then falls back to whatever the remote's HEAD points at,
- * which is the same thing by another route.
+ * Null when the call did not answer, which is not the same as private and is
+ * why this does not fold the two together: with an installation, an unanswered
+ * call is a hiccup the read can carry on past; without one, it is the whole
+ * decision about whether we can see this repository at all. Callers that only
+ * need the fields treat null as private, because saying a repo is public when
+ * it is not would leak its name onto a pre-signup screen.
  */
-async function repoMeta(
-  owner: string,
-  repo: string,
-  token: string,
-  fetchImpl: Fetch,
-  api: string,
-): Promise<{ isPrivate: boolean; defaultBranch: string }> {
+async function repoMeta(owner: string, repo: string, token: string, fetchImpl: Fetch, api: string): Promise<RepoMeta | null> {
   try {
-    const res = await fetchImpl(`${api}/repos/${owner}/${repo}`, {
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/vnd.github+json",
-        "user-agent": "graft-app",
-      },
-    });
-    if (!res.ok) return { isPrivate: true, defaultBranch: "" };
+    const res = await fetchImpl(`${api}/repos/${owner}/${repo}`, { headers: ghHeaders(token) });
+    if (!res.ok) return null;
     const parsed = JSON.parse(await res.text()) as { private?: boolean; default_branch?: string };
     return {
       isPrivate: parsed.private !== false,
       defaultBranch: (parsed.default_branch ?? "").trim(),
     };
   } catch {
-    return { isPrivate: true, defaultBranch: "" };
+    return null;
   }
+}
+
+/** Mint an installation token, the credential every authenticated read uses. */
+async function installationToken(deps: BrainBuildDeps, installationId: number, tag: string, api: string): Promise<string> {
+  const res = await deps.fetch(`${api}/app/installations/${installationId}/access_tokens`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${appJwt(deps.creds, (deps.now ?? Date.now)())}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "graft-app",
+    },
+  });
+  if (!res.ok) throw new Error(`installation token for ${tag} failed: ${res.status}`);
+  return (JSON.parse(await res.text()) as { token: string }).token;
 }

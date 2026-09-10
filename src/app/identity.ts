@@ -77,6 +77,23 @@ interface CacheEntry {
  * Returns null when the App is not installed on the repository — which is the
  * expected answer for "the user pasted a repo we cannot see", not an error.
  */
+/**
+ * Headers for a GitHub REST call, with or without a token.
+ *
+ * An empty token means anonymous, and anonymous has to mean NO authorization
+ * header — `Bearer ` with nothing after it is a 401, not a fallback. That
+ * distinction is the whole reason this is a function: a public repository read
+ * without an installation goes down exactly this path.
+ */
+export function ghHeaders(token: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: "application/vnd.github+json",
+    "user-agent": "graft-app",
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
+}
+
 export async function installationFor(
   creds: AppCredentials,
   owner: string,

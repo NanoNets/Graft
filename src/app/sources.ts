@@ -13,7 +13,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { Fetch } from "./identity.js";
+import { ghHeaders, type Fetch } from "./identity.js";
 
 /** What kind of thing a source is, so extraction can weigh it. */
 export type SourceKind =
@@ -264,7 +264,7 @@ export async function readDeclinedIssues(
 ): Promise<HistorySource[]> {
   try {
     const res = await fetchImpl(`${api}/repos/${owner}/${repo}/issues?state=closed&per_page=100&sort=updated`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "graft-app" },
+      headers: ghHeaders(token),
     });
     if (!res.ok) return [];
     const items = JSON.parse(await res.text()) as Array<{
@@ -309,7 +309,7 @@ export async function readBranchProtection(
   if (!branch) return [];
   try {
     const res = await fetchImpl(`${api}/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}/protection`, {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "graft-app" },
+      headers: ghHeaders(token),
     });
     // 404 simply means the branch is not protected, which is not a failure.
     if (!res.ok) return [];
