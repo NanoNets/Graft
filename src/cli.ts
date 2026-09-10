@@ -208,7 +208,7 @@ function parseTabs(raw: string | undefined): VizTab[] | undefined {
  * not editorialize on stderr at startup (`mcp` runs its own upkeep at boot, and
  * `_update-check` IS the fetch).
  */
-const UPKEEP_SKIP = new Set(["version", "upgrade", "_update-check", "mcp"]);
+const UPKEEP_SKIP = new Set(["version", "upgrade", "_update-check", "_brain-refresh", "mcp"]);
 
 /**
  * Every other command: top up the cached registry answer in the background and,
@@ -242,6 +242,21 @@ program.hook("postAction", (_parent, action) => {
 });
 
 // Hidden from --help: only ever spawned detached by maybeRefreshInBackground.
+program
+  .command("_brain-refresh", { hidden: true })
+  .description("internal: re-pull the attached brain's rules and rewrite the agent files")
+  .argument("[dir]", "target repo directory", ".")
+  .action(async (dir: string) => {
+    // Spawned detached by upkeep, so nothing here is user-visible and nothing
+    // may throw: a failure means the cached rules keep serving, which is the
+    // correct outcome for a brain that is momentarily unreachable.
+    try {
+      await pullBrain(resolve(dir), { home: homedir() });
+    } catch {
+      /* the next session tries again */
+    }
+  });
+
 program
   .command("_update-check", { hidden: true })
   .description("internal: refresh the cached latest-version answer")

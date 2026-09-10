@@ -18,8 +18,20 @@ import { join } from 'node:path';
 /** Default API host. Overridden by GRAFT_BRAIN_URL, for staging and self-hosted. */
 const DEFAULT_BRAIN_BASE_URL = 'https://agents.nanonets.com';
 
-/** How long a cached rule set is served before `ask` refreshes it in the background. */
+/** How long a cached rule set is served before upkeep refreshes it. */
 export const RULES_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+/**
+ * The TTL used while the cache holds NO rules.
+ *
+ * A brain is connected during onboarding while it is still being mined, so the
+ * first pull legitimately returns nothing. Six hours of that is the difference
+ * between the feature working and the user concluding it does not: they wired
+ * graft up, got an empty rulebook, and nothing would go back for the real one
+ * until tomorrow. Two minutes costs one cheap request per session until the
+ * rules land, and then the normal TTL takes over.
+ */
+export const EMPTY_RULES_TTL_MS = 2 * 60 * 1000;
 
 /** One rule from the brain, anchored to a symbol in this repo. */
 export interface BrainRule {
@@ -38,6 +50,11 @@ export interface RulesCache {
   brainId: string;
   fetchedAt: number;
   rules: BrainRule[];
+  /** When a refresh was last ATTEMPTED, successful or not. Separate from
+   * `fetchedAt`, which records when rules last actually arrived: without the
+   * distinction, a brain that is still building would be re-checked on every
+   * single command, because its `fetchedAt` never advances. */
+  checkedAt?: number;
 }
 
 /** The persisted brain link. */
@@ -89,9 +106,24 @@ export function writeRulesCache(dir: string, cache: RulesCache): void {
   writeJsonAtomic(rulesCachePath(dir), cache, true);
 }
 
-/** Whether a cached set is old enough to refetch. */
+/**
+ * Whether a cached set is old enough to refetch.
+ *
+ * Keyed off the last ATTEMPT, not the last success, and with a much shorter
+ * window while the cache is empty — see EMPTY_RULES_TTL_MS for why that case
+ * is the one that matters.
+ */
 export function cacheIsStale(cache: RulesCache | null, now = Date.now()): boolean {
-  return !cache || now - cache.fetchedAt > RULES_TTL_MS;
+  if (!cache) return true;
+  const ttl = cache.rules.length === 0 ? EMPTY_RULES_TTL_MS : RULES_TTL_MS;
+  return now - (cache.checkedAt ?? cache.fetchedAt) > ttl;
+}
+
+/** Record that a refresh was attempted, without claiming rules arrived. */
+export function markRulesChecked(dir: string, now = Date.now()): void {
+  const cache = readRulesCache(dir);
+  if (!cache) return;
+  writeRulesCache(dir, { ...cache, checkedAt: now });
 }
 
 /**
