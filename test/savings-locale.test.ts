@@ -14,6 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { savingsLine, sumSavingsFooters } from '../src/context/savings.js';
 import { formatSessionStats } from '../src/claude/session-metrics.js';
+import { formatAsk, type AskResult } from '../src/ask/ask.js';
 
 /** Run `fn` on a machine whose default locale groups thousands with `locale`'s
  *  separator. Restores the real method even if `fn` throws. */
@@ -48,4 +49,19 @@ test('#338: what graft displays groups the same way as what it parses', () => {
     formatSessionStats({ id: 'abc', perAgentQuery: {}, graftReads: 8, sourceReads: 2, savedTokens: 12345 }),
   );
   assert.match(out, /tokens saved:\s+~12,345/);
+});
+
+test('#338: `graft ask` writes a footer its own reader can parse, on a machine that is not en-US', () => {
+  // The third writer of the parsed line, and the one no other test renders: ask.ts
+  // has its own wording of the footer, so a revert there would bring the bug back
+  // for every `graft ask` while the other two writers stayed green.
+  const result: AskResult = {
+    query: 'probe',
+    mode: 'lexical',
+    hits: [{ kind: 'symbol', title: 'probe', pointer: 'src/probe.ts:L1-L2', snippet: '', score: 1 }],
+    saved: { files: 3, baselineChars: 8000 }, // ≈ 2000 tok against a pack of a few dozen
+  };
+  const out = withDefaultLocale('de-DE', () => formatAsk(result));
+  assert.match(out, /tokens saved ≈ \d{1,3},\d{3} /, 'grouped for the reader, not for the machine');
+  assert.ok(sumSavingsFooters(out) >= 1000, `read back whole, not as its first group (got ${sumSavingsFooters(out)})`);
 });
