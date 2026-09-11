@@ -80,6 +80,8 @@ test("ChatCruxSummarizer tolerates a model echoing the whole target line as the 
             { id: "a.ts | file | lines L1-L5", summary: "whole file", crux_start: 1, crux_end: 5 },
             { id: "id=sym1", summary: "does x", crux_start: 2, crux_end: 3 },
             { id: "  sym2  ", summary: "does y", crux_start: 4, crux_end: 5 },
+            // Not a requested id: the ` | ` is not an echoed target line, so it stays as returned.
+            { id: "nope | function | lines L1-L2", summary: "unknown", crux_start: 1, crux_end: 2 },
           ],
         },
       },
@@ -96,15 +98,31 @@ test("ChatCruxSummarizer tolerates a model echoing the whole target line as the 
   });
   assert.deepEqual(
     out.map((r) => r.id),
-    ["a.ts", "sym1", "sym2"],
+    ["a.ts", "sym1", "sym2", "nope | function | lines L1-L2"],
   );
 });
 
-test("normalizeTargetId leaves ids that contain ' | ' only inside the kind suffix alone", () => {
+test("normalizeTargetId peels the echoed target line and the id= prefix", () => {
   assert.equal(normalizeTargetId("src/a.ts#f"), "src/a.ts#f");
   assert.equal(normalizeTargetId("src/a.ts#f | function | lines L3-L9"), "src/a.ts#f");
   assert.equal(normalizeTargetId("id=src/a.ts#f | function | lines L3-L9"), "src/a.ts#f");
   assert.equal(normalizeTargetId("id=src/a.ts#f"), "src/a.ts#f");
+  // deepseek (#259) also appends the signature, which may itself contain ` | `.
+  assert.equal(
+    normalizeTargetId("app/User.php#User.__construct | method | lines L40-L58 | public function __construct($object = null)"),
+    "app/User.php#User.__construct",
+  );
+});
+
+test("normalizeTargetId only rewrites onto a requested id when given the expected set", () => {
+  const expected = new Set(["src/a.ts#f", "odd | id"]);
+  assert.equal(normalizeTargetId("src/a.ts#f | function | lines L3-L9", expected), "src/a.ts#f");
+  assert.equal(normalizeTargetId("id=src/a.ts#f", expected), "src/a.ts#f");
+  // A requested id is returned verbatim even when it contains the separator.
+  assert.equal(normalizeTargetId("odd | id", expected), "odd | id");
+  // Garbage that merely contains ` | ` is not truncated into something we never asked for.
+  assert.equal(normalizeTargetId("garbage | x", expected), "garbage | x");
+  assert.equal(normalizeTargetId("id=other#g | function | lines L1-L2", expected), "id=other#g | function | lines L1-L2");
 });
 
 test("structured ops degrade gracefully when the model returns no tool call", async () => {
