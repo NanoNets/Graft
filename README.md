@@ -283,6 +283,7 @@ With no TTY to prompt on — CI, a Dockerfile, a piped shell — `init` writes *
 | `--no-hooks` | skip hook installation |
 | `--no-statusline` | skip writing Claude Code `statusLine` (same as `GRAFT_NO_STATUSLINE=1`) |
 | `--no-global` | skip writes outside this repo (the `~/.codex/` entries below) |
+| `--runner <npx\|bunx\|pnpm\|yarn>` | package runner written into generated MCP configs. Default: detect from the lockfile (`bun.lock`/`bun.lockb` → `bunx`, `pnpm-lock.yaml` → `pnpm dlx`, `yarn.lock` → `yarn dlx`, otherwise `npx -y`) |
 
 #### Writes outside the repo
 
@@ -298,7 +299,7 @@ Both configs are user-level, so they apply to **every** repo you open with Codex
 
 ### MCP server
 
-`graft init` also registers Graft's MCP server with agents that support it, so these six tools appear natively, no shell required. Claude Code gets this too: `graft init` writes the server into the project's `.mcp.json` (restart Claude Code to load it). Skip with `--no-mcp`; run it manually with `graft mcp [dir]`.
+`graft init` also registers Graft's MCP server with agents that support it, so these six tools appear natively, no shell required. Claude Code gets this too: `graft init` writes the server into the project's `.mcp.json` (restart Claude Code to load it). The launch command is the repo's package runner — `bunx` / `pnpm dlx` / `yarn dlx` / `npx -y` — so a Bun-only machine does not inherit a hardcoded `npx`. Override with `--runner`. Skip with `--no-mcp`; run it manually with `graft mcp [dir]`.
 
 | Tool | Takes | What it's for |
 |---|---|---|
@@ -394,6 +395,7 @@ graft init --agents cursor kiro      # wire only these agents, no prompt (ids: a
 graft init --yes                     # no prompt; wire every detected agent
 graft init --no-global               # skip writes outside this repo (~/.codex/ config + hooks)
 graft init --no-statusline           # skip Claude Code statusLine (same as GRAFT_NO_STATUSLINE=1)
+graft init --runner bunx             # write bunx into generated MCP configs (also: npx, pnpm, yarn)
 graft init --no-build                # wire the files only; don't build the graph
 graft init --all-agents              # wire every known agent, detected or not
 graft init --list-agents             # list known agent ids and exit
